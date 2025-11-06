@@ -2050,6 +2050,25 @@ public class PublisherGenerator extends PublisherBase {
     }
   }
 
+  /**
+   * Generate:
+   *   summary
+   *   xref (cross-reference showing which value sets use the code system identifiers)
+   * @throws Exception
+   */
+  private void generateOutputsNamingSystem(FetchedFile f, FetchedResource fr, NamingSystem ns, Map<String, String> vars, String prefixForContainer, RenderingContext lrc, String lang) throws Exception {
+    NamingSystemRenderer nsr = new NamingSystemRenderer(this.pf.context, this.pf.specPath, ns, this.pf.igpkp, this.pf.specMaps, pageTargets(), this.pf.markdownEngine, this.pf.packge, lrc, this.pf.versionToAnnotate, this.pf.relatedIGs);
+    nsr.setFileList(this.pf.fileList);
+    if (wantGen(fr, "summary")) {
+      long start = System.currentTimeMillis();
+      fragment("NamingSystem-"+prefixForContainer+ns.getId()+"-summary", nsr.summaryTable(fr, wantGen(fr, "xml"), wantGen(fr, "json"), wantGen(fr, "ttl"), this.pf.igpkp.summaryRows()), f.getOutputNames(), fr, vars, null, start, "summary", "NamingSystem", lang);
+    }
+    if (wantGen(fr, "xref")) {
+      long start = System.currentTimeMillis();
+      fragment("NamingSystem-"+prefixForContainer+ns.getId()+"-xref", nsr.xref(), f.getOutputNames(), fr, vars, null, start, "xref", "NamingSystem", lang);
+    }
+  }
+
   private void generateOutputsLibrary(FetchedFile f, FetchedResource r, Library lib, Map<String,String> vars, String prefixForContainer, RenderingContext lrc, String lang) throws Exception {
     int counter = 0;
     for (Attachment att : lib.getContent()) {
@@ -4956,6 +4975,9 @@ public class PublisherGenerator extends PublisherBase {
           break;
         case ExampleScenario:
           generateOutputsExampleScenario(f, r, (ExampleScenario) res, vars, prefixForContainer, lrc, lang);
+          break;
+        case NamingSystem:
+          generateOutputsNamingSystem(f, r, (NamingSystem) res, vars, prefixForContainer, lrc, lang);
           break;
         default:
           if (res instanceof CanonicalResource) {
