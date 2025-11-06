@@ -2057,7 +2057,7 @@ public class PublisherGenerator extends PublisherBase {
    * @throws Exception
    */
   private void generateOutputsNamingSystem(FetchedFile f, FetchedResource fr, NamingSystem ns, Map<String, String> vars, String prefixForContainer, RenderingContext lrc, String lang) throws Exception {
-    NamingSystemRenderer nsr = new NamingSystemRenderer(this.pf.context, this.pf.specPath, ns, this.pf.igpkp, this.pf.specMaps, pageTargets(), this.pf.markdownEngine, this.pf.packge, lrc, this.pf.versionToAnnotate, this.pf.relatedIGs);
+    org.hl7.fhir.igtools.renderers.NamingSystemRenderer nsr = new org.hl7.fhir.igtools.renderers.NamingSystemRenderer(this.pf.context, this.pf.specPath, ns, this.pf.igpkp, this.pf.specMaps, pageTargets(), this.pf.markdownEngine, this.pf.packge, lrc, this.pf.versionToAnnotate, this.pf.relatedIGs);
     nsr.setFileList(this.pf.fileList);
     if (wantGen(fr, "summary")) {
       long start = System.currentTimeMillis();
