@@ -441,19 +441,23 @@ public class DBBuilder {
       return;
     }
 
+    boolean wasAutoCommit = true;
     try {
+      wasAutoCommit = con.getAutoCommit();
+      con.setAutoCommit(false);
+
       PreparedStatement psql = con.prepareStatement("Insert into Properties (Key, ResourceKey, Code, Uri, Description, Type) "+
           "values (?, ?, ?, ?, ?, ?)");
       for (CodeSystem cs : codesystems) {
-        for (PropertyComponent p : cs.getProperty()) { 
+        for (PropertyComponent p : cs.getProperty()) {
           psql.setInt(1, ++lastPropKey);
           psql.setInt(2, ((Integer) cs.getUserData(UserDataNames.db_key)).intValue());
           bindString(psql, 3, p.getCode());
           bindString(psql, 4, p.getUri());
           bindString(psql, 5, p.getDescription());
-          bindString(psql, 6, p.getType().toCode());  
-          psql.executeUpdate();     
-          p.setUserData(UserDataNames.db_key, lastPropKey);   
+          bindString(psql, 6, p.getType().toCode());
+          psql.executeUpdate();
+          p.setUserData(UserDataNames.db_key, lastPropKey);
         }
       }
       psql = con.prepareStatement("Insert into Concepts (Key, ResourceKey, ParentKey,  Code, Display, Definition) "+
@@ -487,15 +491,34 @@ public class DBBuilder {
               bindString(psql, 7, grp.getTargetElement().baseUrl());
               bindString(psql, 8, grp.getTargetElement().version());
               bindString(psql, 9, tgt.getCode());
-              psql.executeUpdate();    
+              psql.executeUpdate();
             }
           }
         }
       }
+
+      con.commit();
     } catch (SQLException e) {
       errors.add(e.getMessage());
       if (debug) {
         e.printStackTrace();
+      }
+      try {
+        con.rollback();
+      } catch (SQLException e2) {
+        errors.add(e2.getMessage());
+        if (debug) {
+          e2.printStackTrace();
+        }
+      }
+    } finally {
+      try {
+        con.setAutoCommit(wasAutoCommit);
+      } catch (SQLException e) {
+        errors.add(e.getMessage());
+        if (debug) {
+          e.printStackTrace();
+        }
       }
     }
     time(start);
@@ -503,23 +526,46 @@ public class DBBuilder {
 
   public void recordExpansion(ValueSet vs, ValueSetExpansionOutcome exp) throws SQLException {
     long start = System.currentTimeMillis();
+    if (con == null) {
+      return;
+    }
+    if (exp == null || exp.getValueset() == null) {
+      return;
+    }
+
+    boolean wasAutoCommit = true;
     try {
-      if (con == null) {
-        return;
-      }
-      if (exp == null || exp.getValueset() == null) {
-        return;
-      }
+      wasAutoCommit = con.getAutoCommit();
+      con.setAutoCommit(false);
 
       PreparedStatement psql = con.prepareStatement("Insert into ValueSet_Codes (Key, ResourceKey, ValueSetUri, ValueSetVersion, System, Version, Code, Display) "+
           "values (?, ?, ?, ?, ?, ?, ?, ?)");
       for (ValueSetExpansionContainsComponent e : exp.getValueset().getExpansion().getContains()) {
         addContains(vs, e, psql);
       }
+
+      con.commit();
     } catch (SQLException e) {
       errors.add(e.getMessage());
       if (debug) {
         e.printStackTrace();
+      }
+      try {
+        con.rollback();
+      } catch (SQLException e2) {
+        errors.add(e2.getMessage());
+        if (debug) {
+          e2.printStackTrace();
+        }
+      }
+    } finally {
+      try {
+        con.setAutoCommit(wasAutoCommit);
+      } catch (SQLException e) {
+        errors.add(e.getMessage());
+        if (debug) {
+          e.printStackTrace();
+        }
       }
     }
     time(start);
@@ -1085,7 +1131,11 @@ public class DBBuilder {
   }
 
   public void addToCSList(int viewType, CodeSystem cs, Set<String> oids, Set<Resource> rl) {
+    boolean wasAutoCommit = true;
     try {
+      wasAutoCommit = con.getAutoCommit();
+      con.setAutoCommit(false);
+
       lastCLKey++;
       PreparedStatement sql;
       sql = con.prepareStatement("insert into CodeSystemList (CodeSystemListKey, ViewType, ResourceKey, Url, Version, Status, Name, Title, Description) values (?, ?, ?, ?, ?, ?, ?, ?, ?)");
@@ -1107,38 +1157,55 @@ public class DBBuilder {
       sql = con.prepareStatement("insert into CodeSystemListOIDs (CodeSystemListKey, OID) values (?, ?)");
       for (String oid : oids) {
         sql.setInt(1, lastCLKey);
-        sql.setString(2, oid);      
+        sql.setString(2, oid);
         sql.execute();
       }
 
       if (rl != null) {
         Set<String> keys = new HashSet<>();
-        sql = con.prepareStatement("insert into CodeSystemListRefs (CodeSystemListKey, Type, Id, ResourceKey, Title, Web) values (?, ?, ?, ?, ?, ?)");      
+        sql = con.prepareStatement("insert into CodeSystemListRefs (CodeSystemListKey, Type, Id, ResourceKey, Title, Web) values (?, ?, ?, ?, ?, ?)");
         for (Resource r : rl) {
           String key = r.fhirType()+"/"+r.getIdBase();
           if (!keys.contains(key) && r.getIdBase() != null) {
             keys.add(key);
             sql.setInt(1, lastCLKey);
-            sql.setString(2, r.fhirType());      
+            sql.setString(2, r.fhirType());
             sql.setString(3, r.getIdBase());
             if (cs.hasUserData(UserDataNames.db_key)) {
               sql.setInt(4, (int) cs.getUserData(UserDataNames.db_key));
             } else {
               sql.setNull(4, java.sql.Types.INTEGER);
-            }      
+            }
             sql.setString(5, r instanceof CanonicalResource ? ((CanonicalResource) r).present() : r.fhirType()+"/"+r.getIdBase());
             sql.setString(6, r.getWebPath());
             sql.execute();
           }
         }
       }
+
+      con.commit();
     } catch (SQLException e) {
       e.printStackTrace();
+      try {
+        con.rollback();
+      } catch (SQLException e2) {
+        e2.printStackTrace();
+      }
+    } finally {
+      try {
+        con.setAutoCommit(wasAutoCommit);
+      } catch (SQLException e) {
+        e.printStackTrace();
+      }
     }
   }
 
   public void addToVSList(int viewType, ValueSet vs, Set<String> oids, Set<String> used, Set<String> sources, Set<Resource> rl) {
+    boolean wasAutoCommit = true;
     try {
+      wasAutoCommit = con.getAutoCommit();
+      con.setAutoCommit(false);
+
       lastVLKey++;
       PreparedStatement sql;
       sql = con.prepareStatement("insert into ValueSetList (ValueSetListKey, ViewType, ResourceKey, Url, Version, Status, Name, Title, Description) values (?, ?, ?, ?, ?, ?, ?, ?, ?)");
@@ -1160,49 +1227,60 @@ public class DBBuilder {
       sql = con.prepareStatement("insert into ValueSetListOIDs (ValueSetListKey, OID) values (?, ?)");
       for (String oid : oids) {
         sql.setInt(1, lastVLKey);
-        sql.setString(2, oid);      
+        sql.setString(2, oid);
         sql.execute();
       }
 
       sql = con.prepareStatement("insert into ValueSetListSystems (ValueSetListKey, URL) values (?, ?)");
       for (String u : used) {
         sql.setInt(1, lastVLKey);
-        sql.setString(2, u);      
+        sql.setString(2, u);
         sql.execute();
       }
-
 
       sql = con.prepareStatement("insert into ValueSetListSources (ValueSetListKey, Source) values (?, ?)");
       for (String s : sources) {
         sql.setInt(1, lastVLKey);
-        sql.setString(2, s);      
+        sql.setString(2, s);
         sql.execute();
       }
 
       if (rl != null) {
         Set<String> ids = new HashSet<>();
-        sql = con.prepareStatement("insert into ValueSetListRefs (ValueSetListKey, Type, Id, ResourceKey, Title, Web) values (?, ?, ?, ?, ?, ?)");      
+        sql = con.prepareStatement("insert into ValueSetListRefs (ValueSetListKey, Type, Id, ResourceKey, Title, Web) values (?, ?, ?, ?, ?, ?)");
         for (Resource r : rl) {
           if (!ids.contains(r.getIdBase())) {
             ids.add(r.getIdBase());
             sql.setInt(1, lastVLKey);
-            sql.setString(2, r.fhirType());      
+            sql.setString(2, r.fhirType());
             sql.setString(3, r.getIdBase());
             if (vs.hasUserData(UserDataNames.db_key)) {
               sql.setInt(4, (int) vs.getUserData(UserDataNames.db_key));
             } else {
               sql.setNull(4, java.sql.Types.INTEGER);
-            }      
+            }
             sql.setString(5, r instanceof CanonicalResource ? ((CanonicalResource) r).present() : r.fhirType()+"/"+r.getIdBase());
             sql.setString(6, r.getWebPath());
             sql.execute();
           }
         }
       }
+
+      con.commit();
     } catch (SQLException e) {
       e.printStackTrace();
+      try {
+        con.rollback();
+      } catch (SQLException e2) {
+        e2.printStackTrace();
+      }
+    } finally {
+      try {
+        con.setAutoCommit(wasAutoCommit);
+      } catch (SQLException e) {
+        e.printStackTrace();
+      }
     }
-    
   }
 
   public Connection getConnection() {
