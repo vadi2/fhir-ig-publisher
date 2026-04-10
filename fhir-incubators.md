@@ -95,4 +95,4 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 - **api-incubator-ig**: CI build shows `failure/` directory (last updated 2026-02-17). Build remains broken.
 - **All other IGs**: Building successfully with resource/operation counts matching previous report.
 
-Compiled 2026-04-03 from [build.fhir.org](https://build.fhir.org) CI builds and [HL7 GitHub](https://github.com/HL7).
+Compiled 2026-04-10 from [build.fhir.org](https://build.fhir.org) CI builds and [HL7 GitHub](https://github.com/HL7).
