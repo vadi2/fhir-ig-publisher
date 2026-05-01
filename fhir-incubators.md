@@ -9,7 +9,7 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 | # | IG | Work Group | Resources | Operations | Build Status | QA Errors |
 |---|-----|------------|-----------|------------|--------------|-----------|
 | 1 | [admin-incubator](https://build.fhir.org/ig/HL7/admin-incubator/en/) | Patient Administration | 7 | 5 | FAILING | 387 errors, 1379 broken links |
-| 2 | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | Orders and Observations | 8 | 0 | FAILING | 109 errors |
+| 2 | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | Orders and Observations | 8 (+1 profile) | 0 | FAILING | 13 errors, 111 warnings |
 | 3 | [cg-incubator](https://build.fhir.org/ig/HL7/cg-incubator/) | Clinical Genomics | 2 | 0 | FAILING | 7 errors |
 | 4 | [immunization-incubator](https://build.fhir.org/ig/HL7/immunization-incubator/) | Public Health | 2 | 0 | FAILING | 10 errors |
 | 5 | [ebm-incubator](https://build.fhir.org/ig/HL7/ebm-incubator/) | Clinical Decision Support | 2 | 0 | FAILING | 47 errors |
@@ -21,14 +21,12 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 
 > **Build status key:** OK = builds without errors; FAILING = build completes but has validation errors; FAILED = build does not produce output; NOT CREATED = repo does not exist yet.
 
-### Changes since last report (2026-04-17)
+### Changes since last report (2026-04-24)
 
-- **ebm-incubator**: Contributorship resource (added Mar 27–Apr 2) remains in development. Resource count updated from 1 → 2.
-- **oo-incubator**: Documentation cleanup commits Apr 9 (README title update, PR #4 merged). No new resources.
-- **Build QA verified**: All R6-targeting IGs have build errors due to FHIR 6.0.0-ballot3 depending on R5 packages (hl7.terminology.r5, hl7.fhir.uv.extensions.r5, hl7.fhir.uv.tools.r5). Only capstmt (targeting R5) builds clean.
-- **capstmt**: Published as v1.0.0 STU1 "FHIR Application Feature Framework IG". 0 errors, 0 warnings.
-- **pc-incubator** and **phx-incubator**: Still not created on GitHub.
-- **No new incubator repos** discovered (sample-incubator-ig is a template).
+- **oo-incubator**: QA errors dropped **109 → 13** due to major cleanup (Apr 23–24): R5 URL qualifying, search param naming, harmonized values, added core examples. New **MedicalProductOfHumanOrigin** profile added (not yet fully building — page returns 404).
+- **oo-incubator**: Patient example updated to remove non-generating photo (Apr 24).
+- **No new incubator repos** discovered. pc-incubator and phx-incubator still not created on GitHub.
+- **All other IGs**: No resource/operation count changes or build status changes.
 
 ---
 
@@ -42,7 +40,7 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 | [Citation](https://build.fhir.org/ig/HL7/ebm-incubator/StructureDefinition-Citation.html) | [ebm-incubator](https://build.fhir.org/ig/HL7/ebm-incubator/) | FAILING |
 | ClinicalAssessment | pc-incubator | NOT CREATED |
 | ConditionDefinition | pc-incubator | NOT CREATED |
-| **Contributorship** *(NEW — added 2026-03-27)* | [ebm-incubator](https://build.fhir.org/ig/HL7/ebm-incubator/) | FAILING |
+| [Contributorship](https://build.fhir.org/ig/HL7/ebm-incubator/StructureDefinition-Contributorship.html) *(added 2026-03-27)* | [ebm-incubator](https://build.fhir.org/ig/HL7/ebm-incubator/) | FAILING |
 | [DeviceDispense](https://build.fhir.org/ig/HL7/oo-incubator/StructureDefinition-DeviceDispense.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | FAILING |
 | [DeviceUsage](https://build.fhir.org/ig/HL7/oo-incubator/StructureDefinition-DeviceUsage.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | FAILING |
 | [EncounterHistory](https://build.fhir.org/ig/HL7/admin-incubator/en/StructureDefinition-EncounterHistory.html) | [admin-incubator](https://build.fhir.org/ig/HL7/admin-incubator/en/) | FAILING |
@@ -56,6 +54,7 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 | [InventoryItem](https://build.fhir.org/ig/HL7/oo-incubator/StructureDefinition-InventoryItem.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | FAILING |
 | [InventoryReport](https://build.fhir.org/ig/HL7/oo-incubator/StructureDefinition-InventoryReport.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | FAILING |
 | Linkage | pc-incubator | NOT CREATED |
+| MedicalProductOfHumanOrigin *(NEW — profile)* | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | FAILING (page 404) |
 | [MolecularDefinition](https://build.fhir.org/ig/HL7/cg-incubator/StructureDefinition-MolecularDefinition.html) | [cg-incubator](https://build.fhir.org/ig/HL7/cg-incubator/) | FAILING |
 | [PersonalRelationship](https://build.fhir.org/ig/HL7/admin-incubator/en/StructureDefinition-PersonalRelationship.html) | [admin-incubator](https://build.fhir.org/ig/HL7/admin-incubator/en/) | FAILING |
 | [SupplyDelivery](https://build.fhir.org/ig/HL7/oo-incubator/StructureDefinition-SupplyDelivery.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | FAILING |
@@ -100,11 +99,13 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 
 ## Discrepancies between Confluence page and actual state
 
-1. **NEW RESOURCE — Contributorship**: Added to ebm-incubator on 2026-03-27 by brianalperMD. Increases ebm-incubator resource count from 1 → 2. Not on Confluence page.
-2. **Build status degradation**: 7 of 8 existing IGs now have build errors. All R6-targeting IGs fail due to FHIR 6.0.0-ballot3 depending on R5 packages. Only capstmt (FHIR R5) builds clean.
-3. **capstmt published**: Now v1.0.0 STU1 "FHIR Application Feature Framework IG" — Confluence may still show draft/ballot status.
-4. **pc-incubator and phx-incubator**: Still not created on GitHub as of 2026-04-24.
-5. **No new incubator repos**: 7 repos found under HL7 matching "incubator" (including sample-incubator-ig template). No new incubators beyond those on the Confluence page.
+1. **NEW PROFILE — MedicalProductOfHumanOrigin**: Added to oo-incubator as a profile (not a new resource type). Listed on artifacts page but individual page returns 404 — may not be fully built yet. Not on Confluence page.
+2. **NEW RESOURCE — Contributorship**: Added to ebm-incubator on 2026-03-27 by brianalperMD. Increases ebm-incubator resource count from 1 → 2. Not on Confluence page.
+3. **Build quality improved**: oo-incubator errors dropped from 109 → 13 after major cleanup (Apr 23–24).
+4. **Build status degradation**: 7 of 8 existing IGs have build errors. All R6-targeting IGs fail due to FHIR 6.0.0-ballot3 depending on R5 packages. Only capstmt (FHIR R5) builds clean.
+5. **capstmt published**: Now v1.0.0 STU1 "FHIR Application Feature Framework IG" — Confluence may still show draft/ballot status.
+6. **pc-incubator and phx-incubator**: Still not created on GitHub as of 2026-05-01.
+7. **No new incubator repos**: 7 repos found under HL7 matching "incubator" (including sample-incubator-ig template). No new incubators beyond those on the Confluence page.
 
 ---
 
@@ -112,9 +113,9 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 
 | Repository | Last Updated | Recent Activity |
 |------------|-------------|-----------------|
-| [oo-incubator](https://github.com/HL7/oo-incubator) | Apr 23, 2026 | README title update, PR #4 cleanup merged (Apr 9) |
-| [cg-incubator](https://github.com/HL7/cg-incubator) | Apr 10, 2026 | Metadata updates, new CodeSystems/ValueSets for MolecularDefinition |
-| [ebm-incubator](https://github.com/HL7/ebm-incubator) | Apr 2, 2026 | **Contributorship resource added** (Mar 27), search params bundle (Apr 2) |
+| [oo-incubator](https://github.com/HL7/oo-incubator) | Apr 24, 2026 | Major cleanup: R5 URL qualifying, search param fixes, error reduction (109→13), MedicalProductOfHumanOrigin profile added |
+| [cg-incubator](https://github.com/HL7/cg-incubator) | Apr 10, 2026 | Metadata updates, CodeSystems/ValueSets for MolecularDefinition |
+| [ebm-incubator](https://github.com/HL7/ebm-incubator) | Apr 2, 2026 | Contributorship resource updates, search params bundle |
 | [immunization-incubator](https://github.com/HL7/immunization-incubator) | Feb 24, 2026 | No significant changes |
 | [admin-incubator](https://github.com/HL7/admin-incubator) | Nov 8, 2025 | Inactive |
 | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | Nov 5, 2025 | Inactive; build still failing |
@@ -126,16 +127,16 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 | IG | FHIR Version | Errors | Warnings | Root Cause |
 |----|-------------|--------|----------|------------|
 | admin-incubator | 6.0.0-ballot3 | 387 | 159 | R5/R6 dependency mismatches, 1379 broken links, duplicate titles |
-| oo-incubator | 6.0.0-ballot3 | 109 | 178 | R5 package dependencies, broken resource references |
+| oo-incubator | 6.0.0-ballot3 | 13 | 111 | R5 package dependencies (much improved from 109 errors) |
 | cg-incubator | 6.0.0-ballot3 | 7 | 31 | GenomicStudy type not recognized, R5/R6 version conflict |
 | immunization-incubator | 6.0.0-ballot3 | 10 | 30 | ImmunizationEvaluation/Recommendation types not recognized |
 | ebm-incubator | 6.0.0-ballot3 | 47 | 113 | Citation canonical unresolvable, 169 broken links |
-| fhir-testing-ig | 6.0.0-ballot3 | 12 | — | Missing Jira spec, broken valueset links |
+| fhir-testing-ig | 6.0.0-ballot3 | 12 | 0 | Missing Jira spec, broken valueset links |
 | capstmt | R5 | 0 | 0 | Clean build — targets R5, not affected by R6 transition |
-| api-incubator-ig | — | — | — | Build does not produce output (last attempt 2026-02-17) |
+| api-incubator-ig | — | — | — | Build does not produce output |
 
 > **Common root cause:** Most failures stem from IGs targeting FHIR 6.0.0-ballot3 while depending on R5 packages. R6-compatible dependency packages are not yet available.
 
 ---
 
-Compiled 2026-04-24 from [build.fhir.org](https://build.fhir.org) CI builds and [HL7 GitHub](https://github.com/HL7).
+Compiled 2026-05-01 from [build.fhir.org](https://build.fhir.org) CI builds and [HL7 GitHub](https://github.com/HL7).
