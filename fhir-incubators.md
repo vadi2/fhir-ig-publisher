@@ -12,12 +12,15 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 | 2 | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | Orders and Observations | 8 | 0 | OK |
 | 3 | [cg-incubator](https://build.fhir.org/ig/HL7/cg-incubator/) | Clinical Genomics | 2 | 0 | OK |
 | 4 | [immunization-incubator](https://build.fhir.org/ig/HL7/immunization-incubator/) | Public Health | 2 | 0 | OK |
-| 5 | [ebm-incubator](https://build.fhir.org/ig/HL7/ebm-incubator/) | Clinical Decision Support | 1 (+1 pending) | 0 | OK |
-| 6 | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | FHIR Infrastructure | 1 | 12 | FAILED |
+| 5 | [ebm-incubator](https://build.fhir.org/ig/HL7/ebm-incubator/) | Clinical Decision Support | 1 | 0 | OK |
+| 6 | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | FHIR Infrastructure | 1 | 7+ | FAILED |
 | 7 | [capstmt](https://build.fhir.org/ig/HL7/capstmt/) | FHIR Infrastructure | 0 | 4 | OK |
 | 8 | [fhir-testing-ig](https://build.fhir.org/ig/HL7/fhir-testing-ig/) | FHIR Infrastructure | 3 | 0 | OK |
-| 9 | pc-incubator | Patient Care | 3 (planned) | 0 | NOT CREATED |
-| 10 | phx-incubator | Pharmacy | 1 (planned) | 0 | NOT CREATED |
+| 9 | [data-access-policies](https://build.fhir.org/ig/HL7/data-access-policies/en/) † | Security | 1 | 0 | OK |
+| 10 | pc-incubator | Patient Care | 3 (planned) | 0 | NOT CREATED |
+| 11 | phx-incubator | Pharmacy | 1 (planned) | 0 | NOT CREATED |
+
+> † `data-access-policies` is the de facto Security incubator (publishes the `Permission` resource) but is not labelled "incubator" in its repo name; it is not currently listed on the HL7 Confluence overview page.
 
 ---
 
@@ -31,7 +34,6 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 | [Citation](https://build.fhir.org/ig/HL7/ebm-incubator/en/StructureDefinition-Citation.html) | [ebm-incubator](https://build.fhir.org/ig/HL7/ebm-incubator/) | OK |
 | ClinicalAssessment | pc-incubator | NOT CREATED |
 | ConditionDefinition | pc-incubator | NOT CREATED |
-| Contributorship \* | [ebm-incubator](https://build.fhir.org/ig/HL7/ebm-incubator/) | NEW — in repo, not yet in build |
 | [DeviceDispense](https://build.fhir.org/ig/HL7/oo-incubator/en/StructureDefinition-DeviceDispense.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | OK |
 | [DeviceUsage](https://build.fhir.org/ig/HL7/oo-incubator/en/StructureDefinition-DeviceUsage.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | OK |
 | [EncounterHistory](https://build.fhir.org/ig/HL7/admin-incubator/en/StructureDefinition-EncounterHistory.html) | [admin-incubator](https://build.fhir.org/ig/HL7/admin-incubator/en/) | OK |
@@ -40,13 +42,13 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 | GraphDefinition | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
 | [ImmunizationEvaluation](https://build.fhir.org/ig/HL7/immunization-incubator/en/StructureDefinition-ImmunizationEvaluation.html) | [immunization-incubator](https://build.fhir.org/ig/HL7/immunization-incubator/) | OK |
 | [ImmunizationRecommendation](https://build.fhir.org/ig/HL7/immunization-incubator/en/StructureDefinition-ImmunizationRecommendation.html) | [immunization-incubator](https://build.fhir.org/ig/HL7/immunization-incubator/) | OK |
-| Invoice \*\* | TBD | FLAGGED FOR REMOVAL |
-| [InsurancePlan](https://build.fhir.org/ig/HL7/admin-incubator/en/StructureDefinition-InsurancePlan.html) | [admin-incubator](https://build.fhir.org/ig/HL7/admin-incubator/en/) | OK \*\*\* |
-| [InsuranceProduct](https://build.fhir.org/ig/HL7/admin-incubator/en/StructureDefinition-InsuranceProduct.html) | [admin-incubator](https://build.fhir.org/ig/HL7/admin-incubator/en/) | OK \*\*\* |
+| [InsurancePlan](https://build.fhir.org/ig/HL7/admin-incubator/en/StructureDefinition-InsurancePlan.html) | [admin-incubator](https://build.fhir.org/ig/HL7/admin-incubator/en/) | OK \* |
+| [InsuranceProduct](https://build.fhir.org/ig/HL7/admin-incubator/en/StructureDefinition-InsuranceProduct.html) | [admin-incubator](https://build.fhir.org/ig/HL7/admin-incubator/en/) | OK \* |
 | [InventoryItem](https://build.fhir.org/ig/HL7/oo-incubator/en/StructureDefinition-InventoryItem.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | OK |
 | [InventoryReport](https://build.fhir.org/ig/HL7/oo-incubator/en/StructureDefinition-InventoryReport.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | OK |
 | Linkage | pc-incubator | NOT CREATED |
 | [MolecularDefinition](https://build.fhir.org/ig/HL7/cg-incubator/en/StructureDefinition-MolecularDefinition.html) | [cg-incubator](https://build.fhir.org/ig/HL7/cg-incubator/) | OK |
+| [Permission](https://build.fhir.org/ig/HL7/data-access-policies/en/StructureDefinition-Permission.html) † | [data-access-policies](https://build.fhir.org/ig/HL7/data-access-policies/en/) | OK |
 | [PersonalRelationship](https://build.fhir.org/ig/HL7/admin-incubator/en/StructureDefinition-PersonalRelationship.html) | [admin-incubator](https://build.fhir.org/ig/HL7/admin-incubator/en/) | OK |
 | [SupplyDelivery](https://build.fhir.org/ig/HL7/oo-incubator/en/StructureDefinition-SupplyDelivery.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | OK |
 | [SupplyRequest](https://build.fhir.org/ig/HL7/oo-incubator/en/StructureDefinition-SupplyRequest.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | OK |
@@ -56,11 +58,9 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 | [Transport](https://build.fhir.org/ig/HL7/oo-incubator/en/StructureDefinition-Transport.html) | [oo-incubator](https://build.fhir.org/ig/HL7/oo-incubator/) | OK |
 | [VerificationResult](https://build.fhir.org/ig/HL7/admin-incubator/en/StructureDefinition-VerificationResult.html) | [admin-incubator](https://build.fhir.org/ig/HL7/admin-incubator/en/) | OK |
 
-> \* **Contributorship** was added to ebm-incubator on Apr 2, 2026 ([commit](https://github.com/HL7/ebm-incubator/commits/main)). The StructureDefinition and search parameters are in the repo but the resource does not yet appear in the CI build output.
+> \* InsurancePlan and InsuranceProduct are also still present in the [R6 core spec](https://build.fhir.org/insuranceplan.html) for now; they have been added to admin-incubator preemptively.
 >
-> \*\* **Invoice** is flagged in the [R6 ballot4 ballot-intro](https://build.fhir.org/ballot-intro.html) as "likely to be removed" from core post-ballot, alongside InsurancePlan and InsuranceProduct. No incubator destination has been assigned yet.
->
-> \*\*\* InsurancePlan and InsuranceProduct are also still present in the [R6 core spec](https://build.fhir.org/insuranceplan.html) for now; they have been added to admin-incubator preemptively.
+> † Permission is published by the Security work group's `data-access-policies` IG, which is not listed as an "incubator" on the Confluence overview but functions as one.
 
 ---
 
@@ -83,26 +83,45 @@ As part of FHIR R6 (v6.0.0), immature resources and operations were moved out of
 | Resource $meta | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
 | Resource $meta-add | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
 | Resource $meta-delete | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
-| Resource $large-resource-add | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
-| Resource $large-resource-filter | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
-| Resource $large-resource-remove | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
-| List $find | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
+| Resource $large-resource-add ‡ | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
+| Resource $large-resource-filter ‡ | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
+| Resource $large-resource-remove ‡ | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
+| List $find ‡ | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
 | Asynchronous Bulk Data Request | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
 | Asynchronous Bundle Request | [api-incubator-ig](https://github.com/HL7/api-incubator-ig) | BUILD FAILED |
 
----
-
-## Discrepancies and notes
-
-- **Confluence page inaccessible**: The HL7 Confluence REST API is behind a WAF/CAPTCHA challenge and could not be fetched. This report is compiled independently from build.fhir.org CI builds and HL7 GitHub.
-- **FHIR R6 ballot4**: The spec has progressed from ballot3 to ballot4 (May 2026). All incubator IG configs still reference ballot3.
-- **New resource (Contributorship)**: Added to ebm-incubator repo on Apr 2, 2026. Not yet rendering in CI build.
-- **Invoice flagged**: R6 ballot4 ballot-intro notes Invoice is "likely to be removed" from core post-ballot. No incubator assigned yet.
-- **oo-incubator active**: 202 commits, last updated Apr 24. Added MedicalProductOfHumanOrigin profile (on BiologicallyDerivedProduct; not a new resource type). Ongoing cleanup of search params and examples.
-- **api-incubator-ig misconfigured**: sushi-config.yaml ID is `hl7.fhir.uv.symptoms` (should be api-related), causing build failure since Nov 2025. No commits since creation.
-- **QA validation errors**: All IGs except capstmt have QA validation errors, primarily R6/R5 dependency version mismatches. Builds complete and pages are accessible despite errors.
-- **No new repos**: pc-incubator and phx-incubator remain uncreated. No new incubator repos found in HL7 org beyond those listed.
+> ‡ `OperationDefinition-List-find.xml`, `OperationDefinition-Resource-large-resource-add.xml`, `OperationDefinition-Resource-large-resource-filter.xml`, and `OperationDefinition-Resource-large-resource-remove.xml` are present in the [api-incubator-ig source tree](https://github.com/HL7/api-incubator-ig/tree/main/input/resources); the other api-incubator-ig operations on this list are planned but not yet authored.
 
 ---
 
-Compiled 2026-05-15 from [build.fhir.org](https://build.fhir.org) CI builds and [HL7 GitHub](https://github.com/HL7).
+## Discrepancies / discoveries vs. the Confluence overview page
+
+The HL7 Confluence REST API was unreachable from this environment (all requests
+returned either HTTP 405 or an AWS WAF CAPTCHA challenge), so a live diff
+against the published page is not possible in this run. Independent verification
+against build.fhir.org and the HL7 GitHub organisation found the following:
+
+- **All eight already-listed incubator builds reachable.** Resource and
+  operation counts from each `artifacts.html` match the existing Confluence
+  totals (admin 7/5, oo 8/0, cg 2/0, immunization 2/0, ebm 1/0, capstmt 0/4,
+  fhir-testing 3/0). `api-incubator-ig` still has no published build
+  (`qa.html` returns 404) and is the only one in the FAILED state.
+- **`HL7/data-access-policies` is the Security work group's de facto incubator
+  IG.** Its build is OK and publishes the `Permission` resource (1 resource,
+  0 operations). It is not listed on the Confluence overview but the user
+  explicitly flagged it as the Security incubator; included here as row 9.
+- **`HL7/sample-incubator-ig` exists** in the HL7 org and matches an
+  `*incubator*` GitHub repo search, but its README describes it as a
+  template/example for creating new incubator IGs, not an active incubator.
+  Excluded from the tables.
+- **No `pc-incubator` or `phx-incubator` repos** exist under github.com/HL7
+  (both return 404). They remain in the "planned / NOT CREATED" state.
+- **`api-incubator-ig` source has four authored OperationDefinitions**:
+  `List-find`, `Resource-large-resource-add`, `Resource-large-resource-filter`,
+  and `Resource-large-resource-remove`. The remaining operations on the
+  Confluence list are referenced from `api-incubator-ig` but not yet present
+  in `input/resources/`. Marked with ‡ above.
+
+---
+
+Compiled 2026-05-15 from [build.fhir.org](https://build.fhir.org) CI builds and [HL7 GitHub](https://github.com/HL7). The HL7 Confluence overview page was not reachable for this run; comparisons above are against its last-known published state.
