@@ -292,6 +292,14 @@ public class HTMLInspector {
   private List<ExternalReference> externalReferences = new ArrayList<>();
   private Map<String, XhtmlNode> imageRefs = new HashMap<>();
   private Map<String, String> copyrights = new HashMap<>();
+  // the text of the last parent of a text node with a copyright mark, while the tree hasn't changed since: when a
+  // big element (e.g. the json of a large code system) holds many marked text nodes, getting the text of the
+  // whole element again for every one of them was quadratic
+  private XhtmlNode copyrightParent;
+  private String copyrightParentText;
+  private int copyrightParentTreeChanges;
+  // the number of changes checkLinks() has made to the text of the tree
+  private int linkCheckTreeChanges;
   private boolean noCIBuildIssues;
   private String packageId;
   private String version;
@@ -444,6 +452,8 @@ public class HTMLInspector {
             headingsShifted = applyPageHeadingLevel(s, x, messages);
           }
         }
+        copyrightParent = null;
+        copyrightParentText = null;
         boolean changed = checkLinks(lf, s, "", x, null, messages, false, dat, null) != NodeChangeType.NONE || bh.ok() || headingsShifted; // returns true if changed
         // after all the checks, so the panel's own markup is never checked
         if (accessibilityPanel && addAccessibilityPanel(lf, x)) {
@@ -1526,11 +1536,12 @@ public class HTMLInspector {
     if (x.getNodeType() == NodeType.Text) {
       String tx = x.allText().toUpperCase();
       if (tx.contains("©") || tx.contains("®") || tx.contains("(R)") || tx.contains("(TM)") || tx.contains("(C)") ) {
-        copyrights.put(parent == null ? tx : parent.allText(), FileUtilities.getRelativePath(rootFolder, lf.filename));
+        copyrights.put(parent == null ? tx : copyrightParentText(parent), FileUtilities.getRelativePath(rootFolder, lf.filename));
       }
     }
     if ("title".equals(x.getName()) && Utilities.noString(x.allText())) {
       x.addText("?html-link?");
+      linkCheckTreeChanges++;
     }
     if ("a".equals(x.getName()) && x.hasAttribute("href")) {
       changed = checkResolveLink(s, x.getLocation(), path, x.getAttribute("href"), x.allText(), messages, uuid, x, parent);
@@ -1569,6 +1580,7 @@ public class HTMLInspector {
       XhtmlNode a = new XhtmlNode(NodeType.Element);
       a.setName("a").setAttribute("name", nuid).addText("\u200B");
       x.addChildNode(0, a);
+      linkCheckTreeChanges++;
     }
     if (changed)
       return NodeChangeType.SELF;
@@ -1576,6 +1588,15 @@ public class HTMLInspector {
       return NodeChangeType.CHILD;
     else
       return NodeChangeType.NONE;
+  }
+
+  private String copyrightParentText(XhtmlNode parent) {
+    if (parent != copyrightParent || linkCheckTreeChanges != copyrightParentTreeChanges) {
+      copyrightParent = parent;
+      copyrightParentTreeChanges = linkCheckTreeChanges;
+      copyrightParentText = parent.allText();
+    }
+    return copyrightParentText;
   }
 
   public String genID(LoadedFile lf) {
