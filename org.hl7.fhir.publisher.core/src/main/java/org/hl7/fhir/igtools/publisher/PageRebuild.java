@@ -41,7 +41,7 @@ import org.hl7.fhir.utilities.validation.ValidationMessage;
  *   Jekyll removes from the output folder when it runs again: a page-only change can't change them, because nothing in
  *   them depends on page content</li>
  *   <li>and then, before the html checks, the messages (the build's, and each file's and resource's), which the html
- *   checks and qa add to; a fresh copy of the html inspector, which collects what it found as it checks; and which
+ *   checks and qa add to, and how many of them the suppressed messages had matched; a fresh copy of the html inspector, which collects what it found as it checks; and which
  *   fragments the inspector marked as used</li>
  * </ul>
  *
@@ -86,6 +86,11 @@ public class PageRebuild {
   private final Map<FetchedFile, List<ValidationMessage>> fileFilteredMessages = new IdentityHashMap<>();
   private final Map<FetchedResource, List<ValidationMessage>> resourceErrors = new IdentityHashMap<>();
   private final Map<String, Boolean> fragmentsUsed = new HashMap<>();
+  // which messages the suppressed messages had matched (and the comments, which matching sets), and how often each had
+  // been used: qa and the html checks add to these
+  private final Set<ValidationMessage> matched = Collections.newSetFromMap(new IdentityHashMap<>());
+  private final Map<ValidationMessage, String> comments = new IdentityHashMap<>();
+  private List<int[]> suppressedUseCounts;
   private HTMLInspector inspector;
   private Map<String, String> uncsList;
   private String onCheckMessages;
@@ -192,6 +197,15 @@ public class PageRebuild {
     for (Map.Entry<String, PublisherBase.FragmentUseRecord> e : pf.fragmentUses.entrySet()) {
       fragmentsUsed.put(e.getKey(), e.getValue().used);
     }
+    for (List<ValidationMessage> list : messageLists()) {
+      for (ValidationMessage m : list) {
+        if (m.isMatched()) {
+          matched.add(m);
+        }
+        comments.put(m, m.getComment());
+      }
+    }
+    suppressedUseCounts = pf.suppressedMessages.getUseCounts();
     inspector = pf.inspector == null ? null : pf.inspector.copyForRecheck();
     captured = true;
   }
@@ -324,7 +338,28 @@ public class PageRebuild {
     for (Map.Entry<String, PublisherBase.FragmentUseRecord> e : pf.fragmentUses.entrySet()) {
       e.getValue().used = Boolean.TRUE.equals(fragmentsUsed.get(e.getKey()));
     }
+    for (List<ValidationMessage> list : messageLists()) {
+      for (ValidationMessage m : list) {
+        m.setMatched(matched.contains(m));
+        m.setComment(comments.get(m));
+      }
+    }
+    pf.suppressedMessages.setUseCounts(suppressedUseCounts);
     pf.inspector = inspector == null ? null : inspector.copyForRecheck();
+  }
+
+  /** The captured message lists */
+  private List<List<ValidationMessage>> messageLists() {
+    List<List<ValidationMessage>> res = new ArrayList<>();
+    res.add(errors);
+    res.addAll(fileErrors.values());
+    res.addAll(resourceErrors.values());
+    for (List<ValidationMessage> list : fileFilteredMessages.values()) {
+      if (list != null) {
+        res.add(list);
+      }
+    }
+    return res;
   }
 
   /**

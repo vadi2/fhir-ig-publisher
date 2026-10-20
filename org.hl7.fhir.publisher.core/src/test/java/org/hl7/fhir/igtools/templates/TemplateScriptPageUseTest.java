@@ -39,4 +39,25 @@ class TemplateScriptPageUseTest {
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${basedir}/input/includes\"/>"));
     assertNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"x\" value=\"${ig.root}/input-cache/schemas\"/><copy todir=\"${ig.root}/input-cache\"/>"));
   }
+
+  @Test
+  void aScriptThatReadsTheInputFolderThroughAPropertyIsNot() {
+    assertNotNull(Template.scriptPageUse("onGenerate.xml",
+        "<project><property name=\"in\" value=\"${folder.input}\"/><fileset dir=\"${in}\"/></project>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml",
+        "<project><property name=\"in\" location=\"${ig.root}/input\"/><copy file=\"${in}/includes/menu.xml\" todir=\"x\"/></project>"));
+    assertNull(Template.scriptPageUse("onGenerate.xml",
+        "<project><property name=\"in\" value=\"${folder.input}\"/><copy file=\"${in}/data/x.json\" todir=\"x\"/></project>"));
+  }
+
+  @Test
+  void aScriptThatReadsEverythingUnderTheRootIsNot() {
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.root}\" includes=\"**/*.md\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${basedir}\"><include name=\"**/*.md\"/></fileset>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<copy todir=\"x\"><fileset dir=\"${ig.root}\"/></copy>"));
+    assertNull(Template.scriptPageUse("onGenerate.xml", "<copy file=\"x\" todir=\"${ig.root}\"/>"));
+    // the base template's spreadsheet search
+    assertNull(Template.scriptPageUse("onLoad.xml",
+        "<fileset id=\"s\" dir=\"${ig.root}\"><include name=\"${folder.input}/examples/*spreadsheet.xml\"/></fileset>"));
+  }
 }

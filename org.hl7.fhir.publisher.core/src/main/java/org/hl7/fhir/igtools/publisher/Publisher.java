@@ -313,7 +313,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       generator.finishGenerate(state);
       finishIg(state.getUncsList(), buildTracker, tts);
     } catch (Exception e) {
-      log("Rapido Mode: the page rebuild failed (" + e.getMessage() + "), so doing a complete build");
+      log("Rapido Mode: the page rebuild failed (" + e + "), so doing a complete build");
       state.discard();
       return false;
     } finally {

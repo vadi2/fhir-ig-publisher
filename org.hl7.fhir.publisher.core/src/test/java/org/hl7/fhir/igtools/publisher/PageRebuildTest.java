@@ -279,6 +279,36 @@ class PageRebuildTest {
     state.checkOnCheckMessages(null);
   }
 
+  private static ValidationMessage warning(String text) {
+    return new ValidationMessage(Source.Publisher, IssueType.BUSINESSRULE, "x", text, IssueSeverity.WARNING);
+  }
+
+  private void filter(ValidationMessage m) {
+    pf.suppressedMessages.contains(m.getMessage(), m);
+  }
+
+  @Test
+  void theSuppressedMessagesAreCountedAsInTheBuild() throws IOException {
+    pf.suppressedMessages.add("Suppressed%", "test");
+    ValidationMessage before = warning("Suppressed before the html checks");
+    ValidationMessage inQa = warning("Suppressed by qa");
+    pf.errors.add(before);
+    pf.errors.add(inQa);
+    filter(before);
+    built();
+    // what qa and the html checks do in the build
+    filter(inQa);
+    filter(warning("Suppressed html check message"));
+    assertEquals(3, pf.suppressedMessages.list("test").get(0).getUseCount());
+
+    // and again in the page rebuild
+    state.restore();
+    filter(inQa);
+    filter(warning("Suppressed html check message"));
+    assertEquals(3, pf.suppressedMessages.list("test").get(0).getUseCount());
+    assertEquals("test", inQa.getComment());
+  }
+
   @Test
   void plainContentFromBytes() {
     assertTrue(PageRebuild.isPlainContent("Embrüo".getBytes(StandardCharsets.UTF_8)));
