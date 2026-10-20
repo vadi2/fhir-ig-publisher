@@ -315,6 +315,8 @@ public class PublisherFields {
     LanguageSubtagRegistry registry;
 
     public Map<String, PublisherBase.FragmentUseRecord> fragmentUses = new HashMap<>();
+    // the files whose content made processCustomLiquid() do more than copy it (see PageRebuild)
+    public Set<FetchedFile> pagesWithCustomContent = new HashSet<>();
 
     LanguageUtils langUtils;
 

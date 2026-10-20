@@ -344,6 +344,59 @@ public class Template {
     return !(v == null || v.isJsonNull() || Utilities.noString(v.asString()));
   }
 
+  private static final java.util.regex.Pattern INPUT_REF = java.util.regex.Pattern.compile(
+      "(\\$\\{(?:folder|dir)\\.input\\}|\\$\\{(?:ig\\.root|basedir)\\}/input(?![\\w.-]))(/([^/\"*&;\\s<>]+))?");
+  private static final Set<String> PAGE_FOLDERS = Set.of("pagecontent", "pages", "intro-notes", "includes", "images");
+
+  /**
+   * Why a watch mode rebuild can't skip running this template's scripts again after only the content of some pages
+   * changed (see PageRebuild), or null if it can: it can if the template runs nothing just before Jekyll, and its
+   * onGenerate scripts don't refer to the folders pages come from. (The check script runs again after Jekyll: see
+   * PageRebuild.checkOnCheckMessages())
+   */
+  public String pageOnlyRebuildBlocker() throws IOException {
+    if (targetOnJekyll != null) {
+      return "the template runs a script before Jekyll";
+    }
+    if (targetOnGenerate == null) {
+      return null;
+    }
+    File scripts = new File(Utilities.path(templateDir, "scripts"));
+    File[] files = scripts.listFiles();
+    if (files == null) {
+      return "the template's scripts can't be read";
+    }
+    for (File f : files) {
+      if (!f.isFile() || f.getName().endsWith(".jar")) {
+        continue;
+      }
+      String blocker = scriptPageUse(f.getName(), FileUtilities.fileToString(f));
+      if (blocker != null) {
+        return blocker;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * How a template script (an ant file) can read the folders that pages come from, or null if it can't: it names one of
+   * them, or uses the input folder other than to define a property
+   */
+  static String scriptPageUse(String name, String src) {
+    if (src.contains("pagecontent") || src.contains("intro-notes")) {
+      return "the template's script " + name + " refers to a page folder";
+    }
+    java.util.regex.Matcher m = INPUT_REF.matcher(src);
+    while (m.find()) {
+      int tag = src.lastIndexOf('<', m.start());
+      boolean inPropertyDefinition = tag >= 0 && src.startsWith("<property", tag) && src.indexOf('>', tag) > m.start();
+      if (m.group(3) == null ? !inPropertyDefinition : PAGE_FOLDERS.contains(m.group(3))) {
+        return "the template's script " + name + " reads " + m.group();
+      }
+    }
+    return null;
+  }
+
   public boolean hasPreProcess() {
     return preProcess != null;
   }
