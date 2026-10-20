@@ -193,68 +193,148 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
 
     String rootDir = settings.getConfigFile();
     FileChangeMonitor monitor = null;
-    if (settings.isWatchMode()) {
-      monitor = new FileChangeMonitor(Arrays.asList(
-              FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(rootDir, "ig.ini"))),
-              FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(rootDir, "sushi-config.yaml"))),
-              FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(rootDir, "publication-request.json"))),
-              FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(rootDir, "sushi-ignoreWarnings.txt"))),
-              FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(rootDir, "input"))),
-              FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(rootDir, "fsh-generated")))
-      ));
+    WatchSession session = null;
+    // settings that a build adds to: each build starts again from what the command line said
+    List<String> cliNoNarratives = new ArrayList<>(settings.getNoNarratives());
+    List<String> cliNoValidate = new ArrayList<>(settings.getNoValidate());
+    try {
+      if (settings.isWatchMode()) {
+        String igDir = new File(rootDir).isFile() ? FileUtilities.getDirectoryForFile(rootDir) : rootDir;
+        List<FileChangeMonitor.MonitoredPath> watched = Arrays.asList(
+                FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "ig.ini"))),
+                FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "sushi-config.yaml"))),
+                FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "publication-request.json"))),
+                FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "sushi-ignoreWarnings.txt"))),
+                FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "fsh.ini"))), // which SUSHI to run
+                FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(igDir, "input"))),
+                FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(igDir, "fsh"))), // SUSHI's older layout
+                FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(igDir, "fsh-generated"))));
+        monitor = new FileChangeMonitor(watched);
+        List<Path> paths = new ArrayList<>();
+        for (FileChangeMonitor.MonitoredPath p : watched) {
+          paths.add(p.getPath());
+        }
+        session = new WatchSession(Paths.get(igDir), paths);
+        PackageListFetcher.rememberFetches();
+      }
+      loader.setWatchSession(session);
+
+      boolean first = true;
+      do {
+        if (session == null) {
+          build(rootDir);
+        } else {
+          session.startBuild();
+          if (!first) {
+            resetForRebuild(cliNoNarratives, cliNoValidate);
+          }
+          try {
+            build(rootDir);
+          } catch (Exception e) {
+            // keep watching: the next save may fix it
+            log("Publishing Content Failed: " + e.getMessage());
+            log("");
+            log("Stack Dump (for debugging):");
+            e.printStackTrace();
+          }
+        }
+        first = false;
+      } while (session != null && waitForChanges(monitor, session));
+    } finally {
+      if (monitor != null) {
+        monitor.close();
+      }
+      if (session != null) {
+        PackageListFetcher.forgetFetches();
+      }
     }
-
-    do {
-      pf = new PublisherFields();
-      loader.setPf(pf);
-      processor.setPf(pf);
-      generator.setPf(pf);
-      pf.resolver = this;
-      setLogger(this);
-
-      pf.tt = new TimeTracker();
-      loader.initialize();
-      if (pf.validator != null) {
-        pf.validator.setTracker(this);
-      }
-
-      if (pf.isBuildingTemplate) {
-        packageTemplate();
-      } else {
-        log("Load IG");
-        try {
-          createIg();
-        } catch (Exception e) {
-          recordOutcome(e, null);
-          throw e;
-        }
-      }
-      if (pf.templateLoaded && new File(rootDir).exists()) {
-        FileUtilities.clearDirectory(Utilities.path(rootDir, "template"));
-      }
-      if (pf.folderToDelete != null) {
-        try {
-          FileUtilities.clearDirectory(pf.folderToDelete);
-          new File(pf.folderToDelete).delete();
-        } catch (Throwable e) {
-          // nothing
-        }
-      }
-    } while (monitor != null && thereIsAFileChange(monitor));
   }
 
-  private boolean thereIsAFileChange(FileChangeMonitor monitor) throws InterruptedException {
-    monitor.startMonitoring();
-    System.out.println("Watching for changes (Cascais:Rapido mode)");
-    while (true) {
-      if (monitor.hasChanges()) {
-        monitor.printChanges();
-        monitor.clearChanges();
-        monitor.stopMonitoring();
-        return true;
-      } else {
-        Thread.sleep(100);
+  /**
+   * Puts back the state that a build changes outside PublisherFields to what a fresh start has, so that a rebuild
+   * in watch mode doesn't see what the previous build did
+   */
+  private void resetForRebuild(List<String> cliNoNarratives, List<String> cliNoValidate) {
+    settings.getNoNarratives().clear();
+    settings.getNoNarratives().addAll(cliNoNarratives);
+    settings.getNoValidate().clear();
+    settings.getNoValidate().addAll(cliNoValidate);
+    HierarchicalTableGenerator.ACTIVE_TABLES = false;
+    HierarchicalTableGenerator.uuid = UUIDUtilities.makeUuidLC();
+  }
+
+  private void build(String rootDir) throws Exception {
+    pf = new PublisherFields();
+    loader.setPf(pf);
+    processor.setPf(pf);
+    generator.setPf(pf);
+    pf.resolver = this;
+    setLogger(this);
+
+    pf.tt = new TimeTracker();
+    loader.initialize();
+    if (pf.validator != null) {
+      pf.validator.setTracker(this);
+    }
+
+    if (pf.isBuildingTemplate) {
+      packageTemplate();
+    } else {
+      log("Load IG");
+      try {
+        createIg();
+      } catch (Exception e) {
+        recordOutcome(e, null);
+        throw e;
       }
+    }
+    if (pf.templateLoaded && new File(rootDir).exists()) {
+      FileUtilities.clearDirectory(Utilities.path(rootDir, "template"));
+    }
+    if (pf.folderToDelete != null) {
+      try {
+        FileUtilities.clearDirectory(pf.folderToDelete);
+        new File(pf.folderToDelete).delete();
+      } catch (Throwable e) {
+        // nothing
+      }
+    }
+  }
+
+  /**
+   * Waits until the content of a watched file is different from what the last build started with. Files that were
+   * saved without being changed, and files the build itself wrote, don't count
+   */
+  private boolean waitForChanges(FileChangeMonitor monitor, WatchSession session) throws InterruptedException, IOException {
+    // monitoring is started before looking for changes made while the build ran, so that nothing is missed in between
+    monitor.startMonitoring();
+    try {
+      SourceSnapshot.Changes changes = session.changesSinceBuildStart();
+      if (changes.isEmpty()) {
+        System.out.println("Watching for changes (Cascais:Rapido mode)");
+      }
+      while (changes.isEmpty()) {
+        if (monitor.hasChanges()) {
+          // wait until the files have been quiet for a moment (an editor or a git checkout often writes several),
+          // but not for ever, in case something keeps writing
+          long giveUp = System.currentTimeMillis() + 5000;
+          do {
+            monitor.clearChanges();
+            Thread.sleep(250);
+          } while (monitor.hasChanges() && System.currentTimeMillis() < giveUp);
+          changes = session.changesSinceBuildStart();
+        } else {
+          Thread.sleep(100);
+        }
+      }
+      System.out.println("=== File Changes Detected ===");
+      System.out.print(changes);
+      return true;
+    } finally {
+      // not watched while building: the files the build writes would be reported for nothing (and on macOS, the
+      // folders would be scanned again and again while the build runs). What changes while the build runs is
+      // found by changesSinceBuildStart() once it has finished
+      monitor.stopMonitoring();
     }
   }
 
@@ -913,6 +993,21 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     }
     buildTracker.setBooleanProperty("status", "complete", false, null);
     buildTracker.setBooleanProperty("status", "started", true, null);
+
+    if (settings.isWatchMode()) {
+      // in watch mode, every build is complete, so that its output is the same as a fresh build's (a rebuild is
+      // faster because of what it doesn't need to do again, see WatchSession, not because it builds less). So the
+      // build doesn't need to know what changed, and the tracker forgets the hashes: the next build without watch
+      // mode is complete too, since what it would compare them with may have changed several times since
+      log("Rapido Mode: Complete Build (watch mode)");
+      buildTracker.removeSection("source");
+      buildTracker.removeSection("tracked");
+      buildTracker.setStringProperty("status", "uuid", HierarchicalTableGenerator.uuid, null);
+      buildTracker.save();
+      pf.changeList.addAll(pf.fileList);
+      loader.clearTempFolder();
+      return;
+    }
 
     // first, we load all the direct dependency lists
     for (FetchedFile f : pf.fileList) {
