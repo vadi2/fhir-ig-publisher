@@ -344,6 +344,108 @@ public class Template {
     return !(v == null || v.isJsonNull() || Utilities.noString(v.asString()));
   }
 
+  // a reference to the input folder, and the folder in it, if one is named: ${folder.input}, ${ig.root}/input...
+  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir)\\}/input(?![\\w.-]))(/([^/\"*&;\\s<>]+))?";
+  private static final java.util.regex.Pattern PROPERTY = java.util.regex.Pattern.compile(
+      "<property\\s[^>]*?name=\"([^\"]+)\"[^>]*>");
+  // a file set or the like that starts from the IG's root folder
+  private static final java.util.regex.Pattern ROOT_DIR = java.util.regex.Pattern.compile(
+      "<([\\w.:-]+)\\s[^>]*?(?<=\\s)dir=\"\\$\\{(?:ig\\.root|basedir)\\}/?\"[^>]*>");
+  private static final Set<String> PAGE_FOLDERS = Set.of("pagecontent", "pages", "intro-notes", "includes", "images");
+
+  /**
+   * Why a watch mode rebuild can't skip running this template's scripts again after only the content of some pages
+   * changed (see PageRebuild), or null if it can: it can if the template runs nothing just before Jekyll, and its
+   * onGenerate scripts don't refer to the folders pages come from. (The check script runs again after Jekyll: see
+   * PageRebuild.checkOnCheckMessages())
+   */
+  public String pageOnlyRebuildBlocker() throws IOException {
+    if (targetOnJekyll != null) {
+      return "the template runs a script before Jekyll";
+    }
+    if (targetOnGenerate == null) {
+      return null;
+    }
+    File scripts = new File(Utilities.path(templateDir, "scripts"));
+    File[] files = scripts.listFiles();
+    if (files == null) {
+      return "the template's scripts can't be read";
+    }
+    for (File f : files) {
+      if (!f.isFile() || f.getName().endsWith(".jar")) {
+        continue;
+      }
+      String blocker = scriptPageUse(f.getName(), FileUtilities.fileToString(f));
+      if (blocker != null) {
+        return blocker;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * How a template script (an ant file) can read the folders that pages come from, or null if it can't: it names one of
+   * them, uses the input folder (directly, or through a property defined as it) other than to define a property, or
+   * selects everything under the IG's folder
+   */
+  static String scriptPageUse(String name, String src) {
+    if (src.contains("pagecontent") || src.contains("intro-notes")) {
+      return "the template's script " + name + " refers to a page folder";
+    }
+    java.util.regex.Pattern inputRef = inputRef(src);
+    java.util.regex.Matcher m = inputRef.matcher(src);
+    while (m.find()) {
+      int tag = src.lastIndexOf('<', m.start());
+      boolean inPropertyDefinition = tag >= 0 && src.startsWith("<property", tag) && src.indexOf('>', tag) > m.start();
+      if (m.group(3) == null ? !inPropertyDefinition : PAGE_FOLDERS.contains(m.group(3))) {
+        return "the template's script " + name + " reads " + m.group();
+      }
+    }
+    java.util.regex.Matcher r = ROOT_DIR.matcher(src);
+    while (r.find()) {
+      // what it selects: the includes attribute, or what's in the element
+      String selection = r.group();
+      if (!r.group().endsWith("/>")) {
+        int end = src.indexOf("</" + r.group(1) + ">", r.end());
+        selection = end < 0 ? src.substring(r.start()) : src.substring(r.start(), end);
+      }
+      if (!selection.contains("include") || selection.contains("**")) {
+        return "the template's script " + name + " reads everything under the IG's folder";
+      }
+    }
+    return null;
+  }
+
+  /**
+   * The pattern for a reference to the input folder in src, including through the properties src defines as the input
+   * folder (e.g. &lt;property name="in" value="${folder.input}"/&gt; makes ${in} one)
+   */
+  private static java.util.regex.Pattern inputRef(String src) {
+    Set<String> aliases = new HashSet<>();
+    boolean more = true;
+    while (more) {
+      more = false;
+      java.util.regex.Pattern ref = inputRef(aliases);
+      java.util.regex.Matcher p = PROPERTY.matcher(src);
+      while (p.find()) {
+        java.util.regex.Matcher m = ref.matcher(p.group());
+        if (m.find() && m.group(3) == null && !aliases.contains(p.group(1))) {
+          aliases.add(p.group(1));
+          more = true;
+        }
+      }
+    }
+    return inputRef(aliases);
+  }
+
+  private static java.util.regex.Pattern inputRef(Set<String> aliases) {
+    StringBuilder alt = new StringBuilder();
+    for (String a : aliases) {
+      alt.append('|').append(java.util.regex.Pattern.quote(a));
+    }
+    return java.util.regex.Pattern.compile(String.format(INPUT_REF, alt));
+  }
+
   public boolean hasPreProcess() {
     return preProcess != null;
   }
