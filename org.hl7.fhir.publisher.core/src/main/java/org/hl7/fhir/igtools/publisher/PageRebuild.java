@@ -41,8 +41,8 @@ import org.hl7.fhir.utilities.validation.ValidationMessage;
  *   Jekyll removes from the output folder when it runs again: a page-only change can't change them, because nothing in
  *   them depends on page content</li>
  *   <li>and then, before the html checks, the messages (the build's, and each file's and resource's), which the html
- *   checks and qa add to, and how many of them the suppressed messages had matched; a fresh copy of the html inspector, which collects what it found as it checks; and which
- *   fragments the inspector marked as used</li>
+ *   checks and qa add to, and how many of them the suppressed messages had matched; a fresh copy of the html
+ *   inspector, which collects what it found as it checks; and which fragments the inspector marked as used</li>
  * </ul>
  *
  * <p>A rebuild that reuses this puts all of that back, and runs the same code as the build for the rest. The template's
