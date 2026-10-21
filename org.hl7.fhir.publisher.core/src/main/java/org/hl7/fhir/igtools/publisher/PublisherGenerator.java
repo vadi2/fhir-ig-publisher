@@ -3705,8 +3705,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     if (!pf.rapido.isCompleteBuild()) {
       List<Path> left = pf.staleTemp.findTemplateLeftovers();
-      for (Path p : left) {
-        log("Rapido Mode: deleting " + pf.staleTemp.relative(p) + " from the temp folder (the template wrote it in the last build, and hasn't yet in this one)");
+      if (!left.isEmpty()) {
+        // most are files it copies every time (e.g. its assets), so one line, not one per file
+        log("Rapido Mode: deleting the " + left.size() + " files the template's onGenerate wrote in the last build, before it runs again (e.g. " + pf.staleTemp.relative(left.get(0)) + ")");
       }
       pf.staleTemp.delete(left);
     }
