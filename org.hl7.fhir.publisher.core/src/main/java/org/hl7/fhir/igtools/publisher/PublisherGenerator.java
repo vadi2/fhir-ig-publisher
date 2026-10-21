@@ -486,6 +486,26 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   /**
+   * Watch mode, Rapido differential build: deletes the files in the temp folder that an earlier build wrote and this one
+   * neither wrote nor reused (see StaleTempFiles), so that Jekyll sees what it would see after a complete build
+   */
+  private void deleteStaleTempFiles() throws IOException {
+    if (pf.staleTemp == null) {
+      return;
+    }
+    Set<String> claimed = new HashSet<>(pf.allOutputs);
+    claimed.addAll(pf.otherFilesRun);
+    for (FetchedFile f : pf.fileList) {
+      claimed.addAll(f.getOutputNames());
+    }
+    List<Path> stale = pf.staleTemp.find(claimed);
+    for (Path p : stale) {
+      log("Rapido Mode: deleting " + pf.staleTemp.relative(p) + " from the temp folder (an earlier build wrote it, this one didn't)");
+    }
+    pf.staleTemp.delete(stale);
+  }
+
+  /**
    * Watch mode: copies the pages to the temp folder again after only their content changed (see PageRebuild); returns
    * the files written
    */
@@ -537,6 +557,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       if (!settings.isGenerationOff()) {
         templateBeforeJekyll();
       }
+      deleteStaleTempFiles();
       if (pageRebuild != null) {
         pageRebuild.beforeJekyll();
       }

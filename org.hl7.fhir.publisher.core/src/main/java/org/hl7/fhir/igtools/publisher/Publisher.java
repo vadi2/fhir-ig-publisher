@@ -1073,25 +1073,20 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     buildTracker.setBooleanProperty("status", "complete", false, null);
     buildTracker.setBooleanProperty("status", "started", true, null);
 
-    if (settings.isWatchMode()) {
-      // in watch mode, every build is complete, so that its output is the same as a fresh build's (a rebuild is
-      // faster because of what it doesn't need to do again, see WatchSession, not because it builds less). So the
-      // build doesn't need to know what changed, and the tracker forgets the hashes: the next build without watch
-      // mode is complete too, since what it would compare them with may have changed several times since
-      log("Rapido Mode: Complete Build (watch mode)");
-      buildTracker.removeSection("source");
-      buildTracker.removeSection("tracked");
-      buildTracker.setStringProperty("status", "uuid", HierarchicalTableGenerator.uuid, null);
-      buildTracker.save();
-      pf.changeList.addAll(pf.fileList);
-      loader.clearTempFolder();
-      return;
-    }
-
     buildTracker.save();
 
+    if (failure == null && settings.isWatchMode() && !StaleTempFiles.isSupported(pf.tempDir)) {
+      // a differential build has to be able to tell what's left in the temp folder from earlier builds
+      failure = "watch mode, and the file system can't tell which temp files a build wrote";
+    }
     pf.rapido = new RapidoTracker(pf);
     pf.rapido.analyse(igf, failure);
+    if (!pf.rapido.isCompleteBuild() && settings.isWatchMode()) {
+      // what the last build left in the temp folder that this one neither writes nor reuses is deleted before Jekyll
+      // runs (see PublisherGenerator.deleteStaleTempFiles())
+      pf.staleTemp = new StaleTempFiles(pf.tempDir, Arrays.asList(Utilities.path(pf.tempDir, "_rapido")));
+      pf.staleTemp.mark();
+    }
     if (pf.rapido.isCompleteBuild()) {
       log("Rapido Mode: Complete Build ("+pf.rapido.getReason()+")");
       loader.clearTempFolder();

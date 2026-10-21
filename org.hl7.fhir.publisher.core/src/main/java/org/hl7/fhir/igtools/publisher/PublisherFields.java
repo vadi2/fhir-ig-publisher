@@ -212,6 +212,8 @@ public class PublisherFields {
     boolean doTransforms;
     /** what Rapido reuses from the last build (null unless in Rapido mode) */
     RapidoTracker rapido;
+    /** watch mode, Rapido differential build: what the last build left in the temp folder (else null) */
+    StaleTempFiles staleTemp;
     boolean allInvariants = true;
     List<String> spreadsheets = new ArrayList<String>();
     List<String> bundles = new ArrayList<String>();
