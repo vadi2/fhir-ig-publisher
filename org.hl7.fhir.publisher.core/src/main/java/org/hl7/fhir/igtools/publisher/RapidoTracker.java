@@ -9,6 +9,7 @@ import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Base64;
 import java.util.Calendar;
 import java.util.Collections;
@@ -43,6 +44,7 @@ import org.hl7.fhir.utilities.FileUtilities;
 import org.hl7.fhir.utilities.Utilities;
 import org.hl7.fhir.utilities.json.model.JsonArray;
 import org.hl7.fhir.utilities.json.model.JsonElement;
+import org.hl7.fhir.utilities.json.model.JsonNumber;
 import org.hl7.fhir.utilities.json.model.JsonObject;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.xhtml.XhtmlComposer;
@@ -98,8 +100,8 @@ public class RapidoTracker {
   private boolean complete;
   private String reason;
   private Recording recording;
-  /** the validator's statusWarnings before the resource being validated now, or null if they can't be read */
-  private Set<String> statusBefore;
+  /** the build state (see buildState()) before the resource being validated now */
+  private Map<String, Set<String>> stateBefore;
   /** the date the loader puts on canonical resources that have none; it differs every build */
   private final String buildDate;
 
@@ -784,8 +786,10 @@ public class RapidoTracker {
   public List<ValidationMessage> reuseValidation(FetchedFile f, FetchedResource r) {
     List<ValidationMessage> res = savedValidation(f, r);
     if (res == null) {
-      Set<String> sw = statusWarnings();
-      statusBefore = sw == null ? null : new HashSet<>(sw);
+      stateBefore = new LinkedHashMap<>();
+      for (Map.Entry<String, Set<String>> e : buildState().entrySet()) {
+        stateBefore.put(e.getKey(), e.getValue() == null ? null : new HashSet<>(e.getValue()));
+      }
     }
     return res;
   }
@@ -808,30 +812,50 @@ public class RapidoTracker {
       }
       res.add(vm);
     }
-    // the validator only mentions a deprecated (etc) definition the first time it sees it in a build, so what it says
-    // about this resource depends on what it has seen before it, and what it sees here changes what it says later
-    Set<String> sw = statusWarnings();
-    if (sw == null || !statusHash(sw).equals(rv.asString("statusBefore"))) {
+    // what the validator says about this resource can depend on what it has seen before it, and what it sees here
+    // changes what it says later (see buildState())
+    Map<String, Set<String>> state = buildState();
+    JsonObject saved = rv.getJsonObject("state");
+    if (saved == null) {
       return null;
     }
-    sw.addAll(rv.forceArray("statusAdded").asStrings());
+    for (Map.Entry<String, Set<String>> e : state.entrySet()) {
+      JsonObject s = saved.getJsonObject(e.getKey());
+      if (e.getValue() == null || s == null || (ORDERED_STATE.contains(e.getKey()) && !stateHash(e.getValue()).equals(s.asString("before")))) {
+        return null;
+      }
+    }
+    // the validator attaches the profiles it validated an element against to the element, for the qa page's signposts
+    if (!restoreSignposts(r.getElement(), rv.getJsonArray("signposts"), res)) {
+      return null;
+    }
+    for (Map.Entry<String, Set<String>> e : state.entrySet()) {
+      e.getValue().addAll(saved.getJsonObject(e.getKey()).forceArray("added").asStrings());
+    }
     newFile(f).forceObject("validation").set(ri, rv);
     return res;
   }
 
   /** records the messages from validating a resource, before the publisher adds them to the file */
   public void recordValidation(FetchedFile f, FetchedResource r, List<ValidationMessage> errs) {
-    Set<String> sw = statusWarnings();
-    if (!keys.containsKey(f) || sw == null || statusBefore == null) {
-      return; // without knowing what the validator had seen, the result can't be reused
+    if (!keys.containsKey(f) || stateBefore == null) {
+      return;
     }
     JsonObject rv = new JsonObject();
     rv.add("key", r.fhirType()+"/"+r.getId());
-    rv.add("statusBefore", statusHash(statusBefore));
-    JsonArray added = rv.forceArray("statusAdded");
-    for (String s : new TreeSet<>(sw)) {
-      if (!statusBefore.contains(s)) {
-        added.add(s);
+    JsonObject state = rv.forceObject("state");
+    for (Map.Entry<String, Set<String>> e : buildState().entrySet()) {
+      Set<String> before = stateBefore.get(e.getKey());
+      if (e.getValue() == null || before == null) {
+        return; // without knowing what the validator had seen, the result can't be reused
+      }
+      JsonObject s = state.forceObject(e.getKey());
+      s.add("before", stateHash(before));
+      JsonArray added = s.forceArray("added");
+      for (String v : new TreeSet<>(e.getValue())) {
+        if (!before.contains(v)) {
+          added.add(v);
+        }
       }
     }
     JsonArray msgs = rv.forceArray("messages");
@@ -842,7 +866,117 @@ public class RapidoTracker {
       }
       msgs.add(m);
     }
+    JsonArray signposts = recordSignposts(r.getElement(), errs);
+    if (signposts == null) {
+      return;
+    }
+    rv.add("signposts", signposts);
     newFile(f).forceObject("validation").set(Integer.toString(f.getResources().indexOf(r)), rv);
+  }
+
+  /**
+   * The messages the validator attached to the elements of the resource (Element.addMessage(): the profiles it
+   * validated each element against), with where each element is (the index of each child from the root) and its path.
+   * A message that is also one of the resource's messages is recorded as its index there, so that it comes back as the
+   * same object, as in a stock build. null if a message can't be saved.
+   */
+  static JsonArray recordSignposts(Element root, List<ValidationMessage> errs) {
+    JsonArray res = new JsonArray();
+    Map<ValidationMessage, Integer> index = new IdentityHashMap<>();
+    for (int i = 0; i < errs.size(); i++) {
+      index.putIfAbsent(errs.get(i), i);
+    }
+    return root == null || recordSignposts(root, "", index, res) ? res : null;
+  }
+
+  private static boolean recordSignposts(Element e, String at, Map<ValidationMessage, Integer> index, JsonArray res) {
+    if (e.hasMessages()) {
+      JsonObject o = new JsonObject();
+      o.add("at", at);
+      o.add("path", String.valueOf(e.getPath()));
+      JsonArray msgs = o.forceArray("messages");
+      for (ValidationMessage vm : e.getMessages()) {
+        Integer i = index.get(vm);
+        if (i != null) {
+          msgs.add(i);
+        } else {
+          JsonObject m = writeMessage(vm);
+          if (m == null) {
+            return false;
+          }
+          msgs.add(m);
+        }
+      }
+      res.add(o);
+    }
+    if (e.hasChildren()) {
+      int i = 0;
+      for (Element c : e.getChildList()) {
+        if (!recordSignposts(c, at.isEmpty() ? Integer.toString(i) : at+"."+i, index, res)) {
+          return false;
+        }
+        i++;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Attaches the messages recordSignposts() recorded to the elements of the resource, as validating it would have.
+   * false (and nothing attached) if an element isn't where it was, or a message can't be read.
+   *
+   * @param msgs the resource's messages, as restored
+   */
+  static boolean restoreSignposts(Element root, JsonArray signposts, List<ValidationMessage> msgs) {
+    if (signposts == null || root == null) {
+      return signposts != null && signposts.size() == 0;
+    }
+    Map<Element, List<ValidationMessage>> found = new LinkedHashMap<>();
+    for (JsonObject o : signposts.asJsonObjects()) {
+      Element e = root;
+      String at = o.asString("at");
+      if (at == null) {
+        return false;
+      }
+      if (!at.isEmpty()) {
+        for (String s : at.split("\\.")) {
+          int i;
+          try {
+            i = Integer.parseInt(s);
+          } catch (NumberFormatException ex) {
+            return false;
+          }
+          if (!e.hasChildren() || i < 0 || i >= e.getChildList().size()) {
+            return false;
+          }
+          e = e.getChildList().get(i);
+        }
+      }
+      if (!String.valueOf(e.getPath()).equals(o.asString("path")) || o.getJsonArray("messages") == null) {
+        return false;
+      }
+      List<ValidationMessage> list = new ArrayList<>();
+      for (JsonElement m : o.getJsonArray("messages").getItems()) {
+        ValidationMessage vm = null;
+        if (m instanceof JsonObject) {
+          vm = readMessage((JsonObject) m);
+        } else if (m instanceof JsonNumber) {
+          Integer i = ((JsonNumber) m).getInteger();
+          vm = i != null && i >= 0 && i < msgs.size() ? msgs.get(i) : null;
+        }
+        if (vm == null) {
+          return false;
+        }
+        list.add(vm);
+      }
+      found.put(e, list);
+    }
+    for (Map.Entry<Element, List<ValidationMessage>> e : found.entrySet()) {
+      for (ValidationMessage vm : e.getValue()) {
+        e.getKey().addMessage(vm);
+      }
+    }
+    return true;
   }
 
   /** a file with no resources to validate still needs a record, so the next build knows it can be reused */
@@ -854,20 +988,40 @@ public class RapidoTracker {
     }
   }
 
+  /** the parts of buildState() that change what the validator says, not only what the build does after validation */
+  private static final Set<String> ORDERED_STATE = new HashSet<>(Arrays.asList("statusWarnings", "unsupportedCodeSystems"));
+
   /**
-   * The validator's record of the deprecated, withdrawn, retired and experimental definitions it has already
-   * mentioned in this build (BaseValidator.statusWarnings). null if it can't be read
+   * What validating a resource adds to and that outlives it, so that it has to be replayed when the validation is
+   * reused (a value is null if it can't be read):
+   * <ul>
+   *   <li>statusWarnings (BaseValidator): the deprecated, withdrawn, retired and experimental definitions the validator
+   *   has already mentioned in this build; it only mentions each one the first time</li>
+   *   <li>unsupportedCodeSystems (BaseWorkerContext): the code systems the terminology server said it doesn't know;
+   *   the first code from one is checked on the server (and its message has a message id), later ones aren't</li>
+   *   <li>codeSystemsUsed (BaseWorkerContext): what the IG uses, which the build checks after validation (e.g. for
+   *   SNOMED CT's edition); it doesn't change what the validator says</li>
+   * </ul>
    */
+  private Map<String, Set<String>> buildState() {
+    Map<String, Set<String>> res = new LinkedHashMap<>();
+    res.put("statusWarnings", readSet(pf.validator, "statusWarnings"));
+    res.put("unsupportedCodeSystems", readSet(pf.context, "unsupportedCodeSystems"));
+    res.put("codeSystemsUsed", readSet(pf.context, "codeSystemsUsed"));
+    return res;
+  }
+
+  /** the set in the (private) field of the object or a superclass; null if it can't be read */
   @SuppressWarnings("unchecked")
-  private Set<String> statusWarnings() {
-    if (pf.validator == null) {
+  static Set<String> readSet(Object o, String field) {
+    if (o == null) {
       return null;
     }
-    for (Class<?> c = pf.validator.getClass(); c != null; c = c.getSuperclass()) {
+    for (Class<?> c = o.getClass(); c != null; c = c.getSuperclass()) {
       try {
-        Field fld = c.getDeclaredField("statusWarnings");
+        Field fld = c.getDeclaredField(field);
         fld.setAccessible(true);
-        Object v = fld.get(pf.validator);
+        Object v = fld.get(o);
         return v instanceof Set ? (Set<String>) v : null;
       } catch (NoSuchFieldException e) {
         // look in the superclass
@@ -878,9 +1032,9 @@ public class RapidoTracker {
     return null;
   }
 
-  private static String statusHash(Set<String> statusWarnings) {
+  private static String stateHash(Set<String> values) {
     Hasher h = new Hasher();
-    for (String s : new TreeSet<>(statusWarnings)) {
+    for (String s : new TreeSet<>(values)) {
       h.add(s);
     }
     return h.finish();

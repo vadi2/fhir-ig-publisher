@@ -40,6 +40,8 @@ public class StaleTempFiles {
   private final Path temp;
   private final Path marker;
   private final Path claims;
+  private final Path templateMarker;
+  private final Path templateWrites;
   private final Set<Path> skip = new HashSet<>();
 
   /**
@@ -49,11 +51,15 @@ public class StaleTempFiles {
     this.temp = Paths.get(temp).toAbsolutePath().normalize();
     this.marker = this.temp.resolve("_rapido").resolve("build-start");
     this.claims = this.temp.resolve("_rapido").resolve("claimed.txt");
+    this.templateMarker = this.temp.resolve("_rapido").resolve("template-start");
+    this.templateWrites = this.temp.resolve("_rapido").resolve("template-written.txt");
     for (String s : skip) {
       this.skip.add(Paths.get(s).toAbsolutePath().normalize());
     }
     this.skip.add(marker);
     this.skip.add(claims);
+    this.skip.add(templateMarker);
+    this.skip.add(templateWrites);
   }
 
   /** Whether the file system has status-change times; if not, this can't be used */
@@ -90,18 +96,9 @@ public class StaleTempFiles {
       return res;
     }
     FileTime start = ctime(marker);
-    Files.walkFileTree(temp, new SimpleFileVisitor<Path>() {
-      @Override
-      public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-        return skip.contains(dir) ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
-      }
-
-      @Override
-      public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-        if (!skip.contains(file) && !isTableImage(file) && before.contains(key(file)) && ctime(file).compareTo(start) < 0) {
-          res.add(file);
-        }
-        return FileVisitResult.CONTINUE;
+    walk(file -> {
+      if (!isTableImage(file) && before.contains(key(file)) && ctime(file).compareTo(start) < 0) {
+        res.add(file);
       }
     });
     res.sort(Comparator.naturalOrder());
@@ -122,6 +119,90 @@ public class StaleTempFiles {
   /** Forgets what the last build claimed (when what it left in the temp folder is gone) */
   public void forget() throws IOException {
     Files.deleteIfExists(claims);
+    Files.deleteIfExists(templateWrites);
+  }
+
+  /*
+   * The template's onGenerate script runs before the build writes the resources' pages, and it can list what's in the
+   * temp folder then (e.g. fhir.base.template lists _includes/*.svg for the qa page, before it writes the svgs from
+   * PlantUML sources). In a stock build that's what this build wrote so far; in a differential build, what the last
+   * build's onGenerate wrote is still there. So each build records what its onGenerate wrote, and a differential build
+   * deletes what the last one's wrote, and this one didn't write before its onGenerate, before running it.
+   */
+
+  /** Called just before the template's onGenerate script: what's written from now on is the script's */
+  public void markTemplate() throws IOException, InterruptedException {
+    Files.createDirectories(templateMarker.getParent());
+    Files.write(templateMarker, new byte[0]);
+    // the clock for status-change times is coarse: make sure what's written from now on is strictly after the marker,
+    // so that what was written before it can't be mistaken for the script's
+    Path probe = templateMarker.resolveSibling("template-probe");
+    FileTime start = ctime(templateMarker);
+    for (int i = 0; i < 1000; i++) {
+      Files.write(probe, new byte[0]);
+      if (ctime(probe).compareTo(start) > 0) {
+        break;
+      }
+      Thread.sleep(1);
+    }
+    Files.deleteIfExists(probe);
+  }
+
+  /** Called just after the template's onGenerate script: records what it wrote in the temp folder */
+  public void saveTemplateWrites() throws IOException {
+    List<String> res = new ArrayList<>();
+    if (Files.exists(templateMarker)) {
+      FileTime start = ctime(templateMarker);
+      walk(file -> {
+        if (ctime(file).compareTo(start) > 0) {
+          res.add(temp.relativize(file).toString());
+        }
+      });
+    }
+    res.sort(Comparator.naturalOrder());
+    Files.createDirectories(templateWrites.getParent());
+    Files.write(templateWrites, res, StandardCharsets.UTF_8);
+  }
+
+  /**
+   * In a differential build, just before the template's onGenerate script: the files (absolute paths) the last
+   * build's script wrote, that this build hasn't written (yet). Nothing if this build didn't mark its start.
+   */
+  public List<Path> findTemplateLeftovers() throws IOException {
+    List<Path> res = new ArrayList<>();
+    if (!Files.exists(templateWrites) || !Files.exists(marker)) {
+      return res;
+    }
+    FileTime start = ctime(marker);
+    for (String s : Files.readAllLines(templateWrites, StandardCharsets.UTF_8)) {
+      Path p = temp.resolve(s).normalize();
+      if (!s.isEmpty() && p.startsWith(temp) && !skip.contains(p) && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) && ctime(p).compareTo(start) < 0) {
+        res.add(p);
+      }
+    }
+    return res;
+  }
+
+  private interface FileAction {
+    void visit(Path file) throws IOException;
+  }
+
+  /** visits each file in the temp folder, except what's skipped */
+  private void walk(FileAction action) throws IOException {
+    Files.walkFileTree(temp, new SimpleFileVisitor<Path>() {
+      @Override
+      public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+        return skip.contains(dir) ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+      }
+
+      @Override
+      public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
+        if (!skip.contains(file)) {
+          action.visit(file);
+        }
+        return FileVisitResult.CONTINUE;
+      }
+    });
   }
 
   /**

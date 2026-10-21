@@ -136,4 +136,38 @@ class StaleTempFilesTest {
     assertEquals(Arrays.asList(first.toAbsolutePath().normalize(), second.toAbsolutePath().normalize()), st.find(Collections.emptyList()));
     assertTrue(st.find(names(first, second)).isEmpty());
   }
+
+  @Test
+  void theTemplatesWritesAreDeletedBeforeItRunsAgain() throws Exception {
+    // the last build: written before the template's onGenerate, then by it
+    Path before = write("pages/_includes/artifacts.xml", "a");
+    StaleTempFiles st = tracker();
+    st.markTemplate();
+    Path svg = write("pages/_includes/sample.svg", "svg");
+    Path again = write("pages/_includes/other.svg", "svg");
+    st.saveTemplateWrites();
+    tick();
+
+    // a complete build doesn't need them deleted (and has no mark)
+    assertTrue(tracker().findTemplateLeftovers().isEmpty());
+
+    // a differential build that rewrites one of them before its onGenerate
+    st = tracker();
+    st.mark();
+    tick();
+    Files.write(again, "svg2".getBytes(StandardCharsets.UTF_8));
+    List<Path> left = st.findTemplateLeftovers();
+    assertEquals(Collections.singletonList(svg.toAbsolutePath().normalize()), left);
+    st.delete(left);
+    assertTrue(Files.exists(before));
+
+    // and what its onGenerate writes is what the next build deletes
+    st.markTemplate();
+    Path svg2 = write("pages/_includes/sample.svg", "svg");
+    st.saveTemplateWrites();
+    tick();
+    st = tracker();
+    st.mark();
+    assertEquals(Collections.singletonList(svg2.toAbsolutePath().normalize()), st.findTemplateLeftovers());
+  }
 }

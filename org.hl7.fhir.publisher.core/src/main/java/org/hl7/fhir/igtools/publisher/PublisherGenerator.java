@@ -3698,12 +3698,36 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /** watch mode: the template's onGenerate script sees the temp folder as it would in a stock build (see StaleTempFiles) */
+  private void beforeTemplateGenerate() throws IOException {
+    if (pf.staleTemp == null) {
+      return;
+    }
+    if (!pf.rapido.isCompleteBuild()) {
+      List<Path> left = pf.staleTemp.findTemplateLeftovers();
+      for (Path p : left) {
+        log("Rapido Mode: deleting " + pf.staleTemp.relative(p) + " from the temp folder (the template wrote it in the last build, and hasn't yet in this one)");
+      }
+      pf.staleTemp.delete(left);
+    }
+    try {
+      pf.staleTemp.markTemplate();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IOException(e);
+    }
+  }
+
   private void templateBeforeGenerate() throws IOException, FHIRException {
     if (pf.template != null) {
       logMessage("Run Template");
       TimeTracker.Session tts = pf.tt.start("template");
       List<String> newFileList = new ArrayList<String>();
+      beforeTemplateGenerate();
       checkOutcomes(pf.template.beforeGenerateEvent(pf.context, pf.publishedIg, pf.tempDir, pf.otherFilesRun, newFileList, allLangs()));
+      if (pf.staleTemp != null) {
+        pf.staleTemp.saveTemplateWrites();
+      }
       for (String newFile: newFileList) {
         if (!newFile.isEmpty()) {
           try {
