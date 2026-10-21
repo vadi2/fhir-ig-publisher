@@ -508,7 +508,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
     }
 
-    boolean jekyllOk = runTool(replay != null);
+    boolean jekyllOk = runTool(replay);
     // the output files that are new since the last build or rebuild (null: all of them)
     Set<String> fresh = jekyllWritten == null ? null : new HashSet<>(jekyllWritten);
     if (jekyllOk && replay != null) {
@@ -4075,7 +4075,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
-  private boolean runTool(boolean pageRebuild) throws Exception {
+  private boolean runTool(PageRebuild replay) throws Exception {
     jekyllWritten = null;
     if (settings.isSimplifierMode()) {
       return true;
@@ -4085,7 +4085,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       return true;
     }
     if (jekyllDriver != null && jekyllDriver.getUnavailable() == null) {
-      String failed = runJekyllDriver(pageRebuild);
+      String failed = runJekyllDriver(replay);
       if (failed == null) {
         return true;
       }
@@ -4102,16 +4102,18 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
   /**
    * Watch mode: runs Jekyll in the Jekyll that stays running between builds (see JekyllDriver). In a page rebuild, if
-   * it's still running for this site, it renders just what depends on the pages written again (and, if the template
+   * it's still running for this site and the html checks after it can tell which files the last check changed, it
+   * renders just what depends on the pages written again (and, if the template
    * has a check script, which may look at the output, writes again the files changed since Jekyll wrote them).
    * Returns null if it did; else Jekyll is to be run as usual, and the result is "" if the driver can't be used, or
    * how it failed
    */
-  private String runJekyllDriver(boolean pageRebuild) {
+  private String runJekyllDriver(PageRebuild replay) {
     TimeTracker.Session tts = pf.tt.start("jekyll");
     String temp = new File(pf.tempDir).getAbsolutePath();
     String out = new File(pf.outputDir).getAbsolutePath();
-    boolean update = pageRebuild && changedTempFiles != null && jekyllDriver.isRunningFor(temp, out);
+    boolean update = replay != null && changedTempFiles != null && jekyllDriver.isRunningFor(temp, out)
+        && (settings.isGenerationOff() || replay.getHtmlRecords() != null);
     // the template's check script runs next, and may look at the output: it must see what `jekyll build` would leave
     boolean restore = update && pf.template != null && pf.template.hasOnCheck();
     MyFilterHandler filter = new MyFilterHandler();

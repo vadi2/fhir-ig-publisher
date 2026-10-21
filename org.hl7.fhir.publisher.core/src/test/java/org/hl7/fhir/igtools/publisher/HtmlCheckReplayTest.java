@@ -1,0 +1,170 @@
+package org.hl7.fhir.igtools.publisher;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+import org.hl7.fhir.igtools.publisher.PublisherUtils.LinkedSpecification;
+import org.hl7.fhir.igtools.publisher.modules.IPublisherModule;
+import org.hl7.fhir.igtools.publisher.modules.NullModule;
+import org.hl7.fhir.model.core.ImplementationGuide;
+import org.hl7.fhir.model.core.Requirements;
+import org.hl7.fhir.services.context.IWorkerContext;
+import org.hl7.fhir.utilities.logging.ILoggingService;
+import org.hl7.fhir.utilities.validation.ValidationMessage;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+import org.mockito.Mockito;
+
+/**
+ * Watch mode's html checks: when what the last check found is put back for the files that haven't changed, the
+ * messages are those of checking everything again
+ */
+class HtmlCheckReplayTest {
+
+  @TempDir
+  Path dir;
+
+  private final List<String> log = new ArrayList<>();
+  private final ILoggingService logger = new ILoggingService() {
+    @Override
+    public void logMessage(String msg) {
+      log.add(msg);
+    }
+
+    @Override
+    public void logDebugMessage(LogCategory category, String msg) {
+    }
+  };
+  // the same objects for each inspector, as in a page rebuild
+  private final List<SpecMapManager> specs = new ArrayList<>();
+  private final List<LinkedSpecification> linkSpecs = new ArrayList<>();
+  private final List<FetchedFile> sources = new ArrayList<>();
+  private final List<RelatedIG> relatedIGs = new ArrayList<>();
+  private final Map<String, List<String>> trackedFragments = new HashMap<>();
+
+  private final IWorkerContext context = Mockito.mock(IWorkerContext.class);
+  private final IPublisherModule module = new NullModule();
+  private final ImplementationGuide ig = new ImplementationGuide().setUrl("http://example.org/ig/ImplementationGuide/example.ig");
+
+  private HTMLInspector inspector() throws IOException {
+    return inspector("0.1.0");
+  }
+
+  private HTMLInspector inspector(String version) throws IOException {
+    // the Requirements made from the narrative are those the IG has (there are no clauses)
+    Mockito.when(context.fetchResource(Mockito.eq(Requirements.class), Mockito.anyString(), Mockito.any())).thenReturn(new Requirements());
+    HTMLInspector res = new HTMLInspector(context, dir.resolve("out").toString(), specs, linkSpecs, logger, "http://example.org/ig",
+        "example.ig", version, trackedFragments, sources, module, false, null, relatedIGs, false, new ArrayList<>(), null);
+    res.setIg(ig);
+    res.setExemptHtmlPatterns(new ArrayList<>());
+    res.setReqFolder(dir.toString());
+    return res;
+  }
+
+  private void page(String name, String body) throws IOException {
+    // in a language folder, as the conformance clause reading needs a language (there's no worker context)
+    Path f = dir.resolve("out/en").resolve(name);
+    Files.createDirectories(f.getParent());
+    Files.write(f, ("<html xmlns=\"http://www.w3.org/1999/xhtml\" lang=\"en\"><head><title>" + name + "</title></head><body>"
+        + body + "</body></html>").getBytes(StandardCharsets.UTF_8));
+  }
+
+  private List<String> check(HTMLInspector i) throws IOException {
+    List<String> res = new ArrayList<>();
+    for (ValidationMessage m : i.check(null, null)) {
+      res.add(m.getLevel() + " " + m.getLocation() + " " + m.getMessage());
+    }
+    return res;
+  }
+
+  private String abs(String name) {
+    return dir.resolve("out/en").resolve(name).toAbsolutePath().toString();
+  }
+
+  @Test
+  void replayedChecksFindWhatCheckingEverythingFinds() throws IOException {
+    page("a.html", "<h1>A</h1><p><a href=\"b.html#x\">to b</a> <a href=\"c.html\">to c</a></p>");
+    page("b.html", "<h1>B</h1><p id=\"x\">here</p><p><a href=\"a.html#nowhere\">broken anchor</a></p>");
+    page("c.html", "<h1>C</h1><p><a href=\"missing.html\">broken</a></p>");
+
+    Set<String> rewritten = new HashSet<>();
+    HTMLInspector.OutputRewriter rewriter = files -> {
+      rewritten.addAll(files);
+      return Collections.emptySet();
+    };
+    HTMLInspector first = inspector();
+    first.recordChecks(null, null, rewriter);
+    List<String> all = check(first);
+    HtmlCheckRecords records = first.getRecords();
+    assertNotNull(records, first.getRecordsNotUsable());
+    assertTrue(all.stream().anyMatch(s -> s.contains("missing.html")), all.toString());
+
+    // nothing written since: everything is put back
+    HTMLInspector second = inspector();
+    second.recordChecks(records, new HashSet<>(), rewriter);
+    assertEquals(all, check(second));
+    assertTrue(log.contains("Rapido Mode: the html checks of 3 of 3 files are reused"), log.toString());
+    records = second.getRecords();
+    assertNotNull(records);
+
+    // c fixed, and an anchor added to a that b links to: c is checked again, and b, which looked at a's anchors
+    page("c.html", "<h1>C</h1><p><a href=\"a.html\">fine</a></p>");
+    page("a.html", "<h1>A</h1><p id=\"nowhere\"><a href=\"b.html#x\">to b</a> <a href=\"c.html\">to c</a></p>");
+    HTMLInspector third = inspector();
+    Set<String> fresh = new HashSet<>();
+    fresh.add(abs("c.html"));
+    fresh.add(abs("a.html"));
+    third.recordChecks(records, fresh, rewriter);
+    List<String> replayed = check(third);
+    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 3 files are reused"), log.toString());
+    HTMLInspector everything = inspector();
+    assertEquals(check(everything), replayed);
+    assertTrue(replayed.stream().noneMatch(s -> s.contains("missing.html") || s.contains("nowhere")), replayed.toString());
+  }
+
+  @Test
+  void withoutRecordsTheFilesTheLastCheckChangedArentKnown() throws IOException {
+    page("a.html", "<h1>A</h1><p>text</p>");
+    HTMLInspector i = inspector();
+    i.recordChecks(null, new HashSet<>(), files -> Collections.emptySet());
+    assertThrows(IOException.class, () -> i.check(null, null));
+  }
+
+  @Test
+  void checkedDifferentlyTheFilesTheLastCheckChangedAreWrittenAgain() throws IOException {
+    page("a.html", "<h1>A</h1><p>text</p>");
+    page("b.html", "<h1>B</h1><p>text</p>");
+    HTMLInspector first = inspector();
+    first.recordChecks(null, null, files -> Collections.emptySet());
+    check(first);
+    HtmlCheckRecords records = first.getRecords();
+    assertNotNull(records);
+    HtmlCheckRecords.FileRecord a = records.files.get(abs("a.html"));
+    assertNotNull(a, records.files.keySet().toString());
+    a.modified = true;
+
+    Set<String> rewritten = new HashSet<>();
+    HTMLInspector other = inspector("0.2.0");
+    other.recordChecks(records, new HashSet<>(), files -> {
+      rewritten.addAll(files);
+      return Collections.emptySet();
+    });
+    check(other);
+    assertEquals(Collections.singleton(abs("a.html")), rewritten);
+    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 2 files are reused"), log.toString());
+  }
+}

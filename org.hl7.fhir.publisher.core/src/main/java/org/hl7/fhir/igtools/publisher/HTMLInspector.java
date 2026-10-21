@@ -655,17 +655,28 @@ public class HTMLInspector {
     records = new HtmlCheckRecords(recordSignature());
     HtmlCheckRecords last = lastRecords;
     lastRecords = null;
-    if (last != null && (fresh == null || last.getNotUsable() != null || !last.getSignature().equals(records.getSignature()))) {
-      last = null;
+    if (fresh != null && (last == null || last.getNotUsable() != null)) {
+      // the files that weren't written since may still have what the last check changed in them
+      throw new IOException("It isn't known which output files the last html check changed");
     }
+    // what the last check found can be put back if it was checked the same way (else the files it changed are
+    // written again as Jekyll wrote them, and everything is checked)
+    boolean replayable = last != null && fresh != null && last.getSignature().equals(records.getSignature());
     Map<String, HtmlCheckRecords.FileRecord> candidates = new HashMap<>();
     Map<String, List<ValidationMessage>> loaded = new HashMap<>();
     List<String> mayRewrite = new ArrayList<>();
     List<String> mustRewrite = new ArrayList<>();
     List<String> toLoad = new ArrayList<>();
     for (String s : loadList) {
-      HtmlCheckRecords.FileRecord r = last == null ? null : last.files.get(s);
+      HtmlCheckRecords.FileRecord r = last == null || fresh == null ? null : last.files.get(s);
       if (r == null || fresh.contains(s)) {
+        toLoad.add(s);
+      } else if (!replayable) {
+        if (!r.sameStamp()) {
+          mayRewrite.add(s);
+        } else if (r.modified) {
+          mustRewrite.add(s);
+        }
         toLoad.add(s);
       } else if (!r.sameStamp()) {
         // changed since the check, but not by Jekyll
