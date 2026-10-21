@@ -102,9 +102,12 @@ class StaleTempFilesTest {
     StaleTempFiles st = tracker();
     tick();
     st.mark();
+    assertFalse(st.hasClaims());
     assertTrue(st.find(Collections.emptyList()).isEmpty());
     st.save(names(p));
+    assertTrue(st.hasClaims());
     st.forget();
+    assertFalse(st.hasClaims());
     assertTrue(st.find(Collections.emptyList()).isEmpty());
   }
 

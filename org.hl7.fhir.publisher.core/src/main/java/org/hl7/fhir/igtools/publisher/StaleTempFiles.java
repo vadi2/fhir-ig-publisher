@@ -114,6 +114,11 @@ public class StaleTempFiles {
     Files.write(claims, new TreeSet<>(keys(claimed)), StandardCharsets.UTF_8);
   }
 
+  /** Whether the last build saved what it claimed */
+  public boolean hasClaims() {
+    return Files.exists(claims);
+  }
+
   /** Forgets what the last build claimed (when what it left in the temp folder is gone) */
   public void forget() throws IOException {
     Files.deleteIfExists(claims);

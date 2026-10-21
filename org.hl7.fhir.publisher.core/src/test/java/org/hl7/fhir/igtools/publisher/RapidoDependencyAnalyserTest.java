@@ -400,9 +400,26 @@ class RapidoDependencyAnalyserTest {
     assertNotEquals(base, igHash(igJson("Example 1", "First example", "Other", "draft").replace("\"exampleBoolean\":true", "\"exampleBoolean\":false")));
   }
 
+  private static String igXml(String exName, String otherName, String status) {
+    return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ImplementationGuide xmlns=\"http://hl7.org/fhir\"><id value=\"ig\"/><status value=\""+status+"\"/>"
+      + "<definition><resource><reference><reference value=\"Patient/ex1\"/></reference><name value=\""+exName+"\"/><description value=\"d\"/>"
+      + "<exampleBoolean value=\"true\"/></resource><resource><reference><reference value=\"Patient/missing\"/></reference><name value=\""+otherName+"\"/></resource>"
+      + "</definition></ImplementationGuide>";
+  }
+
   @Test
-  void igThatIsNotJsonCountsAsItIs() {
-    byte[] xml = "<ImplementationGuide xmlns=\"http://hl7.org/fhir\"><id value=\"ig\"/></ImplementationGuide>".getBytes(java.nio.charset.StandardCharsets.UTF_8);
-    assertTrue(java.util.Arrays.equals(xml, RapidoTracker.igSourceForHash(xml, Set.of())));
+  void igInXmlToo() {
+    String base = igHash(igXml("Example 1", "Other", "draft"));
+    assertEquals(base, igHash(igXml("Example 1 renamed", "Other", "draft")));
+    assertNotEquals(base, igHash(igXml("Example 1", "Other renamed", "draft")));
+    assertNotEquals(base, igHash(igXml("Example 1", "Other", "active")));
+  }
+
+  @Test
+  void igThatCantBeReadCountsAsItIs() {
+    for (String s : new String[] {"<ImplementationGuide", "{\"resourceType\":", "<Patient xmlns=\"http://hl7.org/fhir\"><id value=\"x\"/></Patient>"}) {
+      byte[] b = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+      assertTrue(java.util.Arrays.equals(b, RapidoTracker.igSourceForHash(b, Set.of("Patient/ex1"))), s);
+    }
   }
 }

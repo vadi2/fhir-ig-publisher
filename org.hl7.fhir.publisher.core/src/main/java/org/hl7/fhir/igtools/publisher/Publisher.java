@@ -1075,18 +1075,24 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
 
     buildTracker.save();
 
-    if (failure == null && settings.isWatchMode() && !StaleTempFiles.isSupported(pf.tempDir)) {
-      // a differential build has to be able to tell what's left in the temp folder from earlier builds
+    // in watch mode, each build saves what it claims in the temp folder; in a differential build, what the last build
+    // claimed and this one neither writes nor claims is deleted before Jekyll runs (see
+    // PublisherGenerator.deleteStaleTempFiles()). A differential build has to be able to tell what's left there
+    StaleTempFiles staleTemp = new StaleTempFiles(pf.tempDir, Arrays.asList(Utilities.path(pf.tempDir, "_rapido")));
+    if (!settings.isWatchMode()) {
+      // this build won't save what it claims, nor clean up after the last build
+      staleTemp.forget();
+    } else if (failure == null && !StaleTempFiles.isSupported(pf.tempDir)) {
       failure = "watch mode, and the file system can't tell which temp files a build wrote";
+    } else if (failure == null && !staleTemp.hasClaims()) {
+      failure = "watch mode, and no record of what the last build left in the temp folder";
     }
     pf.rapido = new RapidoTracker(pf);
     pf.rapido.analyse(igf, failure);
     if (settings.isWatchMode()) {
-      // each build saves what it claims in the temp folder; in a differential build, what the last build claimed and
-      // this one neither writes nor claims is deleted before Jekyll runs (see PublisherGenerator.deleteStaleTempFiles())
-      pf.staleTemp = new StaleTempFiles(pf.tempDir, Arrays.asList(Utilities.path(pf.tempDir, "_rapido")));
+      pf.staleTemp = staleTemp;
       if (!pf.rapido.isCompleteBuild()) {
-        pf.staleTemp.mark();
+        staleTemp.mark();
       }
     }
     if (pf.rapido.isCompleteBuild()) {
