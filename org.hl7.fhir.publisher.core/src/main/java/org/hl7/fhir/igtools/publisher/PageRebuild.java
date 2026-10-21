@@ -102,6 +102,9 @@ public class PageRebuild {
   private final List<Path> stashed = new ArrayList<>();
   private boolean captured;
   private boolean complete;
+  // what the html checks found, and what the AI step worked out, in the last build or rebuild (for the next rebuild)
+  private HtmlCheckRecords htmlRecords;
+  private final AIProcessor.Cache aiCache = new AIProcessor.Cache();
 
   /** The fields of the build that this keeps the state of */
   public void setPf(PublisherFields pf) {
@@ -110,6 +113,18 @@ public class PageRebuild {
 
   public PublisherFields getPf() {
     return pf;
+  }
+
+  HtmlCheckRecords getHtmlRecords() {
+    return htmlRecords;
+  }
+
+  void setHtmlRecords(HtmlCheckRecords htmlRecords) {
+    this.htmlRecords = htmlRecords;
+  }
+
+  public AIProcessor.Cache getAiCache() {
+    return aiCache;
   }
 
   /** Why the build's state can't be reused for a page-only rebuild, if it can't */
@@ -410,6 +425,30 @@ public class PageRebuild {
       Files.createDirectories(dst.getParent());
       Files.copy(stashFolder.resolve(p), dst, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
     }
+  }
+
+  /** The files in the output folder that restorePackageOutputs() puts back */
+  public List<String> getPackageOutputs() {
+    List<String> res = new ArrayList<>();
+    Path out = Paths.get(pf.outputDir);
+    for (Path p : stashed) {
+      res.add(out.resolve(p).toAbsolutePath().toString());
+    }
+    return res;
+  }
+
+  /**
+   * Puts back this file in the output folder (an absolute path), if the package step wrote it; returns whether it
+   * did
+   */
+  public boolean restorePackageOutput(String file) throws IOException {
+    Path out = Paths.get(pf.outputDir).toAbsolutePath();
+    Path p = Paths.get(file).toAbsolutePath();
+    if (!p.startsWith(out) || !stashed.contains(out.relativize(p))) {
+      return false;
+    }
+    Files.copy(stashFolder.resolve(out.relativize(p)), p, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
+    return true;
   }
 
   /** Deletes the copies of the package files */
