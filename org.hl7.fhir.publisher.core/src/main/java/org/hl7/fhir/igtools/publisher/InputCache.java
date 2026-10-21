@@ -681,7 +681,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     }
   }
 
-  private static class Variant {
+  static class Variant {
     final Map<String, String> reads;
     /** the journal as stored; null for the variant this build made, which has {@link #fresh} instead */
     final byte[] journal;
@@ -1431,7 +1431,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   }
 
   /** writes the entry as it goes, so that the build's journal is never in memory twice */
-  private static void encodeEntry(List<Variant> list, OutputStream os) throws IOException {
+  static void encodeEntry(List<Variant> list, OutputStream os) throws IOException {
     InputCacheCodec.Out out = new InputCacheCodec.Out(os);
     out.str(ENTRY_MAGIC).integer(list.size());
     for (Variant v : list) {
@@ -1455,7 +1455,11 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   }
 
   private List<Variant> readEntry(String key) {
-    byte[] b = store.read(key);
+    return decodeEntry(store.read(key));
+  }
+
+  /** the variants in an entry; none if there's no entry, or it can't be decoded */
+  static List<Variant> decodeEntry(byte[] b) {
     List<Variant> res = new ArrayList<>();
     if (b == null) {
       return res;

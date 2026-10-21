@@ -18,6 +18,7 @@ import java.util.Arrays;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -269,6 +270,39 @@ class InputCacheTest {
     j.encodeTo(out);
     out.flush();
     assertArrayEquals(b, streamed.toByteArray());
+  }
+
+  @Test
+  void entry_roundTripsTheNewVariantAndTheOldOnes() throws Exception {
+    InputCache.Journal fresh = new InputCache.Journal();
+    fresh.millis = 3;
+    fresh.add("file", "/t/a.xhtml", "<div>new</div>".getBytes(StandardCharsets.UTF_8));
+    InputCache.Journal old = new InputCache.Journal();
+    old.add("out", "/t/b.xhtml", null);
+    Map<String, String> r1 = new LinkedHashMap<>();
+    r1.put("ig", "d1");
+    r1.put("tx:v\u0001-\u0001-", "absent");
+    Map<String, String> r2 = new LinkedHashMap<>();
+    r2.put("ig", "d0");
+    List<InputCache.Variant> list = new ArrayList<>();
+    list.add(new InputCache.Variant(r1, fresh, new byte[] {9}));
+    list.add(new InputCache.Variant(r2, old.encode(), null));
+    java.io.ByteArrayOutputStream b = new java.io.ByteArrayOutputStream();
+    InputCache.encodeEntry(list, b);
+
+    List<InputCache.Variant> back = InputCache.decodeEntry(b.toByteArray());
+    assertEquals(2, back.size());
+    assertEquals(r1, back.get(0).reads);
+    assertNull(InputCache.Journal.decode(back.get(0).journal).difference(fresh));
+    assertArrayEquals(new byte[] {9}, back.get(0).extras);
+    assertEquals(r2, back.get(1).reads);
+    assertArrayEquals(old.encode(), back.get(1).journal);
+    assertNull(back.get(1).extras);
+
+    // a truncated entry is no entry
+    byte[] all = b.toByteArray();
+    assertTrue(InputCache.decodeEntry(Arrays.copyOf(all, all.length - 1)).isEmpty());
+    assertTrue(InputCache.decodeEntry(null).isEmpty());
   }
 
   @Test
