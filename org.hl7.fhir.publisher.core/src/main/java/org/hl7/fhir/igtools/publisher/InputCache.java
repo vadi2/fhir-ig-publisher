@@ -20,11 +20,19 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Queue;
 import java.util.Set;
 import java.util.TimeZone;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.zip.ZipEntry;
@@ -131,7 +139,21 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   private int verified;
   private int mismatches;
   private int misses;
-  private int stored;
+  private final AtomicInteger stored = new AtomicInteger();
+  /**
+   * entries are compressed and written on a thread of their own, so the build doesn't wait for them. At most
+   * {@link #MAX_PENDING_WRITES} wait at once (each holds a step's outputs), and {@link #finish()} waits for the rest
+   */
+  private final ExecutorService writer = Executors.newSingleThreadExecutor(r -> {
+    Thread t = new Thread(r, "input-cache-writer");
+    t.setDaemon(true);
+    return t;
+  });
+  private static final int MAX_PENDING_WRITES = 8;
+  private final Semaphore pendingWrites = new Semaphore(MAX_PENDING_WRITES);
+  /** what went wrong on the writer's thread, logged by {@link #finish()} */
+  private final Queue<String> writeFailures = new ConcurrentLinkedQueue<>();
+  private final AtomicLong writeNanos = new AtomicLong();
   private final Map<String, Integer> uncacheable = new TreeMap<>();
   /**
    * terminology answers a cached step worked out itself in this build (they aren't there when the step is replayed),
@@ -985,21 +1007,39 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
         }
         return;
       }
-      byte[] journal = j.encode();
-      byte[] extras = encodeExtras(s);
       List<Variant> list = new ArrayList<>();
-      list.add(new Variant(s.reads, journal, extras));
+      list.add(new Variant(new LinkedHashMap<>(s.reads), j.encode(), encodeExtras(s)));
       for (Variant v : s.variants) {
         if (!v.reads.equals(s.reads) && list.size() < MAX_VARIANTS) {
           list.add(v);
         }
       }
-      store.write(s.key, encodeEntry(list));
-      stored++;
+      write(s.key, s.description, list);
     } catch (Exception e) {
       log.accept("Input cache: unable to store " + s.description + ": " + e);
     } finally {
       overheadNanos += System.nanoTime() - t;
+    }
+  }
+
+  private void write(String key, String description, List<Variant> list) throws InterruptedException {
+    pendingWrites.acquire();
+    try {
+      writer.execute(() -> {
+        long t = System.nanoTime();
+        try {
+          store.write(key, encodeEntry(list));
+          stored.incrementAndGet();
+        } catch (IOException | RuntimeException e) {
+          writeFailures.add("Input cache: unable to store " + description + ": " + e);
+        } finally {
+          writeNanos.addAndGet(System.nanoTime() - t);
+          pendingWrites.release();
+        }
+      });
+    } catch (RuntimeException e) {
+      pendingWrites.release();
+      throw e;
     }
   }
 
@@ -1347,7 +1387,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     return res;
   }
 
-  private byte[] encodeEntry(List<Variant> list) throws IOException {
+  private static byte[] encodeEntry(List<Variant> list) throws IOException {
     InputCacheCodec.Out out = new InputCacheCodec.Out();
     out.str(ENTRY_MAGIC).integer(list.size());
     for (Variant v : list) {
@@ -1905,16 +1945,28 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
 
   /** logs what the cache did, and keeps it under its size limit */
   public void finish() {
+    writer.shutdown();
+    try {
+      if (!writer.awaitTermination(10, TimeUnit.MINUTES)) {
+        log.accept("Input cache: gave up waiting for the cache's entries to be written; the rest are missing");
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      log.accept("Input cache: interrupted while the cache's entries were being written; the rest are missing");
+    }
+    for (String f : writeFailures) {
+      log.accept(f);
+    }
     StringBuilder b = new StringBuilder();
     b.append("Input cache: ").append(hits).append(" hits (about ").append(savedMillis / 1000).append("s of work), ").append(misses).append(" misses, ")
-      .append(stored).append(" stored");
+      .append(stored.get()).append(" stored");
     if (verifyFraction > 0) {
       b.append(", ").append(verified).append(" hits verified, ").append(mismatches).append(" mismatches");
     }
     if (store.getCorrupt() > 0) {
       b.append(", ").append(store.getCorrupt()).append(" unreadable entries ignored");
     }
-    b.append(", overhead ").append(overheadNanos / 1000000).append("ms");
+    b.append(", overhead ").append(overheadNanos / 1000000).append("ms (and ").append(writeNanos.get() / 1000000).append("ms writing entries in the background)");
     log.accept(b.toString());
     if (!uncacheable.isEmpty()) {
       log.accept("Input cache: not cached: " + uncacheable);

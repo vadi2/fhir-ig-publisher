@@ -6,6 +6,7 @@ import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.ByteBuffer;
+import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
@@ -21,6 +22,7 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.stream.Stream;
+import java.util.zip.Deflater;
 import java.util.zip.GZIPInputStream;
 import java.util.zip.GZIPOutputStream;
 
@@ -125,7 +127,12 @@ public class InputCacheStore {
 
   static byte[] wrap(byte[] payload) throws IOException {
     ByteArrayOutputStream bz = new ByteArrayOutputStream();
-    try (GZIPOutputStream gz = new GZIPOutputStream(bz)) {
+    // the fastest level: the entries (mostly html) shrink almost as much as at the default level, in a fraction of the time
+    try (GZIPOutputStream gz = new GZIPOutputStream(bz, 65536) {
+      {
+        def.setLevel(Deflater.BEST_SPEED);
+      }
+    }) {
       gz.write(payload);
     }
     byte[] z = bz.toByteArray();
@@ -154,8 +161,20 @@ public class InputCacheStore {
     if (!Arrays.equals(sum, sha256(z))) {
       return null;
     }
-    try (InputStream in = new GZIPInputStream(new ByteArrayInputStream(z))) {
-      return in.readAllBytes();
+    if (z.length < 4) {
+      return null;
+    }
+    // the gzip trailer ends with the payload's length (mod 2^32), so the payload is read into an array of its size
+    long size = ByteBuffer.wrap(z, z.length - 4, 4).order(ByteOrder.LITTLE_ENDIAN).getInt() & 0xffffffffL;
+    try (InputStream in = new GZIPInputStream(new ByteArrayInputStream(z), 65536)) {
+      if (size >= Integer.MAX_VALUE - 8) {
+        return in.readAllBytes();
+      }
+      byte[] res = new byte[(int) size];
+      if (in.readNBytes(res, 0, res.length) != res.length || in.read() != -1) {
+        return null;
+      }
+      return res;
     } catch (IOException e) {
       return null;
     }

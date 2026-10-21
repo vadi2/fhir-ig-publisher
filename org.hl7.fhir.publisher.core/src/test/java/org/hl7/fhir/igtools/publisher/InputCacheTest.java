@@ -56,6 +56,18 @@ class InputCacheTest {
     assertEquals(0, store.getCorrupt());
   }
 
+  @Test
+  void store_roundTripsEmptyAndLargePayloads() throws Exception {
+    InputCacheStore store = new InputCacheStore(tmp, 1 << 30);
+    store.write(key("empty"), new byte[0]);
+    assertArrayEquals(new byte[0], store.read(key("empty")));
+    byte[] large = new byte[3 << 20];
+    new java.util.Random(1).nextBytes(large);
+    store.write(key("large"), large);
+    assertArrayEquals(large, store.read(key("large")));
+    assertEquals(0, store.getCorrupt());
+  }
+
   private File entryFile(InputCacheStore store, String key) {
     return new File(new File(store.getFolder(), key.substring(0, 2)), key + ".entry");
   }
