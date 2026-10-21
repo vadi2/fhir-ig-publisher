@@ -420,4 +420,43 @@ class InputCacheTest {
     }
     return bs.toByteArray();
   }
+
+  @Test
+  void reads_matchOnlyWhenEveryReadIsUnchanged() {
+    Map<String, String> reads = new java.util.LinkedHashMap<>();
+    reads.put("ig", "d1");
+    reads.put("tx:v", InputCache.ABSENT_OR + "answer");
+    reads.put("set:x", "0");
+    Map<String, String> now = new HashMap<>();
+    now.put("ig", "d1");
+    now.put("tx:v", "answer");
+    now.put("set:x", "0");
+    assertNull(InputCache.firstChange(reads, now::get));
+    // an answer the step worked out itself may be absent when the build gets to it
+    now.put("tx:v", InputCache.ABSENT);
+    assertNull(InputCache.firstChange(reads, now::get));
+    now.put("tx:v", "another answer");
+    assertEquals("tx:v", InputCache.firstChange(reads, now::get));
+    now.put("tx:v", "answer");
+    now.put("ig", "d2");
+    assertEquals("ig", InputCache.firstChange(reads, now::get));
+    now.put("ig", "d1");
+    now.put("set:x", "1");
+    assertEquals("set:x", InputCache.firstChange(reads, now::get));
+  }
+
+  @Test
+  void verify_selectsTheSameKeysEveryTime() {
+    assertFalse(InputCache.selected("abc", 0));
+    assertTrue(InputCache.selected("abc", 1));
+    int n = 0;
+    for (int i = 0; i < 1000; i++) {
+      boolean s = InputCache.selected("key" + i, 0.25);
+      assertEquals(s, InputCache.selected("key" + i, 0.25));
+      if (s) {
+        n++;
+      }
+    }
+    assertTrue(n > 180 && n < 320, "about a quarter selected, was " + n);
+  }
 }

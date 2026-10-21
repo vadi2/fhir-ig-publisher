@@ -104,8 +104,8 @@ public class InputCacheDigest {
    * field, recursively. Lists keep their order; sets and maps are digested as the sorted digests of their members,
    * since their iteration order can depend on identity hash codes. Shared and cyclic references are digested by their
    * position in the walk, so the same graph always gives the same digest. A field holding an empty collection or map
-   * digests as one holding null. {@code userData} fields (the model's annotations) are left out. Objects of other library classes (anything outside java.lang/java.util and
-   * org.hl7.fhir) are digested by class name only.
+   * digests as one holding null. {@code userData} fields (the model's annotations) are left out. Objects of other
+   * library classes (anything outside java.lang/java.util and org.hl7.fhir) are digested by class name only.
    */
   public static String deep(Object o) {
     InputCacheDigest d = new InputCacheDigest();

@@ -26,6 +26,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.function.Function;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -75,9 +76,9 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   private static final String ENTRY_MAGIC = "ICE1";
   private static final int MAX_VARIANTS = 4;
   private static final String SEP = "\u0001";
-  private static final String ABSENT = "absent";
+  static final String ABSENT = "absent";
   /** a read that was a miss, after which the step stored the answer it worked out itself: absent or this answer */
-  private static final String ABSENT_OR = "~";
+  static final String ABSENT_OR = "~";
   private static final String MARK = "\u0007IC-";
   private static final String MARK_UUID = MARK + "UUID\u0007";
   private static final String MARK_BUILD_DATE = MARK + "BUILDDATE\u0007";
@@ -295,6 +296,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       }
     } catch (Exception e) {
       // can't tell which publisher this is, so nothing it stores can be found again
+      log.accept("Input cache: no hits this build, unable to identify the publisher's jar: " + e);
       d.add(Long.toString(System.nanoTime()));
     }
     d.add(pf.rootDir).add(pf.tempDir).add(pf.qaDir).add(pf.igName);
@@ -557,7 +559,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     private final Set<String> registered = new LinkedHashSet<>();
     private final List<NpmEntry> npm = new ArrayList<>();
     private final List<String[]> tracked = new ArrayList<>();
-    private final List<Object[]> fragmentUses = new ArrayList<>();
+    private final List<FragmentUse> fragmentUses = new ArrayList<>();
     private final List<String> found = new ArrayList<>();
     private final Set<Integer> converted = new TreeSet<>();
     private Map<String, String> tempBefore;
@@ -639,8 +641,20 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   /** what the generator does to replay an html hit, besides what the cache does itself */
   public static class HtmlReplay {
     public final List<NpmEntry> npm = new ArrayList<>();
-    /** key, time, size */
-    public final List<Object[]> fragmentUses = new ArrayList<>();
+    public final List<FragmentUse> fragmentUses = new ArrayList<>();
+  }
+
+  /** a fragment the step made: the timings report gets it (the time is the time it took when it was stored) */
+  public static class FragmentUse {
+    public final String key;
+    public final long time;
+    public final long size;
+
+    FragmentUse(String key, long time, long size) {
+      this.key = key;
+      this.time = time;
+      this.size = size;
+    }
   }
 
   private static class Variant {
@@ -701,20 +715,20 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       Step s = new Step(kind, key, description, f);
       s.variants = readEntry(key);
       for (Variant v : s.variants) {
-        if (matches(v.reads)) {
+        if (firstChange(v.reads, this::evaluate) == null) {
           s.hit = v;
           break;
         }
       }
       if (s.hit == null && !s.variants.isEmpty()) {
-        String k = firstChange(s.variants.get(0).reads);
+        String k = firstChange(s.variants.get(0).reads, this::evaluate);
         changed.merge(kind + ": " + readKind(k), 1, Integer::sum);
         if (calibrate) {
           log.accept("Input cache: miss for " + description + ": " + k + " changed from " + s.variants.get(0).reads.get(k) + " to " + evaluate(k));
         }
       }
       if (s.hit != null) {
-        s.verify = verifyFraction > 0 && selected(key);
+        s.verify = selected(key, verifyFraction);
         s.replay = !s.verify;
       }
       if (!s.replay) {
@@ -723,18 +737,24 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       return s;
     } catch (Exception e) {
       log.accept("Input cache: lookup failed for " + description + ": " + e);
+      // the step runs uncached, and nothing it does is recorded
+      current = null;
       return null;
     } finally {
       overheadNanos += System.nanoTime() - t;
     }
   }
 
-  private boolean selected(String key) {
-    if (verifyFraction >= 1) {
+  /** whether the hit is one of the fraction verified: the same keys every build, so a mismatch shows up again */
+  static boolean selected(String key, double fraction) {
+    if (fraction <= 0) {
+      return false;
+    }
+    if (fraction >= 1) {
       return true;
     }
     long v = Long.parseLong(InputCacheDigest.of(key, "verify").substring(0, 8), 16);
-    return v < (long) (verifyFraction * 0x100000000L);
+    return v < (long) (fraction * 0x100000000L);
   }
 
   private void startRecording(Step s) throws IOException {
@@ -843,18 +863,15 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       int fi = 0;
       for (Journal.Rec r : j.recs) {
         if ("npm".equals(r.tag)) {
-          int i = r.a.indexOf(SEP);
-          String cat = r.a.substring(0, i);
-          String rest = r.a.substring(i + 1);
-          i = rest.indexOf(SEP);
-          res.npm.add(new NpmEntry(cat.isEmpty() ? null : cat, rest.substring(0, i).isEmpty() ? null : rest.substring(0, i), rest.substring(i + 1), unplace(r.b)));
+          String[] p = r.a.split(SEP, 3);
+          res.npm.add(new NpmEntry(p[0].isEmpty() ? null : p[0], p[1].isEmpty() ? null : p[1], p[2], unplace(r.b)));
         } else if ("track".equals(r.tag)) {
-          int i = r.a.indexOf(SEP);
-          pf.trackedFragments.computeIfAbsent(r.a.substring(0, i), k -> new ArrayList<>()).add(r.a.substring(i + 1));
+          String[] p = r.a.split(SEP, 2);
+          pf.trackedFragments.computeIfAbsent(p[0], k -> new ArrayList<>()).add(p[1]);
         } else if ("frag".equals(r.tag)) {
           long time = fi < times.size() ? times.get(fi) : 0;
           fi++;
-          res.fragmentUses.add(new Object[] {r.a, time, Long.parseLong(new String(r.b, StandardCharsets.UTF_8))});
+          res.fragmentUses.add(new FragmentUse(r.a, time, Long.parseLong(new String(r.b, StandardCharsets.UTF_8))));
         }
       }
       hits++;
@@ -1098,8 +1115,8 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       for (String[] t : s.tracked) {
         j.add("track", t[0] + SEP + t[1], null);
       }
-      for (Object[] u : s.fragmentUses) {
-        j.add("frag", (String) u[0], bytes(Long.toString((Long) u[2])));
+      for (FragmentUse u : s.fragmentUses) {
+        j.add("frag", u.key, bytes(Long.toString(u.size)));
       }
       for (Integer i : s.converted) {
         j.add("conv", i.toString(), null);
@@ -1309,8 +1326,8 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   private byte[] encodeExtras(Step s) throws IOException {
     InputCacheCodec.Out out = new InputCacheCodec.Out();
     out.integer(s.fragmentUses.size());
-    for (Object[] u : s.fragmentUses) {
-      out.lng((Long) u[1]);
+    for (FragmentUse u : s.fragmentUses) {
+      out.lng(u.time);
     }
     return out.toBytes();
   }
@@ -1416,15 +1433,13 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
 
   // ---- reads ----------------------------------------------------------------------------------------------------------
 
-  /** true if every read the variant records gives the same answer now */
-  private boolean matches(Map<String, String> reads) {
-    return firstChange(reads) == null;
-  }
-
-  /** the first of the reads whose value isn't what was recorded, or null if none */
-  private String firstChange(Map<String, String> reads) {
+  /**
+   * the first of the reads whose value now (as evaluated) isn't what was recorded, or null if none. A read recorded as
+   * ABSENT_OR + value matches the value or its absence
+   */
+  static String firstChange(Map<String, String> reads, Function<String, String> evaluate) {
     for (Map.Entry<String, String> e : reads.entrySet()) {
-      String now = evaluate(e.getKey());
+      String now = evaluate.apply(e.getKey());
       String was = e.getValue();
       if (was.startsWith(ABSENT_OR)) {
         if (!ABSENT.equals(now) && !was.substring(1).equals(now)) {
@@ -1719,7 +1734,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   public void noteFragmentUse(String key, long time, long size) {
     Step s = recording();
     if (s != null) {
-      s.fragmentUses.add(new Object[] {key, time, size});
+      s.fragmentUses.add(new FragmentUse(key, time, size));
     }
   }
 
@@ -1901,8 +1916,9 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       if (n > 0) {
         log.accept("Input cache: removed " + n + " entries used longest ago, to keep it under its size limit");
       }
-    } catch (IOException e) {
-      log.accept("Input cache: unable to trim the cache: " + e.getMessage());
+    } catch (IOException | RuntimeException e) {
+      // walking the folder fails with an unchecked exception when another build deletes a folder at the same time
+      log.accept("Input cache: unable to trim the cache: " + e);
     }
   }
 

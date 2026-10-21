@@ -730,13 +730,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         addFileToNpm(e.folder, e.name, e.content);
       }
     }
-    for (Object[] u : replay.fragmentUses) {
-      PublisherBase.FragmentUseRecord frag = pf.fragmentUses.get((String) u[0]);
+    for (InputCache.FragmentUse u : replay.fragmentUses) {
+      PublisherBase.FragmentUseRecord frag = pf.fragmentUses.get(u.key);
       if (frag == null) {
         frag = new PublisherBase.FragmentUseRecord();
-        pf.fragmentUses.put((String) u[0], frag);
+        pf.fragmentUses.put(u.key, frag);
       }
-      frag.record((Long) u[1], (Long) u[2]);
+      frag.record(u.time, u.size);
     }
     for (Map.Entry<Integer, Resource> e : converted.entrySet()) {
       f.getResources().get(e.getKey()).setResource(e.getValue());
