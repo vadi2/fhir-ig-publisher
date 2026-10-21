@@ -7,12 +7,17 @@ import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
@@ -51,6 +56,20 @@ public class JekyllDriver {
     private final String error;
     private final List<String> written;
     private final List<String> unknown;
+
+    private Result(Result r, List<String> written) {
+      ok = r.ok;
+      full = r.full;
+      reason = r.reason;
+      error = r.error;
+      this.written = written;
+      unknown = r.unknown;
+    }
+
+    /** This result, with these files written */
+    Result withWritten(List<String> written) {
+      return new Result(this, written);
+    }
 
     Result(JsonObject json) {
       ok = json.asBoolean("ok");
@@ -103,13 +122,16 @@ public class JekyllDriver {
 
   private final List<String> command;
   private final Map<String, String> env;
-  private Process process;
+  private volatile Process process;
+  private boolean hooked;
   private OutputStream stdin;
   private BlockingQueue<String> lines;
   private String source;
   private String destination;
   private String unavailable;
   private Path script;
+  // the output files as Jekyll last wrote them: path (relative to the destination) => stamp (see stamp())
+  private Map<String, String> stamps;
 
   JekyllDriver(List<String> command, Map<String, String> env) {
     this.command = command;
@@ -180,9 +202,15 @@ public class JekyllDriver {
     return unavailable;
   }
 
+  /** Stops the driver and makes it unavailable from now on, for this reason */
+  public synchronized void disable(String reason) {
+    stop();
+    unavailable = reason;
+  }
+
   /** Builds the whole site from source into destination */
   public Result build(String source, String destination, long timeout, Consumer<String> log) throws IOException {
-    return send(source, destination, "{\"cmd\":\"build\"}", timeout, log);
+    return stamped(destination, send(source, destination, "{\"cmd\":\"build\"}", timeout, log));
   }
 
   /**
@@ -197,7 +225,7 @@ public class JekyllDriver {
       a.add(s);
     }
     cmd.add("changed", a);
-    return send(source, destination, JsonParser.compose(cmd, false), timeout, log);
+    return stamped(destination, send(source, destination, JsonParser.compose(cmd, false), timeout, log));
   }
 
   /** Writes these output files (relative to destination) again as the last build or update wrote them */
@@ -209,7 +237,83 @@ public class JekyllDriver {
       a.add(s);
     }
     cmd.add("files", a);
-    return send(source, destination, JsonParser.compose(cmd, false), timeout, log);
+    return stamped(destination, send(source, destination, JsonParser.compose(cmd, false), timeout, log));
+  }
+
+  /**
+   * Writes the output files that have changed since Jekyll wrote them (or that Jekyll didn't write) again as Jekyll
+   * wrote them, so that the output is what `jekyll build` would leave (files that aren't the site's are left as they
+   * are: the update before this has removed those that were there). The result's written list is the files written
+   * again
+   */
+  public Result restore(String source, String destination, long timeout, Consumer<String> log) throws IOException {
+    if (stamps == null || !isRunningFor(source, destination)) {
+      throw new IOException("There is no Jekyll build to go back to");
+    }
+    List<String> changed = new ArrayList<>();
+    for (Map.Entry<String, String> e : stampTree(destination).entrySet()) {
+      String was = stamps.get(e.getKey());
+      if (was == null || e.getValue() == null || !was.equals(e.getValue())) {
+        changed.add(e.getKey());
+      }
+    }
+    if (changed.isEmpty()) {
+      JsonObject json = new JsonObject();
+      json.add("ok", true);
+      json.add("written", new JsonArray());
+      return new Result(json);
+    }
+    return rewrite(source, destination, changed, timeout, log);
+  }
+
+  /** Keeps the stamps of the files a command wrote */
+  private Result stamped(String destination, Result r) throws IOException {
+    if (!r.isOk()) {
+      stamps = null;
+    } else if (r.isFull()) {
+      stamps = stampTree(destination);
+    } else if (stamps != null) {
+      for (String f : r.getWritten()) {
+        stamps.put(f, stamp(Paths.get(destination, f)));
+      }
+      // what Jekyll removed
+      stamps.keySet().removeIf(f -> !Files.exists(Paths.get(destination, f)));
+    }
+    return r;
+  }
+
+  /** The stamps of the files under this folder, by path relative to it */
+  static Map<String, String> stampTree(String folder) throws IOException {
+    Map<String, String> res = new HashMap<>();
+    Path root = Paths.get(folder);
+    if (!Files.isDirectory(root)) {
+      return res;
+    }
+    Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
+      @Override
+      public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+        res.put(root.relativize(file).toString(), stamp(file));
+        return FileVisitResult.CONTINUE;
+      }
+    });
+    return res;
+  }
+
+  /**
+   * What changes when anything writes to a file, or replaces it: its size, inode and inode change time (null if they
+   * can't be read: then the file counts as changed)
+   */
+  static String stamp(Path p) {
+    try {
+      Map<String, Object> a = Files.readAttributes(p, "unix:size,ino,ctime", java.nio.file.LinkOption.NOFOLLOW_LINKS);
+      Object ctime = a.get("ctime");
+      if (ctime == null || a.get("ino") == null) {
+        return null;
+      }
+      return a.get("size") + ":" + a.get("ino") + ":" + ((java.nio.file.attribute.FileTime) ctime).to(TimeUnit.NANOSECONDS);
+    } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
+      return null;
+    }
   }
 
   /** Whether the running Jekyll has built this site (so that an update can go on from it) */
@@ -290,7 +394,16 @@ public class JekyllDriver {
       throw new IOException(unavailable, e);
     }
     Process p = process;
-    Runtime.getRuntime().addShutdownHook(new Thread(p::destroyForcibly));
+    if (!hooked) {
+      // whichever process is running when the JVM exits
+      Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+        Process running = process;
+        if (running != null) {
+          running.destroyForcibly();
+        }
+      }, "jekyll-driver-stop"));
+      hooked = true;
+    }
     stdin = process.getOutputStream();
     BlockingQueue<String> queue = new LinkedBlockingQueue<>();
     lines = queue;
@@ -332,5 +445,6 @@ public class JekyllDriver {
       source = null;
       destination = null;
     }
+    stamps = null;
   }
 }

@@ -4084,24 +4084,35 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       FileUtils.copyDirectory(new File(pf.tempDir), new File(pf.outputDir));
       return true;
     }
-    if (jekyllDriver != null && jekyllDriver.getUnavailable() == null && runJekyllDriver(pageRebuild)) {
-      return true;
+    if (jekyllDriver != null && jekyllDriver.getUnavailable() == null) {
+      String failed = runJekyllDriver(pageRebuild);
+      if (failed == null) {
+        return true;
+      }
+      // as it would be without the driver: `jekyll build` reports (and fails on) what's wrong with the site
+      boolean ok = runJekyll();
+      if (!"".equals(failed)) {
+        jekyllDriver.disable("it failed where jekyll build didn't: " + failed);
+        log("Jekyll won't be kept running from now on (" + jekyllDriver.getUnavailable() + ")");
+      }
+      return ok;
     }
     return runJekyll();
   }
 
   /**
    * Watch mode: runs Jekyll in the Jekyll that stays running between builds (see JekyllDriver). In a page rebuild, if
-   * it's still running for this site, it renders just what depends on the pages written again, unless the template's
-   * check script looks at the output (it must see the whole output as Jekyll writes it). Returns false if the driver
-   * can't be used (then Jekyll is run as usual)
+   * it's still running for this site, it renders just what depends on the pages written again (and, if the template
+   * has a check script, which may look at the output, the files changed since Jekyll wrote them). Returns null if it did; else
+   * Jekyll is to be run as usual, and the result is "" if the driver can't be used, or how it failed
    */
-  private boolean runJekyllDriver(boolean pageRebuild) throws IOException {
+  private String runJekyllDriver(boolean pageRebuild) {
     TimeTracker.Session tts = pf.tt.start("jekyll");
     String temp = new File(pf.tempDir).getAbsolutePath();
     String out = new File(pf.outputDir).getAbsolutePath();
-    boolean update = pageRebuild && changedTempFiles != null && jekyllDriver.isRunningFor(temp, out)
-        && (pf.template == null || !pf.template.hasOnCheck());
+    boolean update = pageRebuild && changedTempFiles != null && jekyllDriver.isRunningFor(temp, out);
+    // the template's check script runs next, and may look at the output: it must see what `jekyll build` would leave
+    boolean restore = update && pf.template != null && pf.template.hasOnCheck();
     MyFilterHandler filter = new MyFilterHandler();
     JekyllDriver.Result res;
     try {
@@ -4113,6 +4124,17 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         log("Run jekyll: render the pages that depend on " + changed.size() + " changed " + (changed.size() == 1 ? "file" : "files")
             + " (Jekyll kept running, in folder " + pf.tempDir + ")");
         res = jekyllDriver.update(temp, out, changed, pf.jekyllTimeout, filter::line);
+        if (restore && res.isOk() && !res.isFull()) {
+          JekyllDriver.Result again = jekyllDriver.restore(temp, out, pf.jekyllTimeout, filter::line);
+          if (!again.isOk()) {
+            res = again;
+          } else if (!again.getWritten().isEmpty()) {
+            log("Jekyll: wrote " + again.getWritten().size() + " output files that changed after it wrote them again, for the template's check");
+            List<String> all = new ArrayList<>(res.getWritten());
+            all.addAll(again.getWritten());
+            res = res.withWritten(all);
+          }
+        }
       } else {
         log("Run jekyll: " + settings.jekyllCommand + " build --destination \"" + pf.outputDir + "\" (kept running, in folder " + pf.tempDir + ")");
         res = jekyllDriver.build(temp, out, pf.jekyllTimeout, filter::line);
@@ -4121,15 +4143,17 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       tts.end();
       if (jekyllDriver.getUnavailable() != null) {
         log("Jekyll can't be kept running (" + jekyllDriver.getUnavailable() + ")");
-        return false;
+        return "";
       }
-      log("Jekyll has failed: " + e.getMessage());
-      throw e;
+      log("Jekyll (kept running) has failed (" + e.getMessage() + "), so running it as usual");
+      jekyllDriver.stop();
+      return String.valueOf(e.getMessage());
     }
     tts.end();
     if (!res.isOk()) {
-      log("Jekyll has failed: " + res.getError());
-      throw new IOException("Jekyll has failed: " + res.getError());
+      log("Jekyll (kept running) has failed (" + res.getError() + "), so running it as usual");
+      jekyllDriver.stop();
+      return String.valueOf(res.getError());
     }
     if (update && res.isFull()) {
       log("Jekyll: rendered the whole site again (" + res.getReason() + ")");
@@ -4140,7 +4164,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         jekyllWritten.add(Paths.get(out, f).toString());
       }
     }
-    return true;
+    return null;
   }
 
   /**

@@ -83,6 +83,18 @@ class JekyllDriverTest {
   }
 
   @Test
+  void disabledAfterItFailed() {
+    JekyllDriver d = new JekyllDriver(Arrays.asList("ruby"), System.getenv());
+    assertEquals(null, d.getUnavailable());
+    d.disable("it failed");
+    assertEquals("it failed", d.getUnavailable());
+    IOException e = org.junit.jupiter.api.Assertions.assertThrows(IOException.class,
+        () -> d.build(dir.toString(), dir.resolve("out").toString(), TIMEOUT, log::add));
+    assertEquals("it failed", e.getMessage());
+    assertFalse(d.isRunningFor(dir.toString(), dir.resolve("out").toString()));
+  }
+
+  @Test
   void updatesWriteWhatABuildWrites() throws Exception {
     assumeTrue(jekyllInstalled(), "jekyll is not installed");
     Path src = Files.createDirectories(dir.resolve("src"));
@@ -143,6 +155,19 @@ class JekyllDriverTest {
     assertTrue(r.isOk(), r.getError());
     assertEquals(Arrays.asList("nothing.html"), r.getUnknown());
     sameAsBuild(src, out);
+
+    // a restore puts back just what was changed after Jekyll wrote it, however it was changed
+    write(out, "c.html", "changed after Jekyll");
+    Path b = out.resolve("b.html");
+    Path moved = dir.resolve("b.tmp");
+    Files.copy(b, moved);
+    Files.move(moved, b, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+    r = driver.restore(src.toString(), out.toString(), TIMEOUT, log::add);
+    assertTrue(r.isOk(), r.getError());
+    assertEquals(Arrays.asList("b.html", "c.html"), sorted(r.getWritten()));
+    sameAsBuild(src, out);
+    r = driver.restore(src.toString(), out.toString(), TIMEOUT, log::add);
+    assertEquals(Collections.emptyList(), r.getWritten());
 
     // a page that reads other pages: only a full build can be sure
     write(src, "b.html", "---\ntitle: B\n---\n{% for p in site.pages %}{{ p.title }} {% endfor %}\n");
