@@ -1,9 +1,10 @@
 package org.hl7.fhir.igtools.publisher;
 
-import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
@@ -16,17 +17,21 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.TreeSet;
 
 /**
  * Watch mode, Rapido differential build: a complete build starts with an empty temp folder, a differential build
- * starts with what the last build left there. A file the last build wrote that this build doesn't write or reuse (e.g.
- * the pages of a resource whose id changed, or an output a resource no longer has) would still be there when Jekyll
- * runs, and end up in the output. This finds those files, so they can be deleted before Jekyll runs.
+ * starts with what the last build left there. A file that the last build claimed as its output, and that this build
+ * neither writes again nor claims (e.g. the pages of a resource whose id changed or that was deleted, or an output a
+ * resource no longer has), would still be there when Jekyll runs, and end up in the output. This finds those files,
+ * so they can be deleted before Jekyll runs.
  *
- * <p>A file is kept if this build wrote it (its status-change time, which can't be set by a program, is not before the
- * marker this writes where a complete build would clear the temp folder), or if the build claims it without writing it
- * again: the publisher doesn't rewrite a file whose content is unchanged, and a reused (replayed) phase claims the
- * outputs it wrote in an earlier build. Everything else is what a complete build wouldn't have.
+ * <p>Each build saves what it claims (the outputs it wrote or, for a reused phase, reused). A file is stale if the last
+ * build claimed it, this one doesn't, and this build didn't write it: its status-change time (which a program can't
+ * set) is before the marker written where a complete build would clear the temp folder. Files no build claimed
+ * (e.g. Jekyll's cache) are left alone, as a differential build without watch mode leaves them, and so are the table
+ * renderer's background images (tbl_bck*.png): it writes each one once, for the first table that needs it, and only
+ * that render claims it (the publisher doesn't track them either, see PublisherBase.isValidFile()).
  */
 public class StaleTempFiles {
 
@@ -34,6 +39,7 @@ public class StaleTempFiles {
 
   private final Path temp;
   private final Path marker;
+  private final Path claims;
   private final Set<Path> skip = new HashSet<>();
 
   /**
@@ -42,13 +48,15 @@ public class StaleTempFiles {
   public StaleTempFiles(String temp, Collection<String> skip) {
     this.temp = Paths.get(temp).toAbsolutePath().normalize();
     this.marker = this.temp.resolve("_rapido").resolve("build-start");
+    this.claims = this.temp.resolve("_rapido").resolve("claimed.txt");
     for (String s : skip) {
       this.skip.add(Paths.get(s).toAbsolutePath().normalize());
     }
     this.skip.add(marker);
+    this.skip.add(claims);
   }
 
-  /** Whether the file system says when a file was last written to (or its attributes set); else this can't be used */
+  /** Whether the file system has status-change times; if not, this can't be used */
   public static boolean isSupported(String folder) {
     try {
       Path p = Paths.get(folder);
@@ -66,17 +74,22 @@ public class StaleTempFiles {
   }
 
   /**
-   * The files in the temp folder (absolute paths) that this build neither wrote nor claims.
+   * The files in the temp folder (absolute paths) that the last build claimed, and that this build neither wrote nor
+   * claims. Nothing if the last build didn't save what it claimed, or if this build didn't mark its start.
    *
-   * @param claimed the paths the build claims (any case: the publisher keeps them in lower case)
+   * @param claimed the paths this build claims (any case: the publisher keeps them in lower case)
    */
   public List<Path> find(Collection<String> claimed) throws IOException {
-    FileTime start = ctime(marker);
-    Set<String> keep = new HashSet<>();
-    for (String s : claimed) {
-      keep.add(key(Paths.get(s)));
-    }
     List<Path> res = new ArrayList<>();
+    if (!Files.exists(claims) || !Files.exists(marker)) {
+      return res;
+    }
+    Set<String> before = new HashSet<>(Files.readAllLines(claims, StandardCharsets.UTF_8));
+    before.removeAll(keys(claimed));
+    if (before.isEmpty()) {
+      return res;
+    }
+    FileTime start = ctime(marker);
     Files.walkFileTree(temp, new SimpleFileVisitor<Path>() {
       @Override
       public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
@@ -85,7 +98,7 @@ public class StaleTempFiles {
 
       @Override
       public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-        if (!skip.contains(file) && ctime(file).compareTo(start) < 0 && !keep.contains(key(file))) {
+        if (!skip.contains(file) && !isTableImage(file) && before.contains(key(file)) && ctime(file).compareTo(start) < 0) {
           res.add(file);
         }
         return FileVisitResult.CONTINUE;
@@ -93,6 +106,17 @@ public class StaleTempFiles {
     });
     res.sort(Comparator.naturalOrder());
     return res;
+  }
+
+  /** Saves what this build claims, for the next build's find() */
+  public void save(Collection<String> claimed) throws IOException {
+    Files.createDirectories(claims.getParent());
+    Files.write(claims, new TreeSet<>(keys(claimed)), StandardCharsets.UTF_8);
+  }
+
+  /** Forgets what the last build claimed (when what it left in the temp folder is gone) */
+  public void forget() throws IOException {
+    Files.deleteIfExists(claims);
   }
 
   /**
@@ -110,15 +134,24 @@ public class StaleTempFiles {
     return temp.relativize(p).toString();
   }
 
-  private static FileTime ctime(Path p) throws IOException {
-    return (FileTime) Files.getAttribute(p, CTIME, java.nio.file.LinkOption.NOFOLLOW_LINKS);
+  private Set<String> keys(Collection<String> paths) {
+    Set<String> res = new HashSet<>();
+    for (String s : paths) {
+      res.add(key(Paths.get(s)));
+    }
+    return res;
   }
 
+  private static boolean isTableImage(Path p) {
+    return p.getFileName().toString().startsWith("tbl_bck");
+  }
+
+  private static FileTime ctime(Path p) throws IOException {
+    return (FileTime) Files.getAttribute(p, CTIME, LinkOption.NOFOLLOW_LINKS);
+  }
+
+  /** a claimed path as kept in the claims file: absolute, normalised, in lower case (as the publisher keeps it) */
   private static String key(Path p) {
     return p.toAbsolutePath().normalize().toString().toLowerCase(Locale.ROOT);
-  }
-
-  static String key(String s) {
-    return key(new File(s).toPath());
   }
 }

@@ -299,7 +299,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     List<String> reason = new ArrayList<>();
     List<FetchedFile> pages = state.pagesFor(session.changesSincePreviousBuild(), reason);
     if (pages == null) {
-      log("Rapido Mode: Complete Build (" + reason.get(0) + ")");
+      log("Rapido Mode: Not a Page Rebuild (" + reason.get(0) + ")");
       state.discard();
       return false;
     }
@@ -1081,11 +1081,13 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     }
     pf.rapido = new RapidoTracker(pf);
     pf.rapido.analyse(igf, failure);
-    if (!pf.rapido.isCompleteBuild() && settings.isWatchMode()) {
-      // what the last build left in the temp folder that this one neither writes nor reuses is deleted before Jekyll
-      // runs (see PublisherGenerator.deleteStaleTempFiles())
+    if (settings.isWatchMode()) {
+      // each build saves what it claims in the temp folder; in a differential build, what the last build claimed and
+      // this one neither writes nor claims is deleted before Jekyll runs (see PublisherGenerator.deleteStaleTempFiles())
       pf.staleTemp = new StaleTempFiles(pf.tempDir, Arrays.asList(Utilities.path(pf.tempDir, "_rapido")));
-      pf.staleTemp.mark();
+      if (!pf.rapido.isCompleteBuild()) {
+        pf.staleTemp.mark();
+      }
     }
     if (pf.rapido.isCompleteBuild()) {
       log("Rapido Mode: Complete Build ("+pf.rapido.getReason()+")");
