@@ -242,8 +242,7 @@ public class JekyllDriver {
 
   /**
    * The output files (relative to destination) that have changed since Jekyll wrote them, or that Jekyll didn't write,
-   * sorted: writing them again (see rewrite) leaves what `jekyll build` would, apart from files that aren't the site's
-   * (the update before this has removed those that were there)
+   * sorted: writing them again (see rewrite()) leaves the site's files as `jekyll build` would
    */
   public List<String> changedSinceWritten(String source, String destination) throws IOException {
     if (stamps == null || !isRunningFor(source, destination)) {

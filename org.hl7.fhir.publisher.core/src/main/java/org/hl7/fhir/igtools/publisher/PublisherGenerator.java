@@ -4116,9 +4116,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   /**
    * Watch mode: runs Jekyll in the Jekyll that stays running between builds (see JekyllDriver). In a page rebuild, if
    * it's still running for this site and the html checks after it can tell which files the last check changed, it
-   * renders just what depends on the pages written again (and, if the template
-   * has a check script, which may look at the output, writes again the files changed since Jekyll wrote them).
-   * Returns null if it did; else Jekyll is to be run as usual, and the result is "" if the driver can't be used, or
+   * renders just what depends on the pages written again (and, if the template has a check script, which may look at
+   * the output, writes again the files changed since Jekyll wrote them, keeping their html-checked versions aside: see
+   * stashChecked()). Returns null if it did; else Jekyll is to be run as usual, and the result is "" if the driver can't be used, or
    * how it failed
    */
   private String runJekyllDriver(PageRebuild replay) {
@@ -4192,7 +4192,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   /**
    * Watch mode, before Jekyll writes these output files (relative to out) again for the template's check: moves aside
    * the versions the last html check left, so that those the check leaves as Jekyll wrote them can be put back after
-   * it (see putBackChecked), and what the html check found in them reused (moving keeps the modified time it goes by)
+   * it (see putBackChecked()), and what the html check found in them reused (a move keeps the modified time, which the
+   * html check's records go by)
    */
   private void stashChecked(HtmlCheckRecords records, String out, List<String> files) throws IOException {
     dropCheckedStash();
