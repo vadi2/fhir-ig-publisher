@@ -241,12 +241,11 @@ public class JekyllDriver {
   }
 
   /**
-   * Writes the output files that have changed since Jekyll wrote them (or that Jekyll didn't write) again as Jekyll
-   * wrote them, so that the output is what `jekyll build` would leave (files that aren't the site's are left as they
-   * are: the update before this has removed those that were there). The result's written list is the files written
-   * again
+   * The output files (relative to destination) that have changed since Jekyll wrote them, or that Jekyll didn't write,
+   * sorted: writing them again (see rewrite) leaves what `jekyll build` would, apart from files that aren't the site's
+   * (the update before this has removed those that were there)
    */
-  public Result restore(String source, String destination, long timeout, Consumer<String> log) throws IOException {
+  public List<String> changedSinceWritten(String source, String destination) throws IOException {
     if (stamps == null || !isRunningFor(source, destination)) {
       throw new IOException("There is no Jekyll build to go back to");
     }
@@ -257,13 +256,14 @@ public class JekyllDriver {
         changed.add(e.getKey());
       }
     }
-    if (changed.isEmpty()) {
-      JsonObject json = new JsonObject();
-      json.add("ok", true);
-      json.add("written", new JsonArray());
-      return new Result(json);
-    }
-    return rewrite(source, destination, changed, timeout, log);
+    Collections.sort(changed);
+    return changed;
+  }
+
+  /** Whether this output file (relative to destination) is as Jekyll last wrote it */
+  public boolean isAsWritten(String destination, String file) {
+    String was = stamps == null || !destination.equals(this.destination) ? null : stamps.get(file);
+    return was != null && was.equals(stamp(Paths.get(destination, file)));
   }
 
   /** Keeps the stamps of the files a command wrote */

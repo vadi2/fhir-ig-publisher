@@ -156,18 +156,23 @@ class JekyllDriverTest {
     assertEquals(Arrays.asList("nothing.html"), r.getUnknown());
     sameAsBuild(src, out);
 
-    // a restore puts back just what was changed after Jekyll wrote it, however it was changed
+    // what was changed after Jekyll wrote it is known, however it was changed
+    assertTrue(driver.isAsWritten(out.toString(), "c.html"));
     write(out, "c.html", "changed after Jekyll");
+    assertFalse(driver.isAsWritten(out.toString(), "c.html"));
     Path b = out.resolve("b.html");
     Path moved = dir.resolve("b.tmp");
     Files.copy(b, moved);
     Files.move(moved, b, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
-    r = driver.restore(src.toString(), out.toString(), TIMEOUT, log::add);
+    assertFalse(driver.isAsWritten(out.toString(), "b.html"));
+    List<String> changed = driver.changedSinceWritten(src.toString(), out.toString());
+    assertEquals(Arrays.asList("b.html", "c.html"), changed);
+    r = driver.rewrite(src.toString(), out.toString(), changed, TIMEOUT, log::add);
     assertTrue(r.isOk(), r.getError());
     assertEquals(Arrays.asList("b.html", "c.html"), sorted(r.getWritten()));
+    assertTrue(driver.isAsWritten(out.toString(), "b.html"));
     sameAsBuild(src, out);
-    r = driver.restore(src.toString(), out.toString(), TIMEOUT, log::add);
-    assertEquals(Collections.emptyList(), r.getWritten());
+    assertEquals(Collections.emptyList(), driver.changedSinceWritten(src.toString(), out.toString()));
 
     // a page that reads other pages: only a full build can be sure
     write(src, "b.html", "---\ntitle: B\n---\n{% for p in site.pages %}{{ p.title }} {% endfor %}\n");
