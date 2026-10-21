@@ -158,9 +158,10 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   private final Map<String, Integer> uncacheable = new TreeMap<>();
   /**
    * terminology answers a cached step worked out itself in this build (they aren't there when the step is replayed),
-   * with the terminology reads the step had made by then: a later step that uses one depends on those instead
+   * with the terminology reads the step had made by then: a later step that uses one depends on those instead.
+   * Concurrent, because a store from another thread removes its answer here
    */
-  private final Map<String, Map<String, String>> transientAnswers = new HashMap<>();
+  private final Map<String, Map<String, String>> transientAnswers = new ConcurrentHashMap<>();
   private boolean anchorsUnwatched;
   /** why lookups that found an entry didn't hit: the first recorded read that had changed, by kind */
   private final Map<String, Integer> changed = new TreeMap<>();
