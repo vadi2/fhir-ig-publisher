@@ -256,6 +256,39 @@ class InputCacheTest {
   }
 
   @Test
+  void journal_encodedLengthIsWhatEncodeWrites() throws Exception {
+    InputCache.Journal j = new InputCache.Journal();
+    j.millis = 7;
+    j.add("file", "/t/é中.xhtml", "<div>é</div>".getBytes(StandardCharsets.UTF_8));
+    j.add("out", "/t/b.xhtml", null);
+    j.add("set", "", new byte[0]);
+    byte[] b = j.encode();
+    assertEquals(b.length, j.encodedLength());
+    java.io.ByteArrayOutputStream streamed = new java.io.ByteArrayOutputStream();
+    InputCacheCodec.Out out = new InputCacheCodec.Out(streamed);
+    j.encodeTo(out);
+    out.flush();
+    assertArrayEquals(b, streamed.toByteArray());
+  }
+
+  @Test
+  void store_streamedPayloadReadsBackAsWritten() throws Exception {
+    InputCacheStore store = new InputCacheStore(tmp, 1 << 30);
+    byte[] big = new byte[200000];
+    new java.util.Random(2).nextBytes(big);
+    store.write(key("s"), os -> {
+      for (int i = 0; i < 1000; i++) {
+        os.write(i & 0xff);
+      }
+      os.write(big);
+    });
+    byte[] back = store.read(key("s"));
+    assertEquals(1000 + big.length, back.length);
+    assertEquals(999 & 0xff, back[999] & 0xff);
+    assertArrayEquals(big, Arrays.copyOfRange(back, 1000, back.length));
+  }
+
+  @Test
   void journal_rejectsTrailingBytes() throws Exception {
     InputCache.Journal j = new InputCache.Journal();
     j.add("x", "y", null);

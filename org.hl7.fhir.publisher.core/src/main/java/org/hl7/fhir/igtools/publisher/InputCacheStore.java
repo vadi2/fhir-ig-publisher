@@ -1,10 +1,12 @@
 package org.hl7.fhir.igtools.publisher;
 
+import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -101,8 +103,18 @@ public class InputCacheStore {
     return payload;
   }
 
+  /** writes a payload to a stream */
+  public interface Payload {
+    void writeTo(OutputStream out) throws IOException;
+  }
+
   /** stores the payload for the key, replacing what was there */
   public void write(String key, byte[] payload) throws IOException {
+    write(key, out -> out.write(payload));
+  }
+
+  /** stores the payload for the key, replacing what was there: the payload is compressed as it's written */
+  public void write(String key, Payload payload) throws IOException {
     File f = entryFile(key);
     File dir = f.getParentFile();
     if (!dir.isDirectory() && !dir.mkdirs() && !dir.isDirectory()) {
@@ -110,7 +122,11 @@ public class InputCacheStore {
     }
     File tmp = new File(dir, key + "." + ProcessHandle.current().pid() + "." + Long.toHexString(ThreadLocalRandom.current().nextLong()) + ".tmp");
     try {
-      Files.write(tmp.toPath(), wrap(payload));
+      byte[] z = compress(payload);
+      try (OutputStream out = Files.newOutputStream(tmp.toPath())) {
+        out.write(header(z));
+        out.write(z);
+      }
       try {
         Files.move(tmp.toPath(), f.toPath(), StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
       } catch (AtomicMoveNotSupportedException e) {
@@ -125,20 +141,24 @@ public class InputCacheStore {
     Files.deleteIfExists(entryFile(key).toPath());
   }
 
-  static byte[] wrap(byte[] payload) throws IOException {
-    ByteArrayOutputStream bz = new ByteArrayOutputStream();
-    // the fastest level: the entries (mostly html) shrink almost as much as at the default level, in a fraction of the time
+  private static byte[] header(byte[] z) {
+    return ByteBuffer.allocate(HEADER_LENGTH).put(MAGIC).putInt(FORMAT_VERSION).putInt(z.length).put(sha256(z)).array();
+  }
+
+  private static byte[] compress(Payload payload) throws IOException {
+    ByteArrayOutputStream bz = new ByteArrayOutputStream(65536);
+    // the fastest level: the entries come out about 40% larger than at the default level, in a fraction of the time
     try (GZIPOutputStream gz = new GZIPOutputStream(bz, 65536) {
       {
         def.setLevel(Deflater.BEST_SPEED);
       }
     }) {
-      gz.write(payload);
+      // the encoders write a few bytes at a time, and each write to the compressor is a native call
+      BufferedOutputStream out = new BufferedOutputStream(gz, 65536);
+      payload.writeTo(out);
+      out.flush();
     }
-    byte[] z = bz.toByteArray();
-    ByteBuffer b = ByteBuffer.allocate(HEADER_LENGTH + z.length);
-    b.put(MAGIC).putInt(FORMAT_VERSION).putInt(z.length).put(sha256(z)).put(z);
-    return b.array();
+    return bz.toByteArray();
   }
 
   /** the payload, or null if the content isn't a complete entry of this format version */
@@ -157,16 +177,12 @@ public class InputCacheStore {
     }
     byte[] sum = new byte[32];
     b.get(sum);
-    byte[] z = Arrays.copyOfRange(content, HEADER_LENGTH, content.length);
-    if (!Arrays.equals(sum, sha256(z))) {
-      return null;
-    }
-    if (z.length < 4) {
+    if (!Arrays.equals(sum, sha256(content, HEADER_LENGTH, len)) || len < 4) {
       return null;
     }
     // the gzip trailer ends with the payload's length (mod 2^32), so the payload is read into an array of its size
-    long size = ByteBuffer.wrap(z, z.length - 4, 4).order(ByteOrder.LITTLE_ENDIAN).getInt() & 0xffffffffL;
-    try (InputStream in = new GZIPInputStream(new ByteArrayInputStream(z), 65536)) {
+    long size = ByteBuffer.wrap(content, content.length - 4, 4).order(ByteOrder.LITTLE_ENDIAN).getInt() & 0xffffffffL;
+    try (InputStream in = new GZIPInputStream(new ByteArrayInputStream(content, HEADER_LENGTH, len), 65536)) {
       if (size >= Integer.MAX_VALUE - 8) {
         return in.readAllBytes();
       }
@@ -181,8 +197,14 @@ public class InputCacheStore {
   }
 
   static byte[] sha256(byte[] b) {
+    return sha256(b, 0, b.length);
+  }
+
+  private static byte[] sha256(byte[] b, int offset, int length) {
     try {
-      return MessageDigest.getInstance("SHA-256").digest(b);
+      MessageDigest md = MessageDigest.getInstance("SHA-256");
+      md.update(b, offset, length);
+      return md.digest();
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException(e);
     }

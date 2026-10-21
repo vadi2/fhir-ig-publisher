@@ -5,6 +5,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
 import java.io.DataOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
@@ -57,8 +58,30 @@ public class InputCacheCodec {
   }
 
   public static class Out {
-    private final ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-    private final DataOutputStream out = new DataOutputStream(bytes);
+    private final ByteArrayOutputStream bytes;
+    private final DataOutputStream out;
+
+    /** writes to an array: see {@link #toBytes()} */
+    public Out() {
+      bytes = new ByteArrayOutputStream();
+      out = new DataOutputStream(bytes);
+    }
+
+    /** writes to the stream, as it goes: call {@link #flush()} at the end */
+    public Out(OutputStream os) {
+      bytes = null;
+      out = new DataOutputStream(os);
+    }
+
+    /** the length {@link #str(String)} writes */
+    public static int strLength(String s) {
+      return s == null ? 4 : 4 + s.getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    /** the length {@link #bytes(byte[])} writes */
+    public static int bytesLength(byte[] b) {
+      return b == null ? 4 : 4 + b.length;
+    }
 
     public Out str(String s) throws IOException {
       if (s == null) {
@@ -153,8 +176,15 @@ public class InputCacheCodec {
     }
 
     public byte[] toBytes() throws IOException {
+      if (bytes == null) {
+        throw new IllegalStateException("this Out writes to a stream");
+      }
       out.flush();
       return bytes.toByteArray();
+    }
+
+    public void flush() throws IOException {
+      out.flush();
     }
   }
 

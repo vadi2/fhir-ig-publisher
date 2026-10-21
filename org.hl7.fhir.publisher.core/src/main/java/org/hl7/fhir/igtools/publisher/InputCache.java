@@ -3,6 +3,7 @@ package org.hl7.fhir.igtools.publisher;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
@@ -163,7 +164,8 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   private boolean anchorsUnwatched;
   /** why lookups that found an entry didn't hit: the first recorded read that had changed, by kind */
   private final Map<String, Integer> changed = new TreeMap<>();
-  private long overheadNanos;
+  /** the time the build spent in the cache's own work, by part */
+  private final Map<String, Long> overheadNanos = new TreeMap<>();
   private long savedMillis;
 
   private InputCache(PublisherFields pf, File root, long maxBytes, double verifyFraction, boolean calibrate, Consumer<String> log) {
@@ -461,7 +463,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       log.accept("Input cache: not used for the " + phase + " phase: " + e);
       this.phase = null;
     } finally {
-      overheadNanos += System.nanoTime() - t;
+      spent("phase digests", t);
     }
   }
 
@@ -681,12 +683,25 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
 
   private static class Variant {
     final Map<String, String> reads;
+    /** the journal as stored; null for the variant this build made, which has {@link #fresh} instead */
     final byte[] journal;
+    /** the journal this build made, encoded as the entry is written */
+    final Journal fresh;
     final byte[] extras;
 
+    /** a variant read from the store */
     Variant(Map<String, String> reads, byte[] journal, byte[] extras) {
       this.reads = reads;
       this.journal = journal;
+      this.fresh = null;
+      this.extras = extras;
+    }
+
+    /** the variant this build made */
+    Variant(Map<String, String> reads, Journal fresh, byte[] extras) {
+      this.reads = reads;
+      this.journal = null;
+      this.fresh = fresh;
       this.extras = extras;
     }
   }
@@ -754,16 +769,19 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
         s.replay = !s.verify;
       }
       if (!s.replay) {
+        t = spent("lookups", t);
         startRecording(s);
+        spent("recording", t);
+      } else {
+        spent("lookups", t);
       }
       return s;
     } catch (Exception e) {
+      spent("lookups", t);
       log.accept("Input cache: lookup failed for " + description + ": " + e);
       // the step runs uncached, and nothing it does is recorded
       current = null;
       return null;
-    } finally {
-      overheadNanos += System.nanoTime() - t;
     }
   }
 
@@ -825,7 +843,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       savedMillis += j.millis;
     } finally {
       s.ended = true;
-      overheadNanos += System.nanoTime() - t;
+      spent("replay", t);
     }
   }
 
@@ -901,7 +919,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       return res;
     } finally {
       s.ended = true;
-      overheadNanos += System.nanoTime() - t;
+      spent("replay", t);
     }
   }
 
@@ -985,6 +1003,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       long millis = System.currentTimeMillis() - s.started;
       checkProbe(s);
       Journal j = s.uncacheable == null ? journal(s, errs, millis) : null;
+      t = spent("journals", t);
       if (s.verify) {
         if (j == null) {
           mismatch(s, "the step ran again and could not be cached: " + s.uncacheable);
@@ -1008,7 +1027,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
         return;
       }
       List<Variant> list = new ArrayList<>();
-      list.add(new Variant(new LinkedHashMap<>(s.reads), j.encode(), encodeExtras(s)));
+      list.add(new Variant(new LinkedHashMap<>(s.reads), j, encodeExtras(s)));
       for (Variant v : s.variants) {
         if (!v.reads.equals(s.reads) && list.size() < MAX_VARIANTS) {
           list.add(v);
@@ -1016,10 +1035,20 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       }
       write(s.key, s.description, list);
     } catch (Exception e) {
+      if (e instanceof InterruptedException) {
+        Thread.currentThread().interrupt();
+      }
       log.accept("Input cache: unable to store " + s.description + ": " + e);
     } finally {
-      overheadNanos += System.nanoTime() - t;
+      spent("storing", t);
     }
+  }
+
+  /** adds the time since t to the part's overhead, and returns the time now */
+  private long spent(String part, long t) {
+    long now = System.nanoTime();
+    overheadNanos.merge(part, now - t, Long::sum);
+    return now;
   }
 
   private void write(String key, String description, List<Variant> list) throws InterruptedException {
@@ -1028,9 +1057,10 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       writer.execute(() -> {
         long t = System.nanoTime();
         try {
-          store.write(key, encodeEntry(list));
+          store.write(key, os -> encodeEntry(list, os));
           stored.incrementAndGet();
-        } catch (IOException | RuntimeException e) {
+        } catch (IOException | RuntimeException | OutOfMemoryError e) {
+          // the entry is missing, and the step is a miss next time
           writeFailures.add("Input cache: unable to store " + description + ": " + e);
         } finally {
           writeNanos.addAndGet(System.nanoTime() - t);
@@ -1275,12 +1305,25 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
 
     byte[] encode() throws IOException {
       InputCacheCodec.Out out = new InputCacheCodec.Out();
+      encodeTo(out);
+      return out.toBytes();
+    }
+
+    void encodeTo(InputCacheCodec.Out out) throws IOException {
       out.lng(millis);
       out.integer(recs.size());
       for (Rec r : recs) {
         out.str(r.tag).str(r.a).bytes(r.b);
       }
-      return out.toBytes();
+    }
+
+    /** the length of what {@link #encodeTo} writes */
+    long encodedLength() {
+      long n = 8 + 4;
+      for (Rec r : recs) {
+        n += InputCacheCodec.Out.strLength(r.tag) + InputCacheCodec.Out.strLength(r.a) + InputCacheCodec.Out.bytesLength(r.b);
+      }
+      return n;
     }
 
     static Journal decode(byte[] b) throws IOException {
@@ -1387,17 +1430,28 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     return res;
   }
 
-  private static byte[] encodeEntry(List<Variant> list) throws IOException {
-    InputCacheCodec.Out out = new InputCacheCodec.Out();
+  /** writes the entry as it goes, so that the build's journal is never in memory twice */
+  private static void encodeEntry(List<Variant> list, OutputStream os) throws IOException {
+    InputCacheCodec.Out out = new InputCacheCodec.Out(os);
     out.str(ENTRY_MAGIC).integer(list.size());
     for (Variant v : list) {
       out.integer(v.reads.size());
       for (Map.Entry<String, String> e : v.reads.entrySet()) {
         out.str(e.getKey()).str(e.getValue());
       }
-      out.bytes(v.journal).bytes(v.extras);
+      if (v.fresh == null) {
+        out.bytes(v.journal);
+      } else {
+        long n = v.fresh.encodedLength();
+        if (n > Integer.MAX_VALUE - 8) {
+          throw new IOException("journal too large to store (" + n + " bytes)");
+        }
+        out.integer((int) n);
+        v.fresh.encodeTo(out);
+      }
+      out.bytes(v.extras);
     }
-    return out.toBytes();
+    out.flush();
   }
 
   private List<Variant> readEntry(String key) {
@@ -1615,7 +1669,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     } catch (InputCacheDigest.TooLarge e) {
       s.uncacheable("terminology answer too large to digest");
     } finally {
-      overheadNanos += System.nanoTime() - t;
+      spent("terminology", t);
     }
   }
 
@@ -1648,7 +1702,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     } catch (InputCacheDigest.TooLarge e) {
       s.uncacheable("terminology answer too large to digest");
     } finally {
-      overheadNanos += System.nanoTime() - t;
+      spent("terminology", t);
     }
   }
 
@@ -1966,7 +2020,14 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     if (store.getCorrupt() > 0) {
       b.append(", ").append(store.getCorrupt()).append(" unreadable entries ignored");
     }
-    b.append(", overhead ").append(overheadNanos / 1000000).append("ms (and ").append(writeNanos.get() / 1000000).append("ms writing entries in the background)");
+    long total = 0;
+    StringBuilder parts = new StringBuilder();
+    for (Map.Entry<String, Long> e : overheadNanos.entrySet()) {
+      total += e.getValue();
+      parts.append(parts.length() == 0 ? "" : ", ").append(e.getKey()).append(' ').append(e.getValue() / 1000000);
+    }
+    b.append(", overhead ").append(total / 1000000).append("ms (").append(parts).append("; and ").append(writeNanos.get() / 1000000)
+      .append("ms writing entries in the background)");
     log.accept(b.toString());
     if (!uncacheable.isEmpty()) {
       log.accept("Input cache: not cached: " + uncacheable);
