@@ -624,7 +624,6 @@ class ConformanceStatementHandler {
         null, "http://hl7.org/fhir", "", new Locale(langName), RenderingContext.ResourceRendererMode.END_USER, RenderingContext.GenerationRules.VALID_RESOURCE);
     rr = new ActorDefinitionRenderer(rc);
 
-
     termShallNot = rc.formatPhrase(RenderingContext.CONF_SHALLNOT); 
     termShall = rc.formatPhrase(RenderingContext.CONF_SHALL); 
     termShouldNot = rc.formatPhrase(RenderingContext.CONF_SHOULDNOT); 
@@ -634,6 +633,7 @@ class ConformanceStatementHandler {
     termShallPlural = rc.formatPhrase(RenderingContext.CONF_SHALL_PLURAL); 
     termShouldNotPlural = rc.formatPhrase(RenderingContext.CONF_SHOULDNOT_PLURAL); 
     termShouldPlural = rc.formatPhrase(RenderingContext.CONF_SHOULD_PLURAL);
+    termMayPlural = rc.formatPhrase(RenderingContext.CONF_MAY_PLURAL);
   }
 
   /**
