@@ -398,7 +398,13 @@ public class RapidoTracker {
       jar.add(Long.toString(System.nanoTime())); // can't tell what the publisher is, so assume it changed
     }
     global.put("publisher", jar.finish());
-    global.put("ig", new Hasher().add(igf.getPath()).add(igf.getSource()).finish());
+    Set<String> loaded = new HashSet<>();
+    for (FetchedFile f : pf.fileList) {
+      for (FetchedResource r : f.getResources()) {
+        loaded.add(r.fhirType()+"/"+r.getId());
+      }
+    }
+    global.put("ig", new Hasher().add(igf.getPath()).add(igSourceForHash(igf.getSource(), loaded)).finish());
     // the loader stamps the build date on canonicals that have none, and pages show it ("Draft as of ..."); FHIRPath
     // today() and now() see it too. A page replayed on a later day would show the day it was first rendered
     global.put("date", buildDay(pf.getExecTime()));
@@ -454,6 +460,40 @@ public class RapidoTracker {
     } catch (IOException e) {
       return new File(s).getAbsolutePath();
     }
+  }
+
+  /**
+   * The IG's source, as it goes into the global hash. The loader copies the name and description of each
+   * definition.resource entry to the resource it loads for it (FetchedResource.getResourceName() and
+   * getResourceDescription()), and those are in that resource's own hash, so a change to them makes that resource,
+   * and what depends on it, dirty. They're left out here, so that a change to them alone isn't a complete build: SUSHI
+   * copies an instance's Title and Description, and an extension's title, into its entry. Everything else in the IG
+   * (and the entries for anything that wasn't loaded) still counts; an IG in XML, or one that can't be read, counts as
+   * it is.
+   *
+   * @param loaded "type/id" of the resources loaded from the IG's files
+   */
+  static byte[] igSourceForHash(byte[] source, Set<String> loaded) {
+    if (source == null) {
+      return null;
+    }
+    JsonObject ig;
+    try {
+      ig = org.hl7.fhir.utilities.json.parser.JsonParser.parseObject(source);
+    } catch (Exception e) {
+      return source;
+    }
+    if (ig == null || !"ImplementationGuide".equals(ig.asString("resourceType")) || !ig.hasObject("definition")) {
+      return source;
+    }
+    for (JsonObject rg : ig.getJsonObject("definition").forceArray("resource").asJsonObjects()) {
+      JsonObject ref = rg.getJsonObject("reference");
+      if (ref != null && loaded.contains(ref.asString("reference"))) {
+        rg.remove("name");
+        rg.remove("description");
+      }
+    }
+    return org.hl7.fhir.utilities.json.parser.JsonParser.compose(ig, false).getBytes(StandardCharsets.UTF_8);
   }
 
   /** the other files in the IG folder (see computeGlobal), relative path to content hash */

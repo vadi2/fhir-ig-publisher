@@ -377,4 +377,32 @@ class RapidoDependencyAnalyserTest {
     Files.writeString(dir.resolve("input/x.txt"), "two");
     assertNotEquals(a.get("input/x.txt"), RapidoTracker.scanTree(dir.toFile(), skip).get("input/x.txt"));
   }
+
+  private static String igJson(String exName, String exDescription, String otherName, String status) {
+    return "{\"resourceType\":\"ImplementationGuide\",\"id\":\"ig\",\"status\":\""+status+"\",\"definition\":{\"resource\":["
+      + "{\"reference\":{\"reference\":\"Patient/ex1\"},\"name\":\""+exName+"\",\"description\":\""+exDescription+"\",\"exampleBoolean\":true},"
+      + "{\"reference\":{\"reference\":\"Patient/missing\"},\"name\":\""+otherName+"\"}]}}";
+  }
+
+  private static String igHash(String json) {
+    byte[] b = RapidoTracker.igSourceForHash(json.getBytes(java.nio.charset.StandardCharsets.UTF_8), Set.of("Patient/ex1", "ImplementationGuide/ig"));
+    return new RapidoDependencyAnalyser.Hasher().add(b).finish();
+  }
+
+  @Test
+  void igEntryNameAndDescriptionOfALoadedResourceAreLeftOutOfTheIgHash() {
+    String base = igHash(igJson("Example 1", "First example", "Other", "draft"));
+    // the loader copies these to the resource, whose own hash has them
+    assertEquals(base, igHash(igJson("Example 1 renamed", "First example, edited", "Other", "draft")));
+    // the entry of a resource that wasn't loaded still counts, and so does the rest of the IG
+    assertNotEquals(base, igHash(igJson("Example 1", "First example", "Other renamed", "draft")));
+    assertNotEquals(base, igHash(igJson("Example 1", "First example", "Other", "active")));
+    assertNotEquals(base, igHash(igJson("Example 1", "First example", "Other", "draft").replace("\"exampleBoolean\":true", "\"exampleBoolean\":false")));
+  }
+
+  @Test
+  void igThatIsNotJsonCountsAsItIs() {
+    byte[] xml = "<ImplementationGuide xmlns=\"http://hl7.org/fhir\"><id value=\"ig\"/></ImplementationGuide>".getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    assertTrue(java.util.Arrays.equals(xml, RapidoTracker.igSourceForHash(xml, Set.of())));
+  }
 }
