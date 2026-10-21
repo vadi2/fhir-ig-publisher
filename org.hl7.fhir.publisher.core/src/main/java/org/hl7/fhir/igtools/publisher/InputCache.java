@@ -1,6 +1,5 @@
 package org.hl7.fhir.igtools.publisher;
 
-import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
@@ -36,8 +35,6 @@ import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
 
 import org.hl7.fhir.model.core.DateTimeType;
 import org.hl7.fhir.services.context.IWorkerContext;
@@ -1351,7 +1348,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       for (int i = 0; i < n; i++) {
         Rec a = recs.get(i);
         Rec b = other.recs.get(i);
-        if (!a.tag.equals(b.tag) || !a.a.equals(b.a) || !(Arrays.equals(a.b, b.b) || sameArchive(a.b, b.b))) {
+        if (!a.tag.equals(b.tag) || !a.a.equals(b.a) || !Arrays.equals(a.b, b.b)) {
           return "record " + i + ": stored " + a.tag + " " + a.a.replace(SEP, "|") + " (" + len(a.b) + " bytes), now " + b.tag + " " + b.a.replace(SEP, "|") + " (" + len(b.b) + " bytes)"
             + firstDifference(a.b, b.b);
         }
@@ -1361,34 +1358,6 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
         return "stored " + recs.size() + " records, now " + other.recs.size() + " (first extra: " + x.tag + " " + x.a.replace(SEP, "|") + ")";
       }
       return null;
-    }
-
-    /**
-     * true if both are zip archives (an xlsx) with the same entries: the entries carry the time they were written,
-     * so two runs of the same step never write the same bytes
-     */
-    static boolean sameArchive(byte[] a, byte[] b) {
-      if (!isZip(a) || !isZip(b)) {
-        return false;
-      }
-      try (ZipInputStream za = new ZipInputStream(new ByteArrayInputStream(a)); ZipInputStream zb = new ZipInputStream(new ByteArrayInputStream(b))) {
-        while (true) {
-          ZipEntry ea = za.getNextEntry();
-          ZipEntry eb = zb.getNextEntry();
-          if (ea == null || eb == null) {
-            return ea == null && eb == null;
-          }
-          if (!ea.getName().equals(eb.getName()) || !Arrays.equals(za.readAllBytes(), zb.readAllBytes())) {
-            return false;
-          }
-        }
-      } catch (IOException e) {
-        return false;
-      }
-    }
-
-    private static boolean isZip(byte[] b) {
-      return b != null && b.length > 4 && b[0] == 'P' && b[1] == 'K' && b[2] == 3 && b[3] == 4;
     }
 
     private static int len(byte[] b) {
@@ -1494,6 +1463,11 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   // every byte as it was
 
   private byte[] place(Step s, byte[] content) {
+    if (isArchive(content)) {
+      // an xlsx: its entries, and the workbook's properties, carry the time they were written
+      s.uncacheable("writes an archive, which holds the time it was written");
+      return content;
+    }
     String text = new String(content, StandardCharsets.ISO_8859_1);
     if (text.contains(MARK)) {
       s.uncacheable("content holds the cache's marker");
@@ -1508,6 +1482,11 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     }
     s.checkText(res, false);
     return res == text ? content : res.getBytes(StandardCharsets.ISO_8859_1);
+  }
+
+  /** true if the content is a zip archive */
+  static boolean isArchive(byte[] b) {
+    return b != null && b.length > 4 && b[0] == 'P' && b[1] == 'K' && b[2] == 3 && b[3] == 4;
   }
 
   private byte[] unplace(byte[] content) {
@@ -1888,8 +1867,8 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     "val.validationContext",
     // the codings the validator saw, only looked at for the IPS code check, which isn't cached
     "val.codingObserver.list",
-    // set by the dependent IG finder's own thread when it's done, whatever step is running then
-    "pf.dependentIgFinder.working"
+    // set by the dependent IG finder's own thread as it works, whatever step is running then
+    "pf.dependentIgFinder.*"
   ));
 
   private static final Map<Class<?>, List<Field>> FIELDS = new ConcurrentHashMap<>();

@@ -480,14 +480,12 @@ class InputCacheTest {
   }
 
   @Test
-  void journalDifference_ignoresArchiveEntryTimes() throws Exception {
-    byte[] a = zip(1000000000000L, "x", "same");
-    byte[] b = zip(1100000000000L, "x", "same");
-    assertFalse(Arrays.equals(a, b));
-    assertTrue(InputCache.Journal.sameArchive(a, b));
-    assertFalse(InputCache.Journal.sameArchive(a, zip(1000000000000L, "x", "other")));
-    assertFalse(InputCache.Journal.sameArchive(a, zip(1000000000000L, "y", "same")));
-    assertFalse(InputCache.Journal.sameArchive("plain".getBytes(StandardCharsets.UTF_8), "plain".getBytes(StandardCharsets.UTF_8)));
+  void isArchive_tellsAZipFromOtherContent() throws Exception {
+    assertTrue(InputCache.isArchive(zip(1000000000000L, "x", "same")));
+    assertFalse(InputCache.isArchive("plain".getBytes(StandardCharsets.UTF_8)));
+    assertFalse(InputCache.isArchive("PK".getBytes(StandardCharsets.UTF_8)));
+    assertFalse(InputCache.isArchive(new byte[0]));
+    assertFalse(InputCache.isArchive(null));
   }
 
   private static byte[] zip(long time, String name, String content) throws Exception {
