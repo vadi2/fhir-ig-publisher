@@ -486,9 +486,9 @@ public class PageRebuild {
     return new Stamp(a.size(), a.lastModifiedTime());
   }
 
-  /** The files under root (relative to it) with their size and modified time; and the folders, if folders isn't null */
   private static final String RAPIDO_STATE = "_rapido";
 
+  /** The files under root (relative to it) with their size and modified time; and the folders, if folders isn't null */
   private static Map<Path, Stamp> list(Path root, Set<Path> folders) throws IOException {
     Map<Path, Stamp> res = new HashMap<>();
     if (!Files.isDirectory(root)) {
