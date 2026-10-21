@@ -4118,8 +4118,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * it's still running for this site and the html checks after it can tell which files the last check changed, it
    * renders just what depends on the pages written again (and, if the template has a check script, which may look at
    * the output, writes again the files changed since Jekyll wrote them, keeping their html-checked versions aside: see
-   * stashChecked()). Returns null if it did; else Jekyll is to be run as usual, and the result is "" if the driver can't be used, or
-   * how it failed
+   * stashChecked()). Returns null if it did; else Jekyll is to be run as usual, and the result is "" if the driver
+   * can't be used, or how it failed
    */
   private String runJekyllDriver(PageRebuild replay) {
     TimeTracker.Session tts = pf.tt.start("jekyll");
