@@ -449,6 +449,11 @@ public class Template {
   public boolean hasPreProcess() {
     return preProcess != null;
   }
+
+  /** Whether the template has a script that runs on the output after Jekyll */
+  public boolean hasOnCheck() {
+    return targetOnCheck != null;
+  }
     
   public JsonArray getPreProcess() {
     return preProcess;

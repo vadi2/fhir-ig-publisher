@@ -196,6 +196,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     String rootDir = settings.getConfigFile();
     FileChangeMonitor monitor = null;
     WatchSession session = null;
+    JekyllDriver jekyllDriver = null;
     // settings that a build adds to: each build starts again from what the command line said
     List<String> cliNoNarratives = new ArrayList<>(settings.getNoNarratives());
     List<String> cliNoValidate = new ArrayList<>(settings.getNoValidate());
@@ -218,6 +219,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         }
         session = new WatchSession(Paths.get(igDir), paths);
         PackageListFetcher.rememberFetches();
+        jekyllDriver = JekyllDriver.forCommand(settings.jekyllCommand);
+        generator.setWatchTools(jekyllDriver, new FullIgZip());
       }
       loader.setWatchSession(session);
 
@@ -249,6 +252,10 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       } while (session != null && waitForChanges(monitor, session));
     } finally {
       discardPageRebuild();
+      if (jekyllDriver != null) {
+        jekyllDriver.stop();
+      }
+      generator.setWatchTools(null, null);
       if (monitor != null) {
         monitor.close();
       }
@@ -309,8 +316,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       TimeTracker.Session tts = pf.tt.start("generate");
       state.restore();
       log("Generating Outputs in " + pf.outputDir);
-      state.prepareTemp(generator.regeneratePages(pages));
-      generator.finishGenerate(state);
+      List<String> written = generator.regeneratePages(pages);
+      state.prepareTemp(written);
+      generator.finishGenerate(state, written);
       finishIg(state.getUncsList(), buildTracker, tts);
     } catch (Exception e) {
       log("Rapido Mode: the page rebuild failed (" + e + "), so doing a complete build");
