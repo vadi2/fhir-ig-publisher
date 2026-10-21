@@ -300,17 +300,39 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     logMessage("Generate HTML Outputs");
     // the resources don't change while the html is generated, so what they use only needs to be worked out once
     pf.sdUsageCache = new IdentityHashMap<>();
+    if (pf.inputCache != null && !settings.isGenerationOff()) {
+      pf.inputCache.startPhase(InputCache.PHASE_HTML);
+    }
     try {
       for (FetchedFile f : pf.changeList) {
         f.start("generate2");
         try {
-          generateHtmlOutputs(f, false, db, null);
+          InputCache.Step cached = pf.inputCache == null || settings.isGenerationOff() ? null : pf.inputCache.beginHtml(f, isNewML());
+          if (cached != null && cached.replay() && replayHtmlOutputs(f, cached)) {
+            // done
+          } else {
+            if (cached != null && cached.replay()) {
+              cached = null;
+            }
+            boolean ok = false;
+            try {
+              generateHtmlOutputs(f, false, db, null);
+              ok = true;
+            } finally {
+              if (cached != null) {
+                pf.inputCache.endHtml(cached, ok);
+              }
+            }
+          }
         } finally {
           f.finish("generate2");
         }
       }
     } finally {
       pf.sdUsageCache = null;
+      if (pf.inputCache != null) {
+        pf.inputCache.endPhase();
+      }
     }
 
     logMessage("Generate Spreadsheets");
@@ -681,6 +703,66 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       var json = saveNativeResourceOutputs(f, r);
       if (db != null) {
         db.saveResource(f, r, json);
+      }
+    }
+  }
+
+  /**
+   * The input cache has the file's html outputs from an earlier build: it writes them, and this does the rest of
+   * what generating them does to the build
+   */
+  private boolean replayHtmlOutputs(FetchedFile f, InputCache.Step cached) throws Exception {
+    // generating the html converted these for rendering, and later steps use them
+    Map<Integer, Resource> converted = new HashMap<>();
+    for (int i : pf.inputCache.htmlConversions(cached)) {
+      try {
+        converted.put(i, convertFromElement(f.getResources().get(i).getElement()));
+      } catch (Exception e) {
+        pf.inputCache.abandon(cached, "converting " + f.getResources().get(i).fhirType() + "/" + f.getResources().get(i).getId() + " for rendering failed: " + e.getMessage());
+        return false;
+      }
+    }
+    InputCache.HtmlReplay replay = pf.inputCache.replayHtml(cached);
+    for (InputCache.NpmEntry e : replay.npm) {
+      if (e.category != null) {
+        addFileToNpm(NPMPackageGenerator.Category.valueOf(e.category), e.name, e.content);
+      } else {
+        addFileToNpm(e.folder, e.name, e.content);
+      }
+    }
+    for (Object[] u : replay.fragmentUses) {
+      PublisherBase.FragmentUseRecord frag = pf.fragmentUses.get((String) u[0]);
+      if (frag == null) {
+        frag = new PublisherBase.FragmentUseRecord();
+        pf.fragmentUses.put((String) u[0], frag);
+      }
+      frag.record((Long) u[1], (Long) u[2]);
+    }
+    for (Map.Entry<Integer, Resource> e : converted.entrySet()) {
+      f.getResources().get(e.getKey()).setResource(e.getValue());
+    }
+    redoRenderingChanges(f);
+    return true;
+  }
+
+  private StructureDefinitionRenderer structureDefinitionRenderer(StructureDefinition sd, RenderingContext lrc, String lang) throws IOException {
+    String structureDefinitionImageFolder = lang == null ? Utilities.path(this.pf.tempDir) : Utilities.path(this.pf.tempDir, lang);
+    StructureDefinitionRenderer sdr = new StructureDefinitionRenderer(this.pf.context, this.pf.packageId(), checkAppendSlash(this.pf.specPath), sd, structureDefinitionImageFolder, this.pf.igpkp, this.pf.specMaps, pageTargets(), this.pf.markdownEngine, this.pf.packge, this.pf.fileList, lrc, this.pf.allInvariants, this.pf.sdMapCache, this.pf.specPath, this.pf.versionToAnnotate, this.pf.relatedIGs, this);
+    sdr.setNoXigLink(this.pf.noXigLink);
+    sdr.setUsageCache(this.pf.sdUsageCache);
+    return sdr;
+  }
+
+  /**
+   * Rendering a profile's expansion fragment adds an empty type to its elements that have none (the root, for one),
+   * and all-profiles.csv and all-profiles.xlsx, made later from the same objects, show it. Do the same for a profile
+   * whose html came from the input cache
+   */
+  private void redoRenderingChanges(FetchedFile f) throws IOException {
+    for (FetchedResource r : f.getResources()) {
+      if (r.getResource() instanceof StructureDefinition && wantGen(r, "expansion")) {
+        structureDefinitionRenderer((StructureDefinition) r.getResource(), this.pf.rc.copy(true), null)
+          .expansion(this.pf.igpkp.getDefinitionsName(r), new HashSet<>(), "x");
       }
     }
   }
@@ -1585,6 +1667,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         fragment("ValueSet-"+prefixForContainer+vs.getId()+"-expansion", html, f.getOutputNames(), r, vars, null, start, "expansion", "ValueSet", lang);
       } else {
         ValueSetExpansionOutcome exp = this.pf.context.expandVS(new ExpansionOptions().withHierarchical(true).withLanguage(lrc.getLocale().getLanguage()).withIncompleteOk(true), vs);
+        if (pf.inputCache != null) {
+          // the expansion goes into package.db, and rendering it changes the object the terminology cache holds
+          pf.inputCache.noteUncacheable("value set expansion");
+        }
 
         if (db != null) {
           db.recordExpansion(vs, exp);
@@ -1848,10 +1934,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       fragmentError("StructureDefinition-"+prefixForContainer+sd.getId()+"-json-schema", "yet to be done: json schema as html", null, f.getOutputNames(), start, "json-schema", "StructureDefinition", lang);
     }
 
-    String structureDefinitionImageFolder = lang == null ? Utilities.path(this.pf.tempDir) : Utilities.path(this.pf.tempDir, lang);
-    StructureDefinitionRenderer sdr = new StructureDefinitionRenderer(this.pf.context, this.pf.packageId(), checkAppendSlash(this.pf.specPath), sd, structureDefinitionImageFolder, this.pf.igpkp, this.pf.specMaps, pageTargets(), this.pf.markdownEngine, this.pf.packge, this.pf.fileList, lrc, this.pf.allInvariants, this.pf.sdMapCache, this.pf.specPath, this.pf.versionToAnnotate, this.pf.relatedIGs, this);
-    sdr.setNoXigLink(this.pf.noXigLink);
-    sdr.setUsageCache(this.pf.sdUsageCache);
+    StructureDefinitionRenderer sdr = structureDefinitionRenderer(sd, lrc, lang);
 
     if (wantGen(r, "summary")) {
       long start = System.currentTimeMillis();
@@ -2491,6 +2574,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       pf.trackedFragments.put(id, new ArrayList<>());
     }
     pf.trackedFragments.get(id).add(name+".xhtml");
+    if (pf.inputCache != null) {
+      pf.inputCache.noteTrackedFragment(id, name+".xhtml");
+    }
     fragment(name, content+HTMLInspector.TRACK_PREFIX+id+HTMLInspector.TRACK_SUFFIX, outputTracker, null, null, null, start, code, context, lang);
   }
 
@@ -2506,11 +2592,18 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       frag = new PublisherBase.FragmentUseRecord();
       pf.fragmentUses.put(context+"."+code, frag);
     }
-    frag.record(System.currentTimeMillis() - start, fixedContent.length());
+    long time = System.currentTimeMillis() - start;
+    frag.record(time, fixedContent.length());
+    if (pf.inputCache != null) {
+      pf.inputCache.noteFragmentUse(context+"."+code, time, fixedContent.length());
+    }
 
     if (checkMakeFile(FileUtilities.stringToBytes(wrapLiquid(fixedContent)), Utilities.path(pf.tempDir, "_includes", name+(lang == null ? "" : "-" + lang)+".xhtml"), outputTracker)) {
       if (settings.getMode() != PublisherUtils.IGBuildMode.AUTOBUILD && pf.makeQA) {
         FileUtilities.stringToFile(pageWrap(fixedContent, name), Utilities.path(pf.qaDir, name+".html"));
+        if (pf.inputCache != null) {
+          pf.inputCache.noteFile(Utilities.path(pf.qaDir, name+".html"));
+        }
       }
     }
     // For multi-language IGs, also write a non-suffixed copy for the default language
@@ -4080,6 +4173,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
 
   private void addFileToNpm(NPMPackageGenerator.Category other, String name, byte[] cnt) throws IOException {
+    if (pf.inputCache != null) {
+      pf.inputCache.noteNpm(other.name(), null, name, cnt);
+    }
     pf.npm.addFile(other, name, cnt);
     for (NPMPackageGenerator vnpm : pf.vnpms.values()) {
       vnpm.addFile(other, name, cnt);
@@ -4087,6 +4183,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   private void addFileToNpm(String other, String name, byte[] cnt) throws IOException {
+    if (pf.inputCache != null) {
+      pf.inputCache.noteNpm(null, other, name, cnt);
+    }
     pf.npm.addFile(other, name, cnt);
     for (NPMPackageGenerator vnpm : pf.vnpms.values()) {
       vnpm.addFile(other, name, cnt);
@@ -6364,6 +6463,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
 
   private String processSQLCommand(DBBuilder db, String src, FetchedFile f) throws FHIRException, IOException {
+    if (pf.inputCache != null) {
+      pf.inputCache.noteUncacheable("sql");
+    }
     long start = System.currentTimeMillis();
     String output = db == null ? "<span style=\"color: maroon\" data-fhir=\"generated\">No SQL this build</span>" : db.processSQL(src);
     int i = this.pf.sqlIndex++;
@@ -6478,6 +6580,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   private String processSQLData(DBBuilder db, String src, FetchedFile f) throws FHIRException, IOException {
+    if (pf.inputCache != null) {
+      pf.inputCache.noteUncacheable("sql");
+    }
     long start = System.currentTimeMillis();
 
     if (db == null) {

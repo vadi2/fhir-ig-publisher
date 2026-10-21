@@ -424,6 +424,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       log("Generating Outputs in "+ pf.outputDir);
       Map<String, String> uncsList = scanForUnattributedCodeSystems();
       generator.generate();
+      if (pf.inputCache != null) {
+        pf.inputCache.finish();
+      }
       clean();
       pf.dependentIgFinder.finish(pf.outputDir, pf.sourceIg.present());
       List<FetchedResource> fragments = new ArrayList<>();
@@ -1953,6 +1956,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         if (source != null) {
           source.addFoundExample(example);
           example.getFoundProfiles().add(profile.getUrl());
+          if (pf.inputCache != null) {
+            pf.inputCache.noteFoundExample(source, example, profile.getUrl());
+          }
         }
       }
     }

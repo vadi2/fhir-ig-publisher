@@ -100,8 +100,14 @@ public class PublisherProcessor extends PublisherBase  {
     generateNarratives(false);
     if (!settings.isValidationOff()) {
       log("Validating Conformance Resources");
+      if (pf.inputCache != null) {
+        pf.inputCache.startPhase(InputCache.PHASE_CONFORMANCE);
+      }
       for (String s : metadataResourceNames()) {
         validate(s);
+      }
+      if (pf.inputCache != null) {
+        pf.inputCache.endPhase();
       }
     }
 
@@ -503,6 +509,9 @@ public class PublisherProcessor extends PublisherBase  {
     checkURLsUnique();
     checkOIDsUnique();
 
+    if (pf.inputCache != null) {
+      pf.inputCache.startPhase(InputCache.PHASE_VALIDATION);
+    }
     for (FetchedFile f : pf.changeList) {
       f.start("validate");
       try {
@@ -542,6 +551,9 @@ public class PublisherProcessor extends PublisherBase  {
       } finally {
         f.finish("validate");
       }
+    }
+    if (pf.inputCache != null) {
+      pf.inputCache.endPhase();
     }
     logDebugMessage(LogCategory.PROGRESS, " .. check Profile Examples");
     logDebugMessage(LogCategory.PROGRESS, "gen narratives");
@@ -1725,6 +1737,33 @@ public class PublisherProcessor extends PublisherBase  {
     r.getElement().setUserData(UserDataNames.pub_context_resource, r);
     pf.validator.setExample(r.isExample());
     pf.validationFetcher.setIgnoreIdCardinalityError(ignoreIdCardinalityError);
+    InputCache.Step cached = pf.inputCache == null ? null : pf.inputCache.beginValidation(file, r, ignoreIdCardinalityError);
+    if (cached != null && cached.replay()) {
+      if (!r.isValidateAsResource()) {
+        // a flag on the validator that stays set for the next resource (a hit is never one of the Binary cases)
+        pf.validator.setNoCheckAggregation(r.isExample() && ExtensionUtilities.readBoolExtension(r.getResEntry(), "http://hl7.org/fhir/tools/StructureDefinition/igpublisher-no-check-aggregation"));
+      }
+      pf.inputCache.replayValidation(cached, errs);
+    } else {
+      boolean ok = false;
+      try {
+        validateResource(file, r, errs, cached);
+        ok = true;
+      } finally {
+        if (cached != null) {
+          pf.inputCache.endValidation(cached, ok ? errs : null);
+        }
+      }
+    }
+    processValidationOutcomes(file, r, errs);
+    r.setValidated(true);
+    if (r.getConfig() == null) {
+      pf.igpkp.findConfiguration(file, r);
+    }
+    tts.end();
+  }
+
+  private void validateResource(FetchedFile file, FetchedResource r, List<ValidationMessage> errs, InputCache.Step cached) throws Exception {
     if (r.isValidateAsResource()) {
       Resource res = r.getResource();
       if (res instanceof Bundle) {
@@ -1742,9 +1781,15 @@ public class PublisherProcessor extends PublisherBase  {
     } else if (r.getResource() != null && r.getResource() instanceof Binary && file.getLogical() != null && pf.context.hasResource(StructureDefinition.class, file.getLogical())) {
       StructureDefinition sd = pf.context.fetchResource(StructureDefinition.class, file.getLogical());
       Binary bin = (Binary) r.getResource();
+      if (cached != null) {
+        cached.uncacheable("binary");
+      }
       validate(file, r, errs, bin, sd);
     } else if (r.getResource() != null && r.getResource() instanceof Binary && r.getExampleUri() != null) {
       Binary bin = (Binary) r.getResource();
+      if (cached != null) {
+        cached.uncacheable("binary");
+      }
       validate(file, r, errs, bin);
     } else {
       pf.validator.setNoCheckAggregation(r.isExample() && ExtensionUtilities.readBoolExtension(r.getResEntry(), "http://hl7.org/fhir/tools/StructureDefinition/igpublisher-no-check-aggregation"));
@@ -1758,12 +1803,6 @@ public class PublisherProcessor extends PublisherBase  {
       }
       validate(file, r, errs, profiles);
     }
-    processValidationOutcomes(file, r, errs);
-    r.setValidated(true);
-    if (r.getConfig() == null) {
-      pf.igpkp.findConfiguration(file, r);
-    }
-    tts.end();
   }
 
   private void processValidationOutcomes(FetchedFile file, FetchedResource r, List<ValidationMessage> errs) {

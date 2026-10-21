@@ -1318,6 +1318,7 @@ public class PublisherIGLoader extends PublisherBase {
     else
       pf.extensionTracker.setoptIn(!ini.getBooleanProperty("IG", "usage-stats-opt-out"));
 
+    pf.inputCache = InputCache.create(pf, settings, ini, this::log);
     log("Initialization complete");
   }
 

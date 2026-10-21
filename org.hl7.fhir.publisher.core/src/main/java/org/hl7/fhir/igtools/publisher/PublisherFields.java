@@ -309,6 +309,8 @@ public class PublisherFields {
     boolean noXigLink;
 
     int sqlIndex = 0;
+    /** the cache of validation and html work from earlier builds; null when it's off */
+    InputCache inputCache;
 
     boolean isSushi;
 

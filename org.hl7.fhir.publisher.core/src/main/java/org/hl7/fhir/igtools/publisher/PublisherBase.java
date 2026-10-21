@@ -301,6 +301,9 @@ public class PublisherBase implements ILoggingService {
     if (!pf.allOutputs.add(s))
       throw new Error("Error generating build: the file "+path+" is being generated more than once (may differ by case)");
     outputTracker.add(path);
+    if (pf.inputCache != null) {
+      pf.inputCache.noteOutput(s, path);
+    }
 
     File f = new CSFile(path);
     File folder = new File(FileUtilities.getDirectoryForFile(f));
