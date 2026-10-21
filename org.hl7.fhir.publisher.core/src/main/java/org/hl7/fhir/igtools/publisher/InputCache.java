@@ -1005,8 +1005,13 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
 
   private void mismatch(Step s, String why) {
     mismatches++;
-    log.accept("INPUT CACHE MISMATCH: " + s.description + " (" + s.key.substring(0, 12) + "): " + why + ". The entry is dropped");
-    store.delete(s.key);
+    try {
+      store.delete(s.key);
+      log.accept("INPUT CACHE MISMATCH: " + s.description + " (" + s.key.substring(0, 12) + "): " + why + ". The entry is dropped");
+    } catch (IOException e) {
+      log.accept("INPUT CACHE MISMATCH: " + s.description + " (" + s.key.substring(0, 12) + "): " + why + ". UNABLE TO DROP THE ENTRY (" + e
+        + "): delete " + store.getFolder() + " before the next build");
+    }
   }
 
   private void checkProbe(Step s) {
@@ -1555,7 +1560,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     long t = System.nanoTime();
     try {
       String k = txKey(kind, token);
-      if (!s.own.contains(k)) {
+      if (!s.own.contains(k) && !s.reads.containsKey(k)) {
         Map<String, String> deps = result == null ? null : transientAnswers.get(k);
         if (deps == null) {
           s.read(k, digest(result));
@@ -1614,7 +1619,10 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       return;
     }
     try {
-      s.read("txr:" + kind + SEP + canonical, digest(result));
+      String k = "txr:" + kind + SEP + canonical;
+      if (!s.reads.containsKey(k)) {
+        s.read(k, digest(result));
+      }
     } catch (InputCacheDigest.TooLarge e) {
       s.uncacheable("terminology resource too large to digest");
     }
@@ -1653,20 +1661,20 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   }
 
   @Override
-  public void setWhole(String set, Collection<String> content) {
+  public void setWhole(InputCacheRecordingSet set) {
     Step s = recording();
     if (s == null) {
       return;
     }
     for (String[] a : s.setAdds) {
-      if (a[0].equals(set)) {
-        s.uncacheable("whole set read after an addition: " + set);
+      if (a[0].equals(set.getName())) {
+        s.uncacheable("whole set read after an addition: " + set.getName());
         return;
       }
     }
-    List<String> l = new ArrayList<>(content);
-    Collections.sort(l);
-    s.read("setall:" + set, InputCacheDigest.of(l.toArray(new String[0])));
+    if (!s.reads.containsKey("setall:" + set.getName())) {
+      s.read("setall:" + set.getName(), evaluate("setall:" + set.getName()));
+    }
   }
 
   @Override
@@ -1684,7 +1692,10 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       return;
     }
     try {
-      s.read("map:" + map + SEP + key, present ? digest(value) : ABSENT);
+      String k = "map:" + map + SEP + key;
+      if (!s.reads.containsKey(k)) {
+        s.read(k, present ? digest(value) : ABSENT);
+      }
     } catch (InputCacheDigest.TooLarge e) {
       s.uncacheable("map value too large to digest");
     }

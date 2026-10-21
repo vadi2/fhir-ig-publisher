@@ -335,8 +335,10 @@ class InputCacheTest {
     }
 
     @Override
-    public void setWhole(String set, Collection<String> content) {
-      events.add("whole " + new java.util.TreeSet<>(content));
+    public void setWhole(InputCacheRecordingSet set) {
+      java.util.TreeSet<String> content = new java.util.TreeSet<>();
+      set.forEachQuietly(content::add);
+      events.add("whole " + content);
     }
 
     @Override

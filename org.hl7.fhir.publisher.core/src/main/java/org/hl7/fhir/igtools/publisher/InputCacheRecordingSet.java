@@ -25,8 +25,8 @@ public class InputCacheRecordingSet extends HashSet<String> {
 
     void setAdd(String set, String value, boolean added);
 
-    /** something read the whole set (its size, or its members) */
-    void setWhole(String set, Collection<String> content);
+    /** something read the whole set (its size, or its members): the listener reads it with forEachQuietly if it needs to */
+    void setWhole(InputCacheRecordingSet set);
 
     void setOther(String set, String operation);
   }
@@ -59,11 +59,14 @@ public class InputCacheRecordingSet extends HashSet<String> {
 
   /** each member, without telling the listener (to check a recorded read) */
   public void forEachQuietly(Consumer<? super String> action) {
-    quietCopy().forEach(action);
+    Iterator<String> it = super.iterator();
+    while (it.hasNext()) {
+      action.accept(it.next());
+    }
   }
 
   private void whole() {
-    listener.setWhole(name, new HashSet<>(this.quietCopy()));
+    listener.setWhole(this);
   }
 
   private Collection<String> quietCopy() {

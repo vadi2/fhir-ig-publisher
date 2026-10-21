@@ -119,12 +119,8 @@ public class InputCacheStore {
     }
   }
 
-  public void delete(String key) {
-    try {
-      Files.deleteIfExists(entryFile(key).toPath());
-    } catch (IOException e) {
-      // a later write replaces it anyway
-    }
+  public void delete(String key) throws IOException {
+    Files.deleteIfExists(entryFile(key).toPath());
   }
 
   static byte[] wrap(byte[] payload) throws IOException {
