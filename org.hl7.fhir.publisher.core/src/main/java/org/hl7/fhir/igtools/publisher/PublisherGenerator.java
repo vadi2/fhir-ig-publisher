@@ -4229,6 +4229,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       return;
     }
     String out = new File(pf.outputDir).getAbsolutePath();
+    int all = stashed.size();
     List<String> back = new ArrayList<>();
     for (String f : stashed) {
       if (jekyllDriver.isAsWritten(out, f)) {
@@ -4241,8 +4242,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         fresh.remove(Paths.get(out, f).toString());
       }
     }
-    log("Jekyll: put back the html-checked versions of " + back.size() + " of the " + (back.size() + stashed.size())
-        + " files written again for the template's check");
+    log("Jekyll: put back the html-checked versions of " + back.size() + " of the " + all + " files written again for the template's check");
   }
 
   private void dropCheckedStash() throws IOException {
