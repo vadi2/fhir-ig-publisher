@@ -3412,7 +3412,7 @@ public class StructureDefinitionRenderer extends CanonicalRenderer {
       return candidate.getBaseList().size() < existing.getBaseList().size();
     }
     // still a tie (e.g. the same parameter in the core spec and in the extensions package): the context lists its
-    // resources in no fixed order, so pick on the url and then the later version, or the page changes from build to build
+    // resources in no fixed order, so pick on the url and then the version (compared as text), or the page changes from build to build
     int c = compareNullable(candidate.getUrl(), existing.getUrl());
     return c != 0 ? c < 0 : compareNullable(candidate.getVersion(), existing.getVersion()) > 0;
   }
