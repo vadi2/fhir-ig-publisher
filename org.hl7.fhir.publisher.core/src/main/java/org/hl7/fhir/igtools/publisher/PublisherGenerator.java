@@ -4103,8 +4103,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   /**
    * Watch mode: runs Jekyll in the Jekyll that stays running between builds (see JekyllDriver). In a page rebuild, if
    * it's still running for this site, it renders just what depends on the pages written again (and, if the template
-   * has a check script, which may look at the output, the files changed since Jekyll wrote them). Returns null if it did; else
-   * Jekyll is to be run as usual, and the result is "" if the driver can't be used, or how it failed
+   * has a check script, which may look at the output, writes again the files changed since Jekyll wrote them).
+   * Returns null if it did; else Jekyll is to be run as usual, and the result is "" if the driver can't be used, or
+   * how it failed
    */
   private String runJekyllDriver(boolean pageRebuild) {
     TimeTracker.Session tts = pf.tt.start("jekyll");
@@ -4129,7 +4130,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           if (!again.isOk()) {
             res = again;
           } else if (!again.getWritten().isEmpty()) {
-            log("Jekyll: wrote " + again.getWritten().size() + " output files that changed after it wrote them again, for the template's check");
+            log("Jekyll: wrote " + again.getWritten().size() + " output files again that had changed since it wrote them, for the template's check");
             List<String> all = new ArrayList<>(res.getWritten());
             all.addAll(again.getWritten());
             res = res.withWritten(all);
