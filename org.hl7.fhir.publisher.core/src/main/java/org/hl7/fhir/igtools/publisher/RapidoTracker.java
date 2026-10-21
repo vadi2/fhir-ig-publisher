@@ -816,7 +816,7 @@ public class RapidoTracker {
     // changes what it says later (see buildState())
     Map<String, Set<String>> state = buildState();
     JsonObject saved = rv.getJsonObject("state");
-    if (saved == null) {
+    if (saved == null || !isReplayable(saved)) {
       return null;
     }
     for (Map.Entry<String, Set<String>> e : state.entrySet()) {
@@ -857,6 +857,9 @@ public class RapidoTracker {
           added.add(v);
         }
       }
+    }
+    if (!isReplayable(state)) {
+      return;
     }
     JsonArray msgs = rv.forceArray("messages");
     for (ValidationMessage vm : errs) {
@@ -988,6 +991,20 @@ public class RapidoTracker {
     }
   }
 
+  /**
+   * Whether a validation that changed the build state like this can be reused, with only the state replayed. Not if the
+   * terminology server said it doesn't know a code system: the validator kept the server's answer in its terminology
+   * cache, in memory only, and later codes from that system get that answer from there (with the server's message ids),
+   * not the shorter one the validator gives for a system it knows is unsupported. Replaying the state can't put the
+   * answer back in the cache, so the resource is validated again each build.
+   *
+   * @param state what recordValidation() saves: for each set in buildState(), what it was before and what was added
+   */
+  static boolean isReplayable(JsonObject state) {
+    JsonObject s = state.getJsonObject("unsupportedCodeSystems");
+    return s != null && s.forceArray("added").size() == 0;
+  }
+
   /** the parts of buildState() that change what the validator says, not only what the build does after validation */
   private static final Set<String> ORDERED_STATE = new HashSet<>(Arrays.asList("statusWarnings", "unsupportedCodeSystems"));
 
@@ -998,7 +1015,8 @@ public class RapidoTracker {
    *   <li>statusWarnings (BaseValidator): the deprecated, withdrawn, retired and experimental definitions the validator
    *   has already mentioned in this build; it only mentions each one the first time</li>
    *   <li>unsupportedCodeSystems (BaseWorkerContext): the code systems the terminology server said it doesn't know;
-   *   the first code from one is checked on the server (and its message has a message id), later ones aren't</li>
+   *   the first code from one is checked on the server (and its message has a message id), later ones aren't
+   *   (unless the server's answer is in the cache: see isReplayable())</li>
    *   <li>codeSystemsUsed (BaseWorkerContext): what the IG uses, which the build checks after validation (e.g. for
    *   SNOMED CT's edition); it doesn't change what the validator says</li>
    * </ul>

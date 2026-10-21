@@ -521,6 +521,28 @@ class RapidoDependencyAnalyserTest {
     assertNull(RapidoTracker.readSet(null, "hidden"));
   }
 
+  private static JsonObject state(String set, String... added) {
+    JsonObject res = new JsonObject();
+    JsonObject s = res.forceObject(set);
+    s.add("before", "h");
+    JsonArray a = s.forceArray("added");
+    for (String v : added) {
+      a.add(v);
+    }
+    return res;
+  }
+
+  @Test
+  void aValidationThatFoundAnUnsupportedCodeSystemIsDoneAgain() {
+    // the server's answer is in the terminology cache, in memory only: replaying the state can't put it back
+    assertFalse(RapidoTracker.isReplayable(state("unsupportedCodeSystems", "http://example.org/cs")));
+    assertTrue(RapidoTracker.isReplayable(state("unsupportedCodeSystems")));
+    JsonObject both = state("unsupportedCodeSystems");
+    both.add("codeSystemsUsed", state("codeSystemsUsed", "http://loinc.org").getJsonObject("codeSystemsUsed"));
+    assertTrue(RapidoTracker.isReplayable(both));
+    assertFalse(RapidoTracker.isReplayable(state("codeSystemsUsed")));
+  }
+
   /** what Rapido saves goes through its JSON file */
   private static class JsonParserRoundTrip {
     static JsonArray of(JsonArray a) {
