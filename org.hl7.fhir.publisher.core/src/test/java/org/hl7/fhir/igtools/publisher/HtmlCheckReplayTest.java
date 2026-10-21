@@ -9,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
@@ -113,7 +114,12 @@ class HtmlCheckReplayTest {
     assertNotNull(records, first.getRecordsNotUsable());
     assertTrue(all.stream().anyMatch(s -> s.contains("missing.html")), all.toString());
 
-    // nothing written since: everything is put back
+    // nothing written since (a file moved away and back, as watch mode does while the template's check runs, still
+    // counts as the one checked): everything is put back
+    Path a = Paths.get(abs("a.html"));
+    Path aside = dir.resolve("a.aside");
+    Files.move(a, aside);
+    Files.move(aside, a);
     HTMLInspector second = inspector();
     second.recordChecks(records, new HashSet<>(), rewriter);
     assertEquals(all, check(second));
