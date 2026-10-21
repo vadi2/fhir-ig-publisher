@@ -307,7 +307,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       for (FetchedFile f : pf.changeList) {
         f.start("generate2");
         try {
-          InputCache.Step cached = pf.inputCache == null || settings.isGenerationOff() ? null : pf.inputCache.beginHtml(f, isNewML());
+          InputCache.Step cached = pf.inputCache == null || settings.isGenerationOff() ? null : pf.inputCache.beginHtml(f);
           if (cached != null && cached.replay() && replayHtmlOutputs(f, cached)) {
             // done
           } else {
@@ -2612,6 +2612,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       String unsuffixedPath = Utilities.path(pf.tempDir, "_includes", name+".xhtml");
       if (!pf.allOutputs.contains(unsuffixedPath.toLowerCase())) {
         FileUtilities.bytesToFile(FileUtilities.stringToBytes(wrapLiquid(fixedContent)), unsuffixedPath);
+        if (pf.inputCache != null) {
+          pf.inputCache.noteFile(unsuffixedPath);
+        }
       }
     }
   }

@@ -1,5 +1,6 @@
 package org.hl7.fhir.igtools.publisher;
 
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.Field;
@@ -25,9 +26,12 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Consumer;
+import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 
 import org.hl7.fhir.model.core.DateTimeType;
 import org.hl7.fhir.services.context.IWorkerContext;
+import org.hl7.fhir.services.renderers.utils.RenderingContext;
 import org.hl7.fhir.services.elementmodel.Element;
 import org.hl7.fhir.services.terminology.CacheToken;
 import org.hl7.fhir.standalone.context.BaseWorkerContext;
@@ -133,6 +137,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
    * with the terminology reads the step had made by then: a later step that uses one depends on those instead
    */
   private final Map<String, Map<String, String>> transientAnswers = new HashMap<>();
+  private boolean anchorsUnwatched;
   /** why lookups that found an entry didn't hit: the first recorded read that had changed, by kind */
   private final Map<String, Integer> changed = new TreeMap<>();
   private long overheadNanos;
@@ -248,6 +253,25 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     sets.put(rsUsed.getName(), rsUsed);
     sets.put(rsStatus.getName(), rsStatus);
     maps.put("supported", rmSupported);
+  }
+
+  /**
+   * The rendering context's anchors are shared by every copy of it, so rendering one file can depend on what was
+   * rendered before (an anchor that's already there isn't written again). Called when the context is made, before it
+   * is copied, so that every copy shares the recording set
+   */
+  public void watchAnchors(RenderingContext rc) {
+    try {
+      Field f = field(RenderingContext.class, "anchors");
+      @SuppressWarnings("unchecked")
+      Set<String> anchors = (Set<String>) f.get(rc);
+      InputCacheRecordingSet rs = new InputCacheRecordingSet("anchors", anchors, this);
+      f.set(rc, rs);
+      sets.put(rs.getName(), rs);
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      log.accept("Input cache: html not cached, unable to watch the rendering context: " + e);
+      anchorsUnwatched = true;
+    }
   }
 
   private static Field field(Class<?> c, String name) throws NoSuchFieldException {
@@ -654,11 +678,11 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   }
 
   /** the html fragments (and the other files) of one file. Null when it isn't cached */
-  public Step beginHtml(FetchedFile f, boolean multiLanguage) {
-    if (!PHASE_HTML.equals(phase)) {
+  public Step beginHtml(FetchedFile f) {
+    if (!PHASE_HTML.equals(phase) || anchorsUnwatched) {
       return null;
     }
-    if (multiLanguage || f.getProcessMode() == FetchedFile.PROCESS_NONE || f.getProcessMode() == FetchedFile.PROCESS_XSLT) {
+    if (f.getProcessMode() == FetchedFile.PROCESS_NONE || f.getProcessMode() == FetchedFile.PROCESS_XSLT) {
       // pages are rendered from the files themselves, which aren't in the inputs digest
       return null;
     }
@@ -1221,7 +1245,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       for (int i = 0; i < n; i++) {
         Rec a = recs.get(i);
         Rec b = other.recs.get(i);
-        if (!a.tag.equals(b.tag) || !a.a.equals(b.a) || !Arrays.equals(a.b, b.b)) {
+        if (!a.tag.equals(b.tag) || !a.a.equals(b.a) || !(Arrays.equals(a.b, b.b) || sameArchive(a.b, b.b))) {
           return "record " + i + ": stored " + a.tag + " " + a.a.replace(SEP, "|") + " (" + len(a.b) + " bytes), now " + b.tag + " " + b.a.replace(SEP, "|") + " (" + len(b.b) + " bytes)"
             + firstDifference(a.b, b.b);
         }
@@ -1231,6 +1255,34 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
         return "stored " + recs.size() + " records, now " + other.recs.size() + " (first extra: " + x.tag + " " + x.a.replace(SEP, "|") + ")";
       }
       return null;
+    }
+
+    /**
+     * true if both are zip archives (an xlsx) with the same entries: the entries carry the time they were written,
+     * so two runs of the same step never write the same bytes
+     */
+    static boolean sameArchive(byte[] a, byte[] b) {
+      if (!isZip(a) || !isZip(b)) {
+        return false;
+      }
+      try (ZipInputStream za = new ZipInputStream(new ByteArrayInputStream(a)); ZipInputStream zb = new ZipInputStream(new ByteArrayInputStream(b))) {
+        while (true) {
+          ZipEntry ea = za.getNextEntry();
+          ZipEntry eb = zb.getNextEntry();
+          if (ea == null || eb == null) {
+            return ea == null && eb == null;
+          }
+          if (!ea.getName().equals(eb.getName()) || !Arrays.equals(za.readAllBytes(), zb.readAllBytes())) {
+            return false;
+          }
+        }
+      } catch (IOException e) {
+        return false;
+      }
+    }
+
+    private static boolean isZip(byte[] b) {
+      return b != null && b.length > 4 && b[0] == 'P' && b[1] == 'K' && b[2] == 3 && b[3] == 4;
     }
 
     private static int len(byte[] b) {
@@ -1702,7 +1754,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     "file.outputNames", "file.errors", "file.time", "file.statistics",
     "res*.errors", "res*.foundProfiles", "res*.foundExamples",
     // what the cache records itself: reads and additions are journaled, anything else makes the step uncacheable
-    "ctx.codeSystemsUsed", "ctx.unsupportedCodeSystems", "ctx.supportedCodeSystems", "val.statusWarnings", "ctx.txCache",
+    "ctx.codeSystemsUsed", "ctx.unsupportedCodeSystems", "ctx.supportedCodeSystems", "val.statusWarnings", "ctx.txCache", "pf.rc.anchors",
     // memos, worked out again when they're needed (the context's go with definitionsVersion)
     "ctx.analyses", "ctx.cachedResourceNames", "ctx.cachedResourceNameSet", "ctx.pluralRules", "val.profileUtilities.childMapCache", "val.cu.allStructuresList",
     // set up afresh for every resource the validator validates, and its timers
@@ -1710,7 +1762,9 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     // journaled: the validator's last profile
     "val.validationContext",
     // the codings the validator saw, only looked at for the IPS code check, which isn't cached
-    "val.codingObserver.list"
+    "val.codingObserver.list",
+    // set by the dependent IG finder's own thread when it's done, whatever step is running then
+    "pf.dependentIgFinder.working"
   ));
 
   private static final Map<Class<?>, List<Field>> FIELDS = new ConcurrentHashMap<>();

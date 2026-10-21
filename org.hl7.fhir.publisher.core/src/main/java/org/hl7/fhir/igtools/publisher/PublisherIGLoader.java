@@ -2524,6 +2524,9 @@ public class PublisherIGLoader extends PublisherBase {
     }
 
     pf.rc = new RenderingContext(pf.context, pf.rendererFactory, pf.markdownEngine, ValidationOptions.defaults(), checkAppendSlash(pf.specPath), "", locale, RenderingContext.ResourceRendererMode.TECHNICAL, RenderingContext.GenerationRules.IG_PUBLISHER);
+    if (pf.inputCache != null) {
+      pf.inputCache.watchAnchors(pf.rc);
+    }
     pf.rc.setTemplateProvider(pf.templateProvider);
     pf.rc.setServices(pf.validator.getExternalHostServices());
     pf.rc.setDestDir(Utilities.path(pf.tempDir));

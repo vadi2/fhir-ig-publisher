@@ -3408,7 +3408,17 @@ public class StructureDefinitionRenderer extends CanonicalRenderer {
     if (cLocal != eLocal) {
       return cLocal;
     }
-    return candidate.getBaseList().size() < existing.getBaseList().size();
+    if (candidate.getBaseList().size() != existing.getBaseList().size()) {
+      return candidate.getBaseList().size() < existing.getBaseList().size();
+    }
+    // still a tie (e.g. the same parameter in the core spec and in the extensions package): the context lists its
+    // resources in no fixed order, so pick on the url and then the later version, or the page changes from build to build
+    int c = compareNullable(candidate.getUrl(), existing.getUrl());
+    return c != 0 ? c < 0 : compareNullable(candidate.getVersion(), existing.getVersion()) > 0;
+  }
+
+  private static int compareNullable(String a, String b) {
+    return a == null ? (b == null ? 0 : -1) : b == null ? 1 : a.compareTo(b);
   }
 
   private boolean hasBase(SearchParameter sp, String type) {

@@ -397,4 +397,27 @@ class InputCacheTest {
     assertTrue(m.containsKeyQuietly("x"));
     assertEquals(Arrays.asList("read cs true yes", "read cs true yes", "read other false null", "other put", "other size"), events);
   }
+
+  @Test
+  void journalDifference_ignoresArchiveEntryTimes() throws Exception {
+    byte[] a = zip(1000000000000L, "x", "same");
+    byte[] b = zip(1100000000000L, "x", "same");
+    assertFalse(Arrays.equals(a, b));
+    assertTrue(InputCache.Journal.sameArchive(a, b));
+    assertFalse(InputCache.Journal.sameArchive(a, zip(1000000000000L, "x", "other")));
+    assertFalse(InputCache.Journal.sameArchive(a, zip(1000000000000L, "y", "same")));
+    assertFalse(InputCache.Journal.sameArchive("plain".getBytes(StandardCharsets.UTF_8), "plain".getBytes(StandardCharsets.UTF_8)));
+  }
+
+  private static byte[] zip(long time, String name, String content) throws Exception {
+    java.io.ByteArrayOutputStream bs = new java.io.ByteArrayOutputStream();
+    try (java.util.zip.ZipOutputStream z = new java.util.zip.ZipOutputStream(bs)) {
+      java.util.zip.ZipEntry e = new java.util.zip.ZipEntry(name);
+      e.setTime(time);
+      z.putNextEntry(e);
+      z.write(content.getBytes(StandardCharsets.UTF_8));
+      z.closeEntry();
+    }
+    return bs.toByteArray();
+  }
 }
