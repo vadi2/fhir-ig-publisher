@@ -4245,10 +4245,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     log("Jekyll: put back the html-checked versions of " + back.size() + " of the " + all + " files written again for the template's check");
   }
 
-  private void dropCheckedStash() throws IOException {
+  /** Deletes what stashChecked() kept aside (never throws: it runs in a finally, and must not hide why that ran) */
+  private void dropCheckedStash() {
     stashed.clear();
     if (checkedStash != null) {
-      FileUtils.deleteDirectory(checkedStash.toFile());
+      try {
+        FileUtils.deleteDirectory(checkedStash.toFile());
+      } catch (IOException e) {
+        log("Unable to delete " + checkedStash + ": " + e.getMessage());
+      }
       checkedStash = null;
     }
   }
