@@ -17,6 +17,9 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Function;
 
+import org.hl7.fhir.utilities.xhtml.XhtmlNode;
+import org.hl7.fhir.utilities.xhtml.XhtmlNodeList;
+
 /**
  * SHA-256 digests for the input cache: an incremental one over strings and bytes, and a deep one over an object graph.
  */
@@ -118,8 +121,13 @@ public class InputCacheDigest {
    * string, that is digested instead of the object (null: the object is walked as usual)
    */
   public static String deep(Object o, Function<Object, String> substitute) {
+    return deep(o, substitute, MAX_NODES);
+  }
+
+  /** as {@link #deep(Object, Function)}, giving up (with {@link TooLarge}) after maxNodes objects */
+  public static String deep(Object o, Function<Object, String> substitute, int maxNodes) {
     InputCacheDigest d = new InputCacheDigest();
-    new Walker(d, substitute).walk(o);
+    new Walker(d, substitute, maxNodes).walk(o);
     return d.finish();
   }
 
@@ -130,22 +138,29 @@ public class InputCacheDigest {
     }
   }
 
-  private static final int MAX_NODES = 500000;
+  /** the limit for state that may reach far more than it means to */
+  static final int MAX_NODES = 500000;
 
   private static class Walker {
     private final InputCacheDigest d;
     private final Function<Object, String> substitute;
     private final Map<Object, Integer> seen = new IdentityHashMap<>();
+    private final int maxNodes;
     private int nodes;
+    /** the fields the walk is in, so that a graph too large to digest says where it went */
+    private java.util.ArrayDeque<String> path = new java.util.ArrayDeque<>();
 
-    Walker(InputCacheDigest d, Function<Object, String> substitute) {
+    Walker(InputCacheDigest d, Function<Object, String> substitute, int maxNodes) {
       this.d = d;
       this.substitute = substitute;
+      this.maxNodes = maxNodes;
     }
 
     void walk(Object o) {
-      if (++nodes > MAX_NODES) {
-        throw new TooLarge("more than " + MAX_NODES + " objects");
+      if (++nodes > maxNodes) {
+        List<String> at = new ArrayList<>(path);
+        Collections.reverse(at);
+        throw new TooLarge("more than " + maxNodes + " objects, at " + String.join(" > ", at.subList(0, Math.min(at.size(), 40))));
       }
       if (o == null) {
         d.add("N");
@@ -209,6 +224,11 @@ public class InputCacheDigest {
         for (String s : parts) {
           d.add(s);
         }
+      } else if (o instanceof XhtmlNode) {
+        if (ref(o)) {
+          return;
+        }
+        xhtml((XhtmlNode) o);
       } else if (o instanceof org.hl7.fhir.services.context.IWorkerContext) {
         throw new TooLarge("reaches a worker context");
       } else if (c.getName().startsWith("org.hl7.fhir.")) {
@@ -224,7 +244,12 @@ public class InputCacheDigest {
               // the model creates its lists and elements when they're first asked for: an empty one is the same as none
               v = null;
             }
-            walk(v);
+            path.push(c.getSimpleName() + "." + f.getName());
+            try {
+              walk(v);
+            } finally {
+              path.pop();
+            }
           } catch (IllegalAccessException e) {
             d.add("?");
           }
@@ -234,11 +259,80 @@ public class InputCacheDigest {
       }
     }
 
+    /**
+     * a narrative, which can be tens of thousands of nodes: each node's fields are digested here, the attributes in
+     * the order they're written out in, so a node counts once rather than once a field
+     */
+    private void xhtml(XhtmlNode x) {
+      d.add("H");
+      for (Field f : fields(XhtmlNode.class)) {
+        Object v;
+        try {
+          v = f.get(x);
+        } catch (IllegalAccessException e) {
+          d.add("?");
+          continue;
+        }
+        if (v instanceof XhtmlNodeList) {
+          d.add("L");
+          for (Field lf : fields(XhtmlNodeList.class)) {
+            try {
+              Object lv = lf.get(v);
+              if (lv instanceof List) {
+                d.add(((List<?>) lv).size());
+                for (Object child : (List<?>) lv) {
+                  path.push("XhtmlNode." + f.getName());
+                  try {
+                    walk(child);
+                  } finally {
+                    path.pop();
+                  }
+                }
+              } else {
+                primitive(lv);
+              }
+            } catch (IllegalAccessException e) {
+              d.add("?");
+            }
+          }
+        } else if (v instanceof Map && f.getName().equals("attributes")) {
+          d.add("a").add(((Map<?, ?>) v).size());
+          for (Map.Entry<?, ?> e : ((Map<?, ?>) v).entrySet()) {
+            d.add(String.valueOf(e.getKey())).add(e.getValue() == null ? null : String.valueOf(e.getValue()));
+          }
+        } else if (!primitive(v)) {
+          path.push("XhtmlNode." + f.getName());
+          try {
+            walk(v instanceof Map && ((Map<?, ?>) v).isEmpty() ? null : v);
+          } finally {
+            path.pop();
+          }
+        }
+      }
+    }
+
+    /** digests a null, string, boolean, number or enum as walk would, without counting it; false if it's none of those */
+    private boolean primitive(Object v) {
+      if (v == null) {
+        d.add("N");
+      } else if (v instanceof String) {
+        d.add("S").add((String) v);
+      } else if (v instanceof Number || v instanceof Boolean || v instanceof Character) {
+        d.add(v.getClass().getName()).add(v.toString());
+      } else if (v instanceof Enum) {
+        d.add(v.getClass().getName()).add(((Enum<?>) v).name());
+      } else {
+        return false;
+      }
+      return true;
+    }
+
     /** a member of a set or map, digested on its own so the order of the members doesn't matter */
     private String sub(Object o) {
       InputCacheDigest sd = new InputCacheDigest();
-      Walker w = new Walker(sd, substitute);
+      Walker w = new Walker(sd, substitute, maxNodes);
       w.nodes = nodes;
+      w.path = path;
       w.walk(o);
       nodes = w.nodes;
       return sd.finish();

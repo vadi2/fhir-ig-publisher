@@ -191,16 +191,18 @@ class InputCacheReadsTest {
   }
 
   @Test
-  void inputs_aResourceTooLargeToDigestIsUndigestible_notTheSameEveryBuild() throws Exception {
+  void inputs_aLargeResourceIsDigested_pastTheLimitForOtherState() throws Exception {
     PublisherFields pf = ig();
     StructureDefinition sd = (StructureDefinition) pf.fileList.get(1).getResources().get(0).getResource();
+    String small = InputCacheInputs.of(pf, DATE).evaluate("r:/ig/input/b.json#0");
     for (int i = 0; i < 20000; i++) {
+      // well over InputCacheDigest.MAX_NODES objects
       sd.getDifferential().addElement().setPath("X.e" + i);
     }
-    InputCacheInputs in = InputCacheInputs.of(pf, DATE);
+    String large = InputCacheInputs.of(pf, DATE).evaluate("r:/ig/input/b.json#0");
 
-    assertTrue(in.evaluate("r:/ig/input/b.json#0").startsWith(InputCacheInputs.UNDIGESTIBLE), in.evaluate("r:/ig/input/b.json#0"));
-    assertFalse(in.evaluate("r:/ig/input/a.json#0").startsWith(InputCacheInputs.UNDIGESTIBLE));
+    assertFalse(large.startsWith(InputCacheInputs.UNDIGESTIBLE), large);
+    assertNotEquals(small, large);
   }
 
   @Test

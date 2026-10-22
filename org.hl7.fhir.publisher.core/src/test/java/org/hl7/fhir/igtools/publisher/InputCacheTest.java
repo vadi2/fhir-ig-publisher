@@ -404,10 +404,49 @@ class InputCacheTest {
   }
 
   @Test
+  void deepDigest_givesUpPastItsLimit_sayingWhereItWas() {
+    List<String> l = new ArrayList<>();
+    for (int i = 0; i < 100; i++) {
+      l.add("x" + i);
+    }
+    InputCacheDigest.TooLarge e = org.junit.jupiter.api.Assertions.assertThrows(InputCacheDigest.TooLarge.class, () -> InputCacheDigest.deep(new Set1(l), null, 50));
+    assertTrue(e.getMessage().contains("more than 50 objects, at Set1.s"), e.getMessage());
+    assertNotNull(InputCacheDigest.deep(new Set1(l), null, 200));
+  }
+
+  @Test
   void deepDigest_emptyFieldCollectionIsNone() {
     // a model object whose list was created by a getter digests as one whose list was never asked for
     assertEquals(InputCacheDigest.deep(new Set1(null)), InputCacheDigest.deep(new Set1(new ArrayList<>())));
     assertNotEquals(InputCacheDigest.deep(new Set1(null)), InputCacheDigest.deep(new Set1(Arrays.asList("x"))));
+  }
+
+  private static org.hl7.fhir.utilities.xhtml.XhtmlNode table(int rows, String cell) {
+    org.hl7.fhir.utilities.xhtml.XhtmlNode div = new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "div");
+    org.hl7.fhir.utilities.xhtml.XhtmlNode t = div.table("grid", false);
+    for (int i = 0; i < rows; i++) {
+      org.hl7.fhir.utilities.xhtml.XhtmlNode tr = t.tr();
+      tr.td().attribute("class", "a").attribute("style", "b").tx(cell + i);
+      tr.td().ah("#c" + i).tx("code " + i);
+    }
+    return div;
+  }
+
+  @Test
+  void deepDigest_aLargeNarrativeIsDigested_byItsContent() {
+    // a code system's narrative table: well over the object limit if every field of every node were walked
+    String a = InputCacheDigest.deep(table(40000, "x"));
+    assertEquals(a, InputCacheDigest.deep(table(40000, "x")));
+    assertNotEquals(a, InputCacheDigest.deep(table(40000, "y")));
+    org.hl7.fhir.utilities.xhtml.XhtmlNode p1 = new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "p");
+    p1.attribute("a", "1").attribute("b", "2");
+    org.hl7.fhir.utilities.xhtml.XhtmlNode p2 = new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "p");
+    p2.attribute("a", "1").attribute("b", "3");
+    assertNotEquals(InputCacheDigest.deep(p1), InputCacheDigest.deep(p2), "an attribute's value is part of the node");
+    org.hl7.fhir.utilities.xhtml.XhtmlNode p3 = new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "p");
+    p3.attribute("a", "1").attribute("b", "2");
+    p3.notPretty();
+    assertNotEquals(InputCacheDigest.deep(p1), InputCacheDigest.deep(p3), "a node's flags are part of it");
   }
 
   // ---- the recording set and map -----------------------------------------------------------------------------------------

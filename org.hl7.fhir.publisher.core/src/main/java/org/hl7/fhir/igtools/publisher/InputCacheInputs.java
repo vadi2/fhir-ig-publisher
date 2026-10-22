@@ -275,13 +275,19 @@ final class InputCacheInputs {
     d.add(")");
   }
 
+  /**
+   * the limit for a part of a resource, which is its own content: a code system of a few thousand concepts, with its
+   * designations in each language and its narrative, is millions of objects
+   */
+  static final int RESOURCE_MAX_NODES = 20_000_000;
+
   /** a deep digest of part of a resource: a package is digested by its id and version (its date is the build's) */
   private String deep(Object o) {
     if (o == null) {
       return null;
     }
     try {
-      return InputCacheDigest.deep(o, this::resourcePart);
+      return InputCacheDigest.deep(o, this::resourcePart, RESOURCE_MAX_NODES);
     } catch (InputCacheDigest.TooLarge e) {
       return UNDIGESTIBLE + e.getMessage();
     }
