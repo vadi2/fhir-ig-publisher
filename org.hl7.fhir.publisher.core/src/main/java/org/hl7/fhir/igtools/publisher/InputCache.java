@@ -36,32 +36,50 @@ import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
+import org.hl7.fhir.model.core.CanonicalResource;
+import org.hl7.fhir.model.core.CodeSystem;
 import org.hl7.fhir.model.core.DateTimeType;
+import org.hl7.fhir.model.core.PackageInformation;
+import org.hl7.fhir.model.core.Resource;
+import org.hl7.fhir.model.core.StructureDefinition;
+import org.hl7.fhir.model.core.ValueSet;
+import org.hl7.fhir.model.utilities.ImplicitValueSets;
+import org.hl7.fhir.services.conformance.profile.ProfileUtilities;
+import org.hl7.fhir.services.context.IResourceReadListener;
 import org.hl7.fhir.services.context.IWorkerContext;
 import org.hl7.fhir.services.renderers.utils.RenderingContext;
 import org.hl7.fhir.services.elementmodel.Element;
+import org.hl7.fhir.services.elementmodel.Property;
 import org.hl7.fhir.services.terminology.CacheToken;
 import org.hl7.fhir.standalone.context.BaseWorkerContext;
 import org.hl7.fhir.standalone.terminology.client.TerminologyClientContext;
 import org.hl7.fhir.standalone.terminology.client.TerminologyClientManager;
 import org.hl7.fhir.standalone.terminology.utilities.TerminologyCache;
 import org.hl7.fhir.utilities.IniFile;
+import org.hl7.fhir.utilities.UserDataNames;
 import org.hl7.fhir.utilities.Utilities;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.xhtml.HierarchicalTableGenerator;
-import org.hl7.fhir.utilities.xhtml.XhtmlComposer;
 import org.hl7.fhir.validation.BaseValidator;
+import org.hl7.fhir.validation.instance.InstanceValidator;
+import org.hl7.fhir.validation.instance.utils.CanonicalResourceLookupResult;
 
 /**
  * A cache of the publisher's own work, keyed on what the work read, for full builds of an IG that has been built
  * before (in the style of ccache's direct mode).
  *
  * <p>Two kinds of step are cached: the validation of one resource, and the html fragments of one file. A step's
- * entry holds what the step read (a digest of the IG's inputs as they stand when the step's phase starts, the
- * terminology cache entries it looked up, the warn-once sets it asked) and a journal of what it did (its messages,
- * the files it wrote, what it added to the build's registries). When every read is the same, the journal is replayed
- * instead of running the step. A step whose effects can't all be journaled (it asked the terminology server, ran SQL
- * against the package database, changed something the cache doesn't track) is not stored.
+ * entry holds what the step read and a journal of what it did (its messages, the files it wrote, what it added to the
+ * build's registries). When every read is the same, the journal is replayed instead of running the step. A step whose
+ * effects can't all be journaled (it asked the terminology server, ran SQL against the package database, changed
+ * something the cache doesn't track) is not stored.
+ *
+ * <p>What a step reads: what every step reads (K0: the publisher, the build's settings, the packages, and the files
+ * that aren't the IG's own; and the IG's set of files and resources, and the publisher's state, as they stand when
+ * the step's phase starts); its own file and resources; each of the IG's other resources it uses, at its content
+ * digest (the getters of {@link FetchedResource} and {@link FetchedFile} report reads, as do the worker context's
+ * lookups, and the memos the cache watches); the terminology cache entries it looked up; and the warn-once sets it
+ * asked. A lookup whose answer can't be traced to one of those makes the step uncacheable.
  *
  * <p>The entries are kept in input-cache/publisher-cache. Settings (system property, or the [IG] section of ig.ini):
  * <ul>
@@ -72,13 +90,14 @@ import org.hl7.fhir.validation.BaseValidator;
  * <li>fhir.igpublisher.input-cache.calibrate: logs every change to the state the cache watches, by name
  * </ul>
  */
-public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordingSet.Listener, InputCacheRecordingMap.Listener {
+public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordingSet.Listener, InputCacheRecordingMap.Listener, FetchedReads.Listener,
+  IResourceReadListener, InputCacheMemoMap.Listener {
 
   public static final String PHASE_CONFORMANCE = "conformance";
   public static final String PHASE_VALIDATION = "validation";
   public static final String PHASE_HTML = "html";
 
-  private static final String FORMAT = "publisher-input-cache-1";
+  private static final String FORMAT = "publisher-input-cache-2";
   private static final String ENTRY_MAGIC = "ICE1";
   private static final int MAX_VARIANTS = 4;
   private static final String SEP = "\u0001";
@@ -124,9 +143,14 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   private TerminologyCache realTx;
   /** the profile the validator last validated against: the messages it raises before it starts on a profile get it */
   private Field fValidationContext;
+  private PublisherSettings settings;
+  /** what every step reads: the publisher, the build's settings, the packages and the files that aren't the IG's own */
   private String k0;
   private String phase;
-  private String phaseDigest;
+  /** the IG's inputs as they stood when the phase started */
+  private InputCacheInputs inputs;
+  /** the terminology cache's value sets and code systems, by identity: what each was asked for as */
+  private final Map<Object, String> txOrigins = Collections.synchronizedMap(new IdentityHashMap<>());
   private Step current;
   private Thread thread;
   /** the cache is looking at the state itself (the probe reads the sizes of the sets it watches): not a step's read */
@@ -261,7 +285,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       throw new IllegalStateException("no terminology cache");
     }
     InputCacheTxCache tx = new InputCacheTxCache(new Object(), realTx, ctxt, this);
-    k0 = computeK0(settings);
+    this.settings = settings;
 
     InputCacheRecordingSet rsUnsupported = new InputCacheRecordingSet("unsupported", unsupported, this);
     InputCacheRecordingSet rsUsed = new InputCacheRecordingSet("used", used, this);
@@ -448,104 +472,152 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   }
 
   /**
-   * Starts a phase: works out the digest of the IG's inputs as they stand (every file, and every resource's content
-   * as loaded, after snapshots and narratives), which every step in the phase reads
+   * Starts a phase: works out the digests of the IG's inputs as they stand (each file, and each resource's content as
+   * loaded, after snapshots and narratives), which a step reads as it uses them, and starts listening for those reads
    */
   public void startPhase(String phase) {
     long t = System.nanoTime();
+    boolean was = probing;
+    probing = true;
     try {
       this.phase = phase;
-      this.phaseDigest = null;
-      this.phaseDigest = computePhaseDigest();
+      this.inputs = null;
+      if (k0 == null) {
+        // worked out once the IG is loaded, so that the IG's own files (pages too) are left out by path: what's in
+        // them is read with them
+        k0 = computeK0(settings);
+        t = spent("settings digest", t);
+      }
+      inputs = InputCacheInputs.of(pf, buildDate);
+      watchMemos();
+      t = spent("phase inputs", t);
+      if (calibrate) {
+        calibrateFields();
+        t = spent("calibration", t);
+      }
+      FetchedReads.setListener(this);
+      pf.context.setResourceReadListener(this);
     } catch (Exception | StackOverflowError e) {
       log.accept("Input cache: not used for the " + phase + " phase: " + e);
-      this.phase = null;
+      endPhase();
     } finally {
-      spent("phase digests", t);
+      probing = was;
+      spent("phase inputs", t);
     }
   }
 
   /** steps outside a phase aren't cached */
   public void endPhase() {
     phase = null;
-    phaseDigest = null;
+    inputs = null;
+    FetchedReads.setListener(null);
+    pf.context.setResourceReadListener(null);
   }
 
-  private String computePhaseDigest() throws Exception {
-    InputCacheDigest d = new InputCacheDigest();
-    d.add(k0).add(phase);
-    for (FetchedFile f : pf.fileList) {
-      d.add("F").add(f.getPath()).add(f.getName()).add(f.getProcessMode()).add(f.getContentType()).add(f.getLogical()).add(f.isFolder());
-      if (!f.isFolder()) {
-        try {
-          d.bytes(f.getSource());
-        } catch (Error e) {
-          d.add("dropped");
-        }
-      }
-      for (FetchedFile.Output o : f.getOutputs()) {
-        d.add("O").add(o.getRelativePath()).add(o.getProcessMode()).bytes(o.getXslt());
-      }
-      d.add(messagesDigest(f.getErrors()));
-      for (FetchedResource r : f.getResources()) {
-        d.add("R").add(r.fhirType()).add(r.getId()).add(r.getTitle()).add(r.getResourceName()).add(r.getResourceDescription())
-          .add(r.isExample()).add(r.getExampleUri()).add(r.getPath()).add(r.getLocalRef()).add(r.isValidated())
-          .add(r.isValidateAsResource()).add(r.isCustomResource()).add(r.getConfig() == null ? null : r.getConfig().toString());
-        for (String s : r.getProfiles(false)) {
-          d.add("p").add(s);
-        }
-        for (String s : r.getTestArtifacts()) {
-          d.add("t").add(s);
-        }
-        d.add(messagesDigest(r.getErrors()));
-        Element e = r.getElement();
-        if (e != null) {
-          d.add("(").add(e.getName()).add(e.fhirType());
-          for (String c : e.getComments()) {
-            d.add("c").add(c);
-          }
-          for (Element c : e.getChildList()) {
-            if ("date".equals(c.getName()) && buildDate.equals(c.getValue())) {
-              // stamped by the loader because the source has no date: the same input every build
-              d.add("(build date)");
-            } else {
-              scan(c, d);
-            }
-          }
-          d.add(")");
-        }
-      }
-    }
-    d.add("errors").add(messagesDigest(pf.errors));
-    return d.finish();
-  }
-
-  private void scan(Element e, InputCacheDigest d) {
-    d.add("(").add(e.getName()).add(e.fhirType());
-    if (e.isXhtml()) {
-      d.add(e.getXhtml() == null ? e.getValue() : new XhtmlComposer(XhtmlComposer.XML).compose(e.getXhtml()));
-    } else if (e.hasValue()) {
-      d.add(e.getValue());
-    }
-    for (String c : e.getComments()) {
-      d.add("c").add(c);
-    }
-    if (e.hasChildren()) {
-      for (Element c : e.getChildList()) {
-        scan(c, d);
-      }
-    }
-    d.add(")");
-  }
-
-  private String messagesDigest(List<ValidationMessage> list) throws IOException {
-    InputCacheCodec.Out out = new InputCacheCodec.Out();
+  /** logs the fields in shape:pf that are different from the last build's (the calibrate setting) */
+  private void calibrateFields() {
+    File f = new File(store.getFolder(), "calibrate-" + phase + ".txt");
+    Map<String, String> before = new TreeMap<>();
     try {
-      out.messages(list);
-    } catch (InputCacheCodec.Unstorable e) {
-      throw new IOException(e.getMessage());
+      if (f.exists()) {
+        for (String line : Files.readAllLines(f.toPath(), StandardCharsets.UTF_8)) {
+          int i = line.indexOf('=');
+          if (i > 0) {
+            before.put(line.substring(0, i), line.substring(i + 1));
+          }
+        }
+      }
+      Map<String, String> now = new TreeMap<>();
+      for (Map.Entry<String, String> e : inputs.calibration().entrySet()) {
+        now.put(e.getKey().replace('\n', ' ').replace('=', '_'), String.valueOf(e.getValue()).replace('\n', ' '));
+      }
+      if (!before.isEmpty()) {
+        List<String> changed = InputCacheInputs.changed(before, now);
+        log.accept("Input cache: in the " + phase + " phase, " + changed.size() + " of the inputs are different from the last build's: "
+          + changed.subList(0, Math.min(60, changed.size())));
+      }
+      StringBuilder b = new StringBuilder();
+      for (Map.Entry<String, String> e : now.entrySet()) {
+        b.append(e.getKey()).append('=').append(e.getValue()).append('\n');
+      }
+      if (f.exists()) {
+        Files.move(f.toPath(), new File(store.getFolder(), "calibrate-" + phase + ".prev.txt").toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+      }
+      Files.write(f.toPath(), bytes(b.toString()));
+    } catch (IOException e) {
+      log.accept("Input cache: unable to compare the fields with the last build's: " + e);
     }
-    return InputCacheDigest.of(replace(out.toBytes(), buildDate, "(build date)"));
+  }
+
+  /**
+   * Memos of answers worked out before, which a step can use without making the reads that the answer was worked out
+   * from: each is replaced by one that tells the cache what the answer came from. The validator's lookups of profiles,
+   * the child maps and properties of the shared profile utilities, and the publisher's own
+   */
+  private void watchMemos() throws ReflectiveOperationException {
+    wrap(pf.validator, field(InstanceValidator.class, "crLookups"), "validator lookups",
+      (k, v) -> Arrays.asList(k, v == null ? null : ((CanonicalResourceLookupResult) v).getResource()));
+    Set<ProfileUtilities> pus = Collections.newSetFromMap(new IdentityHashMap<>());
+    pus.add((ProfileUtilities) field(InstanceValidator.class, "profileUtilities").get(pf.validator));
+    if (pf.rc != null) {
+      pus.add(pf.rc.getProfileUtilities());
+    }
+    if (pf.rcLangs != null) {
+      for (Object o : ((Map<?, ?>) field(RenderingContext.RenderingContextLangs.class, "langs").get(pf.rcLangs)).values()) {
+        pus.add(((RenderingContext) o).getProfileUtilities());
+      }
+    }
+    // the parsers' (each element's properties use the profile utilities of the parser that read it)
+    Field fpu = field(Property.class, "profileUtilities");
+    for (FetchedFile f : pf.fileList) {
+      for (FetchedResource r : f.getResources()) {
+        for (Element e : new Element[] {r.getElement(), r.getLogicalElement()}) {
+          if (e != null && e.getProperty() != null) {
+            pus.add((ProfileUtilities) fpu.get(e.getProperty()));
+          }
+        }
+      }
+    }
+    pus.remove(null);
+    Field fChildMap = field(ProfileUtilities.class, "childMapCache");
+    Field fProperties = field(ProfileUtilities.class, "propertyCache");
+    for (ProfileUtilities pu : pus) {
+      wrap(pu, fChildMap, "child maps", (k, v) -> Arrays.asList(urlOfKey((String) k, 3), v == null ? null : ((ProfileUtilities.SourcedChildDefinitions) v).getSource()));
+      wrap(pu, fProperties, "properties", (k, v) -> {
+        List<Object> res = new ArrayList<>();
+        res.add(urlOfKey((String) k, 0));
+        if (v != null) {
+          for (Object p : (List<?>) v) {
+            res.add(((Property) p).getStructure());
+          }
+        }
+        return res;
+      });
+    }
+    if (!(pf.sdMapCache instanceof InputCacheMemoMap)) {
+      pf.sdMapCache = new InputCacheMemoMap<>("element maps", pf.sdMapCache, (k, v) -> Collections.singletonList(k), this);
+    }
+    if (pf.sdUsageCache != null && !(pf.sdUsageCache instanceof InputCacheMemoMap)) {
+      // what each resource uses is worked out from the resource
+      pf.sdUsageCache = new InputCacheMemoMap<>("usages", pf.sdUsageCache, (k, v) -> Collections.singletonList(k), this);
+    }
+  }
+
+  @SuppressWarnings({"unchecked", "rawtypes"})
+  private void wrap(Object owner, Field f, String name, InputCacheMemoMap.Sources sources) throws IllegalAccessException {
+    Object m = f.get(owner);
+    if (m instanceof Map && !(m instanceof InputCacheMemoMap)) {
+      f.set(owner, new InputCacheMemoMap(name, (Map) m, sources, this));
+    }
+  }
+
+  /** the canonical URL (|version) a memo key starts with, after the prefix and up to the '#' */
+  static String urlOfKey(String key, int prefix) {
+    if (key == null || key.length() < prefix) {
+      return null;
+    }
+    int i = key.indexOf('#', prefix);
+    return i < 0 ? key.substring(prefix) : key.substring(prefix, i);
   }
 
   // ---- steps ----------------------------------------------------------------------------------------------------------
@@ -566,6 +638,10 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
 
     // what the run read and did
     private final Map<String, String> reads = new LinkedHashMap<>();
+    /** the parts of the IG's files and resources already read, by identity (a bit for each part) */
+    private final Map<Object, Integer> seen = new IdentityHashMap<>();
+    /** the lists the step has looked up in the worker context */
+    private final Set<String> queries = new HashSet<>();
     private final Set<String> own = new HashSet<>();
     private final List<String[]> setAdds = new ArrayList<>();
     private String uncacheable;
@@ -732,7 +808,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       return null;
     }
     if (f.getProcessMode() == FetchedFile.PROCESS_NONE || f.getProcessMode() == FetchedFile.PROCESS_XSLT) {
-      // pages are rendered from the files themselves, which aren't in the inputs digest
+      // pages: Jekyll renders them from the files themselves
       return null;
     }
     String key = InputCacheDigest.of(k0, "html", f.getPath());
@@ -798,10 +874,12 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   private void startRecording(Step s) throws IOException {
     current = s;
     thread = Thread.currentThread();
-    // every step reads the whole of the IG's inputs
-    s.read("ig", phaseDigest);
-    if ("val".equals(s.kind)) {
-      s.read("valctx", evaluate("valctx"));
+    boolean was = probing;
+    probing = true;
+    try {
+      startReads(s);
+    } finally {
+      probing = was;
     }
     s.probeBefore = probe(s.file);
     s.pfErrorsBefore = pf.errors.size();
@@ -822,6 +900,39 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       if (verifyFraction > 0 || calibrate) {
         s.tempBefore = listTree(pf.tempDir);
       }
+    }
+  }
+
+  /**
+   * What every step reads before it starts: the IG's set of files and resources, the publisher's state, and all of
+   * its own file and resources (as it reads them anyway, and writes their messages). The rest it reads as it goes
+   */
+  private void startReads(Step s) throws IOException {
+    for (String k : InputCacheInputs.SHAPES) {
+      s.read(k, inputs.evaluate(k));
+    }
+    String floc = inputs.locate(s.file);
+    if (floc == null) {
+      s.uncacheable("not one of the IG's files");
+      return;
+    }
+    for (String p : new String[] {InputCacheInputs.FILE, InputCacheInputs.FILE_ERRORS, InputCacheInputs.FILE_OUTPUTS}) {
+      s.read(p + floc, inputs.evaluate(p + floc));
+    }
+    for (FetchedResource r : s.file.getResources()) {
+      String loc = inputs.locate(r);
+      for (String p : new String[] {InputCacheInputs.CONTENT, InputCacheInputs.ERRORS, InputCacheInputs.FOUND, InputCacheInputs.VALIDATED}) {
+        s.read(p + loc, inputs.evaluate(p + loc));
+      }
+      // the definition it was loaded with, when that is one of the IG's (a logical model)
+      Element e = r.getElement();
+      String sloc = e == null || e.getProperty() == null ? null : inputs.locateObject(e.getProperty().getStructure());
+      if (sloc != null) {
+        s.read(InputCacheInputs.CONTENT + sloc, inputs.evaluate(InputCacheInputs.CONTENT + sloc));
+      }
+    }
+    if ("val".equals(s.kind)) {
+      s.read("valctx", evaluate("valctx"));
     }
   }
 
@@ -947,23 +1058,21 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   }
 
   private FetchedResource resource(String path, int index) {
-    for (FetchedFile f : pf.fileList) {
-      if (path.equals(f.getPath())) {
-        return f.getResources().get(index);
-      }
+    FetchedResource r = inputs.resource(path + "#" + index);
+    if (r == null) {
+      throw new IllegalStateException("no resource " + path + "#" + index);
     }
-    throw new IllegalStateException("no file " + path);
+    return r;
   }
 
   /** the file path and index of the resource, or null if it isn't one of the IG's */
   private String locate(FetchedResource r) {
-    for (FetchedFile f : pf.fileList) {
-      int i = f.getResources().indexOf(r);
-      if (i >= 0 && f.getPath() != null) {
-        return f.getPath() + SEP + i;
-      }
+    String loc = inputs.locate(r);
+    if (loc == null) {
+      return null;
     }
-    return null;
+    int i = loc.lastIndexOf('#');
+    return loc.substring(0, i) + SEP + loc.substring(i + 1);
   }
 
   private void writeIfDifferent(String path, byte[] content) throws IOException {
@@ -1536,6 +1645,9 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   }
 
   private static String readKind(String key) {
+    if (key.startsWith("shape:")) {
+      return key;
+    }
     int i = key.indexOf(':');
     if (i < 0) {
       return key;
@@ -1546,9 +1658,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
 
   private String evaluate(String key) {
     try {
-      if ("ig".equals(key)) {
-        return phaseDigest;
-      } else if ("date".equals(key)) {
+      if ("date".equals(key)) {
         return today;
       } else if ("valctx".equals(key)) {
         Object v = fValidationContext.get(pf.validator);
@@ -1602,8 +1712,19 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
           return "?";
         }
         return map.containsKeyQuietly(p[1]) ? digest(map.getQuietly(p[1])) : ABSENT;
+      } else if (inputs != null) {
+        boolean was = probing;
+        probing = true;
+        try {
+          String v = inputs.evaluate(key);
+          if (v != null) {
+            return v;
+          }
+        } finally {
+          probing = was;
+        }
       }
-    } catch (RuntimeException | IllegalAccessException e) {
+    } catch (RuntimeException | IllegalAccessException | IOException e) {
       return "?" + e;
     }
     return "?";
@@ -1692,6 +1813,11 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
 
   @Override
   public void txResourceRead(String kind, String canonical, Object result) {
+    if (result instanceof TerminologyCache.SourcedValueSet && ((TerminologyCache.SourcedValueSet) result).getVs() != null) {
+      txOrigins.put(((TerminologyCache.SourcedValueSet) result).getVs(), kind + SEP + canonical);
+    } else if (result instanceof TerminologyCache.SourcedCodeSystem && ((TerminologyCache.SourcedCodeSystem) result).getCs() != null) {
+      txOrigins.put(((TerminologyCache.SourcedCodeSystem) result).getCs(), kind + SEP + canonical);
+    }
     Step s = recording();
     if (s == null) {
       return;
@@ -1703,6 +1829,238 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       }
     } catch (InputCacheDigest.TooLarge e) {
       s.uncacheable("terminology resource too large to digest");
+    }
+  }
+
+  // ---- reads of the IG's files and resources, and lookups in the worker context ------------------------------------------
+
+  private static final int FILE_BITS = FetchedReads.ResourcePart.values().length;
+
+  @Override
+  public void resourceRead(FetchedResource r, FetchedReads.ResourcePart part) {
+    Step s = recording();
+    if (s == null || !firstRead(s, r, part.ordinal())) {
+      return;
+    }
+    String loc = inputs.locate(r);
+    if (loc == null) {
+      s.uncacheable("read a resource that isn't one of the IG's: " + r.fhirType() + "/" + r.getId());
+      return;
+    }
+    switch (part) {
+      case CONTENT:
+        readInput(s, InputCacheInputs.CONTENT + loc);
+        break;
+      case ERRORS:
+        readInput(s, InputCacheInputs.ERRORS + loc);
+        break;
+      case FOUND:
+        readInput(s, InputCacheInputs.FOUND + loc);
+        break;
+      default:
+        readInput(s, InputCacheInputs.VALIDATED + loc);
+        break;
+    }
+  }
+
+  @Override
+  public void fileRead(FetchedFile f, FetchedReads.FilePart part) {
+    Step s = recording();
+    if (s == null || !firstRead(s, f, FILE_BITS + part.ordinal())) {
+      return;
+    }
+    String loc = inputs.locate(f);
+    if (loc == null) {
+      s.uncacheable("read a file that isn't one of the IG's: " + f.getName());
+      return;
+    }
+    switch (part) {
+      case CONTENT:
+        readInput(s, InputCacheInputs.FILE + loc);
+        break;
+      case ERRORS:
+        readInput(s, InputCacheInputs.FILE_ERRORS + loc);
+        break;
+      default:
+        readInput(s, InputCacheInputs.FILE_OUTPUTS + loc);
+        break;
+    }
+  }
+
+  /** whether this is the step's first read of this part of the object (the getters are called often) */
+  private static boolean firstRead(Step s, Object o, int bit) {
+    Integer m = s.seen.get(o);
+    int bits = m == null ? 0 : m;
+    if ((bits & (1 << bit)) != 0) {
+      return false;
+    }
+    s.seen.put(o, bits | (1 << bit));
+    return true;
+  }
+
+  /** records the read of one of the IG's inputs, at its value now */
+  private void readInput(Step s, String k) {
+    if (s.reads.containsKey(k)) {
+      return;
+    }
+    boolean was = probing;
+    probing = true;
+    try {
+      s.read(k, inputs.evaluate(k));
+    } catch (IOException | RuntimeException e) {
+      s.uncacheable("unable to digest " + k + ": " + e);
+    } finally {
+      probing = was;
+    }
+  }
+
+  @Override
+  public void resourceRead(String type, String canonical, String version, Resource result) {
+    Step s = recording();
+    if (s != null && result != null) {
+      long t = System.nanoTime();
+      resultRead(s, result, type + " " + canonical + (version == null ? "" : "|" + version));
+      spent("context reads", t);
+    }
+  }
+
+  @Override
+  public void resourcesRead(String query, List<? extends Resource> result) {
+    Step s = recording();
+    if (s != null && result != null && s.queries.add(query)) {
+      long t = System.nanoTime();
+      for (Resource r : result) {
+        if (r != null) {
+          resultRead(s, r, query);
+          if (s.uncacheable != null) {
+            break;
+          }
+        }
+      }
+      spent("context reads", t);
+    }
+  }
+
+  /**
+   * What a lookup's answer is: one of the IG's resources (the step reads it), a package's (the packages are in K0),
+   * one the terminology cache had (the step reads that), or an implicit value set (made from its URL). Anything else
+   * can't be told apart from one build to the next
+   */
+  private void resultRead(Step s, Resource res, String what) {
+    String loc = inputs.locateObject(res);
+    if (loc != null) {
+      readInput(s, InputCacheInputs.CONTENT + loc);
+      return;
+    }
+    PackageInformation p = res.getSourcePackage();
+    if (p != null && p != pf.packageInfo) {
+      return;
+    }
+    String origin = txOrigins.get(res);
+    if (origin == null && res.hasUserData(UserDataNames.render_external_link)) {
+      // from the terminology cache before the cache was installed: it's still there, by URL
+      origin = txOrigin(res);
+    }
+    if (origin != null) {
+      String k = "txr:" + origin;
+      if (!s.reads.containsKey(k)) {
+        s.read(k, evaluate(k));
+      }
+      return;
+    }
+    if (p == null && generated(res)) {
+      return;
+    }
+    if (res instanceof CanonicalResource) {
+      CanonicalResource cr = (CanonicalResource) res;
+      if (cr.hasUrl() && !res.hasUserData(UserDataNames.render_external_link)) {
+        if (res instanceof ValueSet && IMPLICIT.isImplicitValueSet(cr.getUrl())) {
+          return;
+        }
+        String l = cr.hasVersion() ? inputs.locateUrl(cr.getUrl() + "|" + cr.getVersion()) : null;
+        if (l == null) {
+          l = inputs.locateUrl(cr.getUrl());
+        }
+        if (l != null) {
+          readInput(s, InputCacheInputs.CONTENT + l);
+          return;
+        }
+      }
+    }
+    s.uncacheable("looked up a resource that can't be traced: " + what + " found " + res.fhirType() + "/" + res.getIdBase()
+      + (res instanceof CanonicalResource ? " " + ((CanonicalResource) res).getVUrl() : ""));
+  }
+
+  private static final ImplicitValueSets IMPLICIT = new ImplicitValueSets(null);
+  private static final String BASE_DEFINITION = "http://hl7.org/fhir/StructureDefinition/Base";
+  private static final java.util.regex.Pattern XVER_EXTENSION = java.util.regex.Pattern.compile("http://hl7\\.org/fhir/[0-9.]+/StructureDefinition/extension-.*");
+
+  /**
+   * whether the worker context made the definition itself, from the FHIR version and its own data: the base
+   * definition, and the cross-version extensions it makes when they're used
+   */
+  static boolean generated(Resource res) {
+    if (!(res instanceof StructureDefinition)) {
+      return false;
+    }
+    String url = ((StructureDefinition) res).getUrl();
+    return BASE_DEFINITION.equals(url) || (url != null && XVER_EXTENSION.matcher(url).matches());
+  }
+
+  /** the terminology cache's key for a value set or code system it holds, or null */
+  private String txOrigin(Resource res) {
+    if (!(res instanceof CanonicalResource) || !((CanonicalResource) res).hasUrl()) {
+      return null;
+    }
+    CanonicalResource cr = (CanonicalResource) res;
+    List<String> keys = new ArrayList<>();
+    if (cr.hasVersion()) {
+      keys.add(cr.getUrl() + "|" + cr.getVersion());
+    }
+    keys.add(cr.getUrl());
+    for (String k : keys) {
+      if (res instanceof ValueSet && realTx.hasValueSet(k)) {
+        return "gvs" + SEP + k;
+      } else if (res instanceof CodeSystem && realTx.hasCodeSystem(k)) {
+        return "gcs" + SEP + k;
+      }
+    }
+    return null;
+  }
+
+  @Override
+  public void memoHit(String memo, Collection<?> sources) {
+    Step s = recording();
+    if (s == null) {
+      return;
+    }
+    for (Object o : sources) {
+      if (o == null) {
+        continue;
+      } else if (o instanceof String) {
+        // a canonical URL: one of the IG's, or a package's
+        String l = inputs.locateUrl((String) o);
+        if (l != null) {
+          readInput(s, InputCacheInputs.CONTENT + l);
+        }
+      } else if (o instanceof Resource) {
+        resultRead(s, (Resource) o, "memo " + memo);
+      } else {
+        String l = inputs.locateObject(o);
+        if (l == null) {
+          s.uncacheable("memo " + memo + ": an answer worked out from something that can't be traced (" + o.getClass().getSimpleName() + ")");
+          return;
+        }
+        readInput(s, InputCacheInputs.CONTENT + l);
+      }
+    }
+  }
+
+  @Override
+  public void memoOther(String memo, String operation) {
+    Step s = recording();
+    if (s != null) {
+      s.uncacheable("memo " + memo + ": " + operation);
     }
   }
 
@@ -1858,13 +2216,15 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     "file.outputNames", "file.errors", "file.time", "file.statistics",
     "res*.errors", "res*.foundProfiles", "res*.foundExamples",
     // what the cache records itself: reads and additions are journaled, anything else makes the step uncacheable
-    "ctx.codeSystemsUsed", "ctx.unsupportedCodeSystems", "ctx.supportedCodeSystems", "val.statusWarnings", "ctx.txCache", "pf.rc.anchors",
+    "ctx.resourceReadListener", "ctx.codeSystemsUsed", "ctx.unsupportedCodeSystems", "ctx.supportedCodeSystems", "val.statusWarnings", "ctx.txCache", "pf.rc.anchors",
     // memos, worked out again when they're needed (the context's go with definitionsVersion)
     "ctx.analyses", "ctx.cachedResourceNames", "ctx.cachedResourceNameSet", "ctx.pluralRules", "val.profileUtilities.childMapCache", "val.cu.allStructuresList",
     // set up afresh for every resource the validator validates, and its timers
     "val.start", "val.executionId", "val.fetchCache", "val.resourceTracker", "val.timeTracker.*",
     // journaled: the validator's last profile
     "val.validationContext",
+    // memos that tell the cache what their answers were worked out from
+    "val.crLookups",
     // the codings the validator saw, only looked at for the IPS code check, which isn't cached
     "val.codingObserver.list",
     // set by the dependent IG finder's own thread as it works, whatever step is running then
@@ -1983,6 +2343,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
 
   /** logs what the cache did, and keeps it under its size limit */
   public void finish() {
+    endPhase();
     writer.shutdown();
     try {
       if (!writer.awaitTermination(10, TimeUnit.MINUTES)) {

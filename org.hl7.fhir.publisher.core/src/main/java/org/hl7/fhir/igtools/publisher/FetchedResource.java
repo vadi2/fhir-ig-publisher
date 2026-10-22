@@ -27,9 +27,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
-import lombok.Getter;
 import lombok.Setter;
 import org.hl7.fhir.convertors.misc.ProfileVersionAdaptor.ConversionMessage;
+import org.hl7.fhir.igtools.publisher.FetchedReads.ResourcePart;
 import org.hl7.fhir.services.context.IWorkerContext;
 import org.hl7.fhir.services.elementmodel.Element;
 import org.hl7.fhir.model.extensions.ExtensionUtilities;
@@ -90,7 +90,7 @@ public class FetchedResource {
   private boolean regenAfterValidation;
   private Map<String, AlternativeVersionResource> otherVersions;
   private boolean umlGenerated;
-  @Getter @Setter private boolean generatedNarrative; // if we generate the narrative, we'll regenerate it later
+  @Setter private boolean generatedNarrative; // if we generate the narrative, we'll regenerate it later
 
   public FetchedResource(String nameForErrors) {
     super();
@@ -98,6 +98,7 @@ public class FetchedResource {
   }
 
   public Resource getResource() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return resource;
   }
 
@@ -106,6 +107,7 @@ public class FetchedResource {
   }
   
   public Element getElement() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return element;
   }
   
@@ -131,10 +133,12 @@ public class FetchedResource {
   }
   
   public Boolean hasTitle() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return title != null;
   }
   
   public String getTitle() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return title == null ? type+"/" + id : title;
   }
   
@@ -144,6 +148,7 @@ public class FetchedResource {
   }
   
   public JsonObject getConfig() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return config;
   }
   
@@ -152,6 +157,7 @@ public class FetchedResource {
   }
   
   public boolean isValidated() {
+    FetchedReads.read(this, ResourcePart.VALIDATED);
     return validated;
   }
   
@@ -163,6 +169,7 @@ public class FetchedResource {
     List<String> res = new ArrayList<>();
     res.addAll(statedProfiles);
     if (!statedOnly) {
+      FetchedReads.read(this, ResourcePart.FOUND);
       res.addAll(foundProfiles);
     }
     return res;
@@ -173,6 +180,7 @@ public class FetchedResource {
   }
   
   public List<String> getFoundProfiles() {
+    FetchedReads.read(this, ResourcePart.FOUND);
     return foundProfiles;
   }
   
@@ -181,6 +189,7 @@ public class FetchedResource {
   }
   
   public boolean isSnapshotted() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return snapshotted;
   }
   
@@ -205,6 +214,7 @@ public class FetchedResource {
   }  
 
   public HashSet<FetchedResource> getFoundExamples() {
+    FetchedReads.read(this, ResourcePart.FOUND);
     return foundExamples;
   }  
 
@@ -213,6 +223,7 @@ public class FetchedResource {
   }
   
   public HashSet<FetchedResource> getStatedExamples() {
+    FetchedReads.read(this, ResourcePart.FOUND);
     return statedExamples;
   }  
 
@@ -233,6 +244,7 @@ public class FetchedResource {
    * @return
    */
   public ImplementationGuideDefinitionResourceComponent getResEntry() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return resEntry;
   }
   public boolean isValidateAsResource() {
@@ -242,18 +254,22 @@ public class FetchedResource {
     this.validateAsResource = validateAsResource;
   }
   public List<ProvenanceDetails> getAudits() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return audits;
   }
   public boolean hasHistory() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return !audits.isEmpty();
   }
 
 
   public List<ValidationMessage> getErrors() {
+    FetchedReads.read(this, ResourcePart.ERRORS);
     return errors;
   }
   
   public boolean getProvenance() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return this.isProvenance;
   }
 
@@ -285,6 +301,7 @@ public class FetchedResource {
   }
 
   public HashSet<FetchedResource> getFoundTestPlans() {
+    FetchedReads.read(this, ResourcePart.FOUND);
     return foundTestPlans;
   }
 
@@ -296,10 +313,12 @@ public class FetchedResource {
   }
 
   public boolean hasFoundTestPlans() {
+    FetchedReads.read(this, ResourcePart.FOUND);
     return !foundTestPlans.isEmpty();
   }
 
   public HashSet<FetchedResource> getFoundTestScripts() {
+    FetchedReads.read(this, ResourcePart.FOUND);
     return foundTestScripts;
   }
 
@@ -311,6 +330,7 @@ public class FetchedResource {
   }
 
   public boolean hasFoundTestScripts() {
+    FetchedReads.read(this, ResourcePart.FOUND);
     return !foundTestScripts.isEmpty();
   }
 
@@ -328,6 +348,7 @@ public class FetchedResource {
   }
 
   public Element getLogicalElement() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return logicalElement;
   }
 
@@ -336,6 +357,7 @@ public class FetchedResource {
   }
 
   public boolean isHasTranslations() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return hasTranslations;
   }
 
@@ -344,6 +366,7 @@ public class FetchedResource {
   }
 
   public String getContentType() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     switch (element.getFormat()) {
     case FML: return "application/fhir+fml";
     case JSON: return "application/fhir+json";
@@ -361,6 +384,7 @@ public class FetchedResource {
   }
 
   public String getResourceName() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return resourceName;
   }
 
@@ -369,6 +393,7 @@ public class FetchedResource {
   }
 
   public String getResourceDescription() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return resourceDescription;
   }
 
@@ -377,6 +402,7 @@ public class FetchedResource {
   }
 
   public String getBestName() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     if (resourceName != null && resourceName.contains(" ")) {
       return resourceName;
     } else {
@@ -385,6 +411,7 @@ public class FetchedResource {
   }
 
   public boolean isRegenAfterValidation() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return regenAfterValidation;
   }
 
@@ -441,6 +468,7 @@ public class FetchedResource {
   }
 
   public Map<String, AlternativeVersionResource> getOtherVersions() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     if (otherVersions == null) {
       otherVersions = new HashMap<String, FetchedResource.AlternativeVersionResource>();
     }
@@ -448,10 +476,17 @@ public class FetchedResource {
   }
 
   public boolean hasOtherVersions() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return otherVersions != null && !otherVersions.isEmpty();
   }
 
+  public boolean isGeneratedNarrative() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
+    return generatedNarrative;
+  }
+
   public boolean isUmlGenerated() {
+    FetchedReads.read(this, ResourcePart.CONTENT);
     return umlGenerated;
   }
 

@@ -15,6 +15,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.function.Function;
 
 /**
  * SHA-256 digests for the input cache: an incremental one over strings and bytes, and a deep one over an object graph.
@@ -104,12 +105,21 @@ public class InputCacheDigest {
    * field, recursively. Lists keep their order; sets and maps are digested as the sorted digests of their members,
    * since their iteration order can depend on identity hash codes. Shared and cyclic references are digested by their
    * position in the walk, so the same graph always gives the same digest. A field holding an empty collection or map
-   * digests as one holding null. {@code userData} fields (the model's annotations) are left out. Objects of other
+   * digests as one holding null, and so does one holding an empty element of the model. {@code userData} fields
+   * (the model's annotations) and model contexts are left out. Objects of other
    * library classes (anything outside java.lang/java.util and org.hl7.fhir) are digested by class name only.
    */
   public static String deep(Object o) {
+    return deep(o, null);
+  }
+
+  /**
+   * The same, but the substitute function is asked first about each object of a org.hl7.fhir class: when it returns a
+   * string, that is digested instead of the object (null: the object is walked as usual)
+   */
+  public static String deep(Object o, Function<Object, String> substitute) {
     InputCacheDigest d = new InputCacheDigest();
-    new Walker(d).walk(o);
+    new Walker(d, substitute).walk(o);
     return d.finish();
   }
 
@@ -124,11 +134,13 @@ public class InputCacheDigest {
 
   private static class Walker {
     private final InputCacheDigest d;
+    private final Function<Object, String> substitute;
     private final Map<Object, Integer> seen = new IdentityHashMap<>();
     private int nodes;
 
-    Walker(InputCacheDigest d) {
+    Walker(InputCacheDigest d, Function<Object, String> substitute) {
       this.d = d;
+      this.substitute = substitute;
     }
 
     void walk(Object o) {
@@ -140,7 +152,10 @@ public class InputCacheDigest {
         return;
       }
       Class<?> c = o.getClass();
-      if (o instanceof String) {
+      String instead = substitute != null && c.getName().startsWith("org.hl7.fhir.") ? substitute.apply(o) : null;
+      if (instead != null) {
+        d.add("U").add(instead);
+      } else if (o instanceof String) {
         d.add("S").add((String) o);
       } else if (o instanceof Number || o instanceof Boolean || o instanceof Character) {
         d.add(c.getName()).add(o.toString());
@@ -204,8 +219,9 @@ public class InputCacheDigest {
         for (Field f : fields(c)) {
           try {
             Object v = f.get(o);
-            if ((v instanceof Collection && ((Collection<?>) v).isEmpty()) || (v instanceof Map && ((Map<?, ?>) v).isEmpty())) {
-              // the model creates its lists when they're first asked for: an empty one is the same as none
+            if ((v instanceof Collection && ((Collection<?>) v).isEmpty()) || (v instanceof Map && ((Map<?, ?>) v).isEmpty())
+              || (v instanceof org.hl7.fhir.model.core.Element && ((org.hl7.fhir.model.core.Element) v).isEmpty())) {
+              // the model creates its lists and elements when they're first asked for: an empty one is the same as none
               v = null;
             }
             walk(v);
@@ -221,7 +237,7 @@ public class InputCacheDigest {
     /** a member of a set or map, digested on its own so the order of the members doesn't matter */
     private String sub(Object o) {
       InputCacheDigest sd = new InputCacheDigest();
-      Walker w = new Walker(sd);
+      Walker w = new Walker(sd, substitute);
       w.nodes = nodes;
       w.walk(o);
       nodes = w.nodes;
@@ -245,7 +261,9 @@ public class InputCacheDigest {
       List<Field> res = new ArrayList<>();
       for (Class<?> t = k; t != null && t != Object.class; t = t.getSuperclass()) {
         for (Field f : t.getDeclaredFields()) {
-          if (Modifier.isStatic(f.getModifiers()) || Modifier.isTransient(f.getModifiers()) || f.getName().equals("userData") || f.isSynthetic()) {
+          // an element's model context is set when the element is first used, and isn't its content
+          if (Modifier.isStatic(f.getModifiers()) || Modifier.isTransient(f.getModifiers()) || f.getName().equals("userData") || f.isSynthetic()
+            || org.hl7.fhir.model.IModelContext.class.isAssignableFrom(f.getType())) {
             continue;
           }
           try {

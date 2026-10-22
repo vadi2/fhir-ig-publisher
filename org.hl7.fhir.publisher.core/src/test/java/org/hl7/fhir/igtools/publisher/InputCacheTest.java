@@ -392,6 +392,18 @@ class InputCacheTest {
   }
 
   @Test
+  void deepDigest_anElementsModelContextIsLeftOut() {
+    // validation gives an element a context when it first uses it; each context has its own number
+    String none = InputCacheDigest.deep(new org.hl7.fhir.model.core.StringType("x"));
+    String a = InputCacheDigest.deep(new org.hl7.fhir.model.core.StringType(new org.hl7.fhir.model.ModelContext(), "x"));
+    String b = InputCacheDigest.deep(new org.hl7.fhir.model.core.StringType(new org.hl7.fhir.model.ModelContext(), "x"));
+
+    assertEquals(a, b);
+    assertEquals(none, a);
+    assertNotEquals(a, InputCacheDigest.deep(new org.hl7.fhir.model.core.StringType(new org.hl7.fhir.model.ModelContext(), "y")));
+  }
+
+  @Test
   void deepDigest_emptyFieldCollectionIsNone() {
     // a model object whose list was created by a getter digests as one whose list was never asked for
     assertEquals(InputCacheDigest.deep(new Set1(null)), InputCacheDigest.deep(new Set1(new ArrayList<>())));

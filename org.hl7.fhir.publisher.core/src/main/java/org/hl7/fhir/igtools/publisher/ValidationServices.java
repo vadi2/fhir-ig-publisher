@@ -185,7 +185,8 @@ public class ValidationServices implements IValidatorResourceFetcher, IValidatio
       if (parts.length == 2) {
         for (FetchedFile f : files) {
           for (FetchedResource r : f.getResources()) {
-            if (r.getElement().fhirType().equals(parts[parts.length-2]) && r.getId().equals(parts[parts.length-1]))
+            // type and id first: reading the element is reading the resource
+            if (parts[parts.length-1].equals(r.getId()) && parts[parts.length-2].equals(r.fhirType()) && r.getElement() != null)
               return r.getElement();
           }
         }
@@ -195,7 +196,7 @@ public class ValidationServices implements IValidatorResourceFetcher, IValidatio
     if (Utilities.isAbsoluteUrl(url)) {
       for (FetchedFile f : files) {
         for (FetchedResource r : f.getResources()) {
-          if (r.getElement().fhirType().equals("Bundle")) {
+          if ("Bundle".equals(r.fhirType())) {
             for (Element be : r.getElement().getChildren("entry")) {
               Element ber = be.getNamedChild("resource");
               if (ber != null) {
