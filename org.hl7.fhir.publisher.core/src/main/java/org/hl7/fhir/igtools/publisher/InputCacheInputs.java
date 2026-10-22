@@ -61,6 +61,9 @@ final class InputCacheInputs {
   static final String FILE_ERRORS = "fe:";
   static final String FILE_OUTPUTS = "fo:";
 
+  /** what an input's value starts with when it can't be digested: a step that reads it isn't cached */
+  static final String UNDIGESTIBLE = "?undigestible: ";
+
   /**
    * The fields of {@link PublisherFields} left out of {@code shape:pf}. Each is one of: what a step adds to, which the
    * cache journals or records (errors, outputs, fragments, expansions, the npm packages, the memos); a service that
@@ -220,10 +223,15 @@ final class InputCacheInputs {
     InputCacheDigest d = new InputCacheDigest();
     d.add(r.hasTitle()).add(r.getTitle()).add(r.getResourceName()).add(r.getResourceDescription()).add(r.getConfig() == null ? null : r.getConfig().toString());
     d.add(r.isSnapshotted()).add(r.isHasTranslations()).add(r.isRegenAfterValidation()).add(r.isUmlGenerated()).add(r.isGeneratedNarrative()).add(r.getProvenance());
-    d.add(deep(r.getResEntry())).add(deep(r.getAudits())).add(r.hasOtherVersions() ? deep(r.getOtherVersions()) : null);
+    String[] parts = {deep(r.getResEntry()), deep(r.getAudits()), r.hasOtherVersions() ? deep(r.getOtherVersions()) : null, deep(r.getResource())};
+    for (String v : parts) {
+      if (v != null && v.startsWith(UNDIGESTIBLE)) {
+        return v;
+      }
+      d.add(v);
+    }
     element(r.getElement(), d);
     element(r.getLogicalElement(), d);
-    d.add(deep(r.getResource()));
     return d.finish();
   }
 
@@ -273,8 +281,7 @@ final class InputCacheInputs {
     try {
       return InputCacheDigest.deep(o, this::resourcePart);
     } catch (InputCacheDigest.TooLarge e) {
-      // the element scan has the content: what the resource has that the element hasn't can't be told apart
-      return "too large to digest";
+      return UNDIGESTIBLE + e.getMessage();
     }
   }
 
@@ -320,17 +327,21 @@ final class InputCacheInputs {
     shapes.put(SHAPE_FILES, d.finish());
     shapes.put(SHAPE_ERRORS, messagesDigest(pf.errors));
     InputCacheDigest p = new InputCacheDigest();
+    String undigestible = null;
     for (Field f : publisherFields()) {
       String v;
       try {
         v = fieldDigest(f.getName(), f.get(pf));
       } catch (IllegalAccessException | RuntimeException e) {
-        v = "unreadable: " + e.getClass().getName();
+        v = UNDIGESTIBLE + "unreadable: " + e;
+      }
+      if (v.startsWith(UNDIGESTIBLE) && undigestible == null) {
+        undigestible = UNDIGESTIBLE + f.getName() + ": " + v.substring(UNDIGESTIBLE.length());
       }
       pfFields.put(f.getName(), v);
       p.add(f.getName()).add(v);
     }
-    shapes.put(SHAPE_PF, p.finish());
+    shapes.put(SHAPE_PF, undigestible != null ? undigestible : p.finish());
   }
 
   private String locateOrNull(FetchedResource r) {
@@ -375,7 +386,7 @@ final class InputCacheInputs {
     try {
       return InputCacheDigest.deep(v, this::substitute);
     } catch (InputCacheDigest.TooLarge e) {
-      return "too large to digest: " + e.getMessage();
+      return UNDIGESTIBLE + e.getMessage();
     }
   }
 

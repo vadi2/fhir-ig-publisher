@@ -606,9 +606,13 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   @SuppressWarnings({"unchecked", "rawtypes"})
   private void wrap(Object owner, Field f, String name, InputCacheMemoMap.Sources sources) throws IllegalAccessException {
     Object m = f.get(owner);
-    if (m instanceof Map && !(m instanceof InputCacheMemoMap)) {
-      f.set(owner, new InputCacheMemoMap(name, (Map) m, sources, this));
+    if (m instanceof InputCacheMemoMap) {
+      return;
+    } else if (!(m instanceof Map)) {
+      // a memo the cache can't watch: its answers would be used without the reads they came from
+      throw new IllegalStateException("the " + name + " memo is " + (m == null ? "missing" : "a " + m.getClass().getName()));
     }
+    f.set(owner, new InputCacheMemoMap(name, (Map) m, sources, this));
   }
 
   /** the canonical URL (|version) a memo key starts with, after the prefix and up to the '#' */
@@ -907,9 +911,9 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
    * What every step reads before it starts: the IG's set of files and resources, the publisher's state, and all of
    * its own file and resources (as it reads them anyway, and writes their messages). The rest it reads as it goes
    */
-  private void startReads(Step s) throws IOException {
+  private void startReads(Step s) {
     for (String k : InputCacheInputs.SHAPES) {
-      s.read(k, inputs.evaluate(k));
+      readInput(s, k);
     }
     String floc = inputs.locate(s.file);
     if (floc == null) {
@@ -917,18 +921,18 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       return;
     }
     for (String p : new String[] {InputCacheInputs.FILE, InputCacheInputs.FILE_ERRORS, InputCacheInputs.FILE_OUTPUTS}) {
-      s.read(p + floc, inputs.evaluate(p + floc));
+      readInput(s, p + floc);
     }
     for (FetchedResource r : s.file.getResources()) {
       String loc = inputs.locate(r);
       for (String p : new String[] {InputCacheInputs.CONTENT, InputCacheInputs.ERRORS, InputCacheInputs.FOUND, InputCacheInputs.VALIDATED}) {
-        s.read(p + loc, inputs.evaluate(p + loc));
+        readInput(s, p + loc);
       }
       // the definition it was loaded with, when that is one of the IG's (a logical model)
       Element e = r.getElement();
       String sloc = e == null || e.getProperty() == null ? null : inputs.locateObject(e.getProperty().getStructure());
       if (sloc != null) {
-        s.read(InputCacheInputs.CONTENT + sloc, inputs.evaluate(InputCacheInputs.CONTENT + sloc));
+        readInput(s, InputCacheInputs.CONTENT + sloc);
       }
     }
     if ("val".equals(s.kind)) {
@@ -1906,7 +1910,12 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     boolean was = probing;
     probing = true;
     try {
-      s.read(k, inputs.evaluate(k));
+      String v = inputs.evaluate(k);
+      if (v != null && v.startsWith(InputCacheInputs.UNDIGESTIBLE)) {
+        s.uncacheable("unable to digest " + k + ": " + v.substring(InputCacheInputs.UNDIGESTIBLE.length()));
+      } else {
+        s.read(k, v);
+      }
     } catch (IOException | RuntimeException e) {
       s.uncacheable("unable to digest " + k + ": " + e);
     } finally {

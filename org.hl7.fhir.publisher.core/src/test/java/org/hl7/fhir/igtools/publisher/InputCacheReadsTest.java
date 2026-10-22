@@ -191,6 +191,19 @@ class InputCacheReadsTest {
   }
 
   @Test
+  void inputs_aResourceTooLargeToDigestIsUndigestible_notTheSameEveryBuild() throws Exception {
+    PublisherFields pf = ig();
+    StructureDefinition sd = (StructureDefinition) pf.fileList.get(1).getResources().get(0).getResource();
+    for (int i = 0; i < 20000; i++) {
+      sd.getDifferential().addElement().setPath("X.e" + i);
+    }
+    InputCacheInputs in = InputCacheInputs.of(pf, DATE);
+
+    assertTrue(in.evaluate("r:/ig/input/b.json#0").startsWith(InputCacheInputs.UNDIGESTIBLE), in.evaluate("r:/ig/input/b.json#0"));
+    assertFalse(in.evaluate("r:/ig/input/a.json#0").startsWith(InputCacheInputs.UNDIGESTIBLE));
+  }
+
+  @Test
   void inputs_theSetOfFilesIsTheShape() throws Exception {
     PublisherFields pf = ig();
     InputCacheInputs before = InputCacheInputs.of(pf, DATE);
