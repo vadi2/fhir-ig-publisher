@@ -543,6 +543,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       if (f.exists()) {
         Files.move(f.toPath(), new File(store.getFolder(), "calibrate-" + phase + ".prev.txt").toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING);
       }
+      Files.createDirectories(store.getFolder().toPath());
       Files.write(f.toPath(), bytes(b.toString()));
     } catch (IOException e) {
       log.accept("Input cache: unable to compare the fields with the last build's: " + e);

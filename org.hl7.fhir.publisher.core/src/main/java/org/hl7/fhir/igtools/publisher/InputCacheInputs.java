@@ -27,6 +27,8 @@ import org.hl7.fhir.model.core.Resource;
 import org.hl7.fhir.services.context.IWorkerContext;
 import org.hl7.fhir.services.elementmodel.Element;
 import org.hl7.fhir.services.elementmodel.Property;
+import org.hl7.fhir.services.renderers.utils.RenderingContext;
+import org.hl7.fhir.utilities.npm.NpmPackage;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.xhtml.XhtmlComposer;
 
@@ -327,7 +329,7 @@ final class InputCacheInputs {
     shapes.put(SHAPE_FILES, d.finish());
     shapes.put(SHAPE_ERRORS, messagesDigest(pf.errors));
     InputCacheDigest p = new InputCacheDigest();
-    String undigestible = null;
+    List<String> undigestible = new ArrayList<>();
     for (Field f : publisherFields()) {
       String v;
       try {
@@ -335,13 +337,13 @@ final class InputCacheInputs {
       } catch (IllegalAccessException | RuntimeException e) {
         v = UNDIGESTIBLE + "unreadable: " + e;
       }
-      if (v.startsWith(UNDIGESTIBLE) && undigestible == null) {
-        undigestible = UNDIGESTIBLE + f.getName() + ": " + v.substring(UNDIGESTIBLE.length());
+      if (v.startsWith(UNDIGESTIBLE)) {
+        undigestible.add(f.getName() + ": " + v.substring(UNDIGESTIBLE.length()));
       }
       pfFields.put(f.getName(), v);
       p.add(f.getName()).add(v);
     }
-    shapes.put(SHAPE_PF, undigestible != null ? undigestible : p.finish());
+    shapes.put(SHAPE_PF, undigestible.isEmpty() ? p.finish() : UNDIGESTIBLE + String.join("; ", undigestible));
   }
 
   private String locateOrNull(FetchedResource r) {
@@ -392,7 +394,7 @@ final class InputCacheInputs {
 
   /**
    * In shape:pf, the IG's own files and resources are digested by locator (and resource objects with their content
-   * digest), a package's resources by package and id, the build date as such, and the worker context not at all
+   * digest), packages and spec maps by id and version, a package's resources by package and id, the build date as such, and the worker context not at all
    */
   private String substitute(Object o) {
     if (o instanceof FetchedResource) {
@@ -403,8 +405,18 @@ final class InputCacheInputs {
       return loc == null ? otherFile((FetchedFile) o) : "file " + loc;
     } else if (o instanceof IWorkerContext) {
       return "context";
+    } else if (o instanceof RenderingContext) {
+      // a service, set up from the build's settings
+      return "rendering context";
     } else if (o instanceof PackageInformation) {
       return "package " + ((PackageInformation) o).getVID();
+    } else if (o instanceof NpmPackage) {
+      // what's in a package is in K0
+      return "npm " + ((NpmPackage) o).vid();
+    } else if (o instanceof SpecMapManager) {
+      // what a spec map lists comes from its package, which is in K0; the rest is what it's called and where it's published
+      SpecMapManager m = (SpecMapManager) o;
+      return "spec map " + m + " " + m.getKey() + " " + m.getAuth() + " " + m.getRealm() + " " + m.getSpecial();
     } else if (o instanceof BaseDateTimeType) {
       return resourcePart(o);
     }

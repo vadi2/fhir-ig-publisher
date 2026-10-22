@@ -296,6 +296,24 @@ class InputCacheReadsTest {
   }
 
   @Test
+  void inputs_aSpecMapIsItsPackageAndName_howeverMuchItLists() throws Exception {
+    PublisherFields pf = ig();
+    StringBuilder b = new StringBuilder("{\"targets\":[");
+    for (int i = 0; i < 510000; i++) {
+      b.append(i == 0 ? "" : ",").append("\"p").append(i).append(".html\"");
+    }
+    SpecMapManager m = new SpecMapManager(b.append("]}").toString().getBytes(java.nio.charset.StandardCharsets.UTF_8), "dep.pkg#1.0.0", "4.0.1");
+    m.setName("dep");
+    pf.specMaps.add(m);
+    String before = InputCacheInputs.of(pf, DATE).evaluate(InputCacheInputs.SHAPE_PF);
+    m.setName("other");
+    String renamed = InputCacheInputs.of(pf, DATE).evaluate(InputCacheInputs.SHAPE_PF);
+
+    assertFalse(before.startsWith(InputCacheInputs.UNDIGESTIBLE), before);
+    assertNotEquals(before, renamed);
+  }
+
+  @Test
   void inputs_aFolderOfPagesIsTheSameInputWhenOnlyItsTimeChanges() throws Exception {
     PublisherFields pf = ig();
     FetchedFile dir = new FetchedFile("pages");
