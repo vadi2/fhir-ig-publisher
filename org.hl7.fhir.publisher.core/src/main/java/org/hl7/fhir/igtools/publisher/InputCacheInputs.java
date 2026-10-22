@@ -394,7 +394,8 @@ final class InputCacheInputs {
 
   /**
    * In shape:pf, the IG's own files and resources are digested by locator (and resource objects with their content
-   * digest), packages and spec maps by id and version, a package's resources by package and id, the build date as such, and the worker context not at all
+   * digest), packages and spec maps by id and version, a package's resources by package and id, the build date as
+   * such, and the worker and rendering contexts not at all
    */
   private String substitute(Object o) {
     if (o instanceof FetchedResource) {
