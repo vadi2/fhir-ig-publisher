@@ -1165,6 +1165,14 @@ public class RapidoTracker {
   // ---- generation ----------------------------------------------------------------------------------------------------
 
   /**
+   * Whether {@link #canReplay} may still say yes for the file. No side effects, and doesn't look at the outputs: a
+   * file for which this is false is generated again in every phase that follows
+   */
+  public boolean mayReplay(FetchedFile f) {
+    return renderClean.contains(f);
+  }
+
+  /**
    * Whether the outputs of the phase can be reused for the file. The html includes the file's messages (its
    * -validation fragment), and they're not all from validation, so they're compared at the point the html would be
    * generated. And the files the phase wrote have to hold what it wrote: other steps can write to the same paths (the
