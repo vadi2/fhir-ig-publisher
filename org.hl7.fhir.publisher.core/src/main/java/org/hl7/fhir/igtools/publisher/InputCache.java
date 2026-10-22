@@ -7,6 +7,7 @@ import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -418,13 +419,17 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     return skip;
   }
 
-  private static byte[] readOrNull(String path) {
+  /**
+   * The file's content, or null if it can't be read. That includes a name the JVM can't map to its file system
+   * encoding (a non-ASCII name under a POSIX locale): nothing else in the build can open that file either
+   */
+  static byte[] readOrNull(String path) {
     if (path == null) {
       return null;
     }
     try {
       return Files.readAllBytes(new File(path).toPath());
-    } catch (IOException e) {
+    } catch (IOException | InvalidPathException e) {
       return null;
     }
   }
@@ -441,12 +446,25 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     hashTree(dir, dir, d, skip, new HashSet<>());
   }
 
+  /** dir's path below root, worked out on the names alone, since a name may not map to a {@link java.nio.file.Path} */
+  static String relative(File root, File dir) {
+    String r = root.getAbsolutePath();
+    String a = dir.getAbsolutePath();
+    if (a.equals(r)) {
+      return "";
+    }
+    if (!a.startsWith(r + File.separator)) {
+      throw new IllegalArgumentException(a + " isn't under " + r);
+    }
+    return a.substring(r.length() + 1);
+  }
+
   private static void hashTree(File root, File dir, InputCacheDigest d, Set<String> skip, Set<String> visited) {
     String c = canonical(dir.getAbsolutePath());
     if (skip.contains(c)) {
       return;
     }
-    String rel = root.toPath().relativize(dir.toPath()).toString();
+    String rel = relative(root, dir);
     if (dir.isFile()) {
       d.add(rel).bytes(readOrNull(dir.getAbsolutePath()));
       return;
@@ -1293,7 +1311,12 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
         if (f.isDirectory()) {
           j.add("dir", p, null);
         } else if (f.isFile()) {
-          j.add("file", p, place(s, Files.readAllBytes(f.toPath())));
+          byte[] b = readOrNull(p);
+          if (b == null) {
+            s.uncacheable("writes a file it can't read back: " + p);
+            return null;
+          }
+          j.add("file", p, place(s, b));
         }
       }
       for (NpmEntry e : s.npm) {

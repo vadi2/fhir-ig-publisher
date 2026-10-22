@@ -550,4 +550,19 @@ class InputCacheTest {
     }
     assertTrue(n > 180 && n < 320, "about a quarter selected, was " + n);
   }
+
+  // ---- file names -----------------------------------------------------------------------------------------------------
+
+  @Test
+  void aFileWhoseNameIsNoPath_readsAsUnreadable_ratherThanStoppingTheCache() {
+    // a NUL can't be in a Path anywhere; a non-ASCII name under a POSIX locale fails the same way
+    assertNull(InputCache.readOrNull(new File(tmp, "a\0b.csv").getPath()));
+    assertNull(InputCache.readOrNull(new File(tmp, "missing.csv").getPath()));
+  }
+
+  @Test
+  void relative_worksOnNamesAlone() {
+    assertEquals("", InputCache.relative(tmp, tmp));
+    assertEquals("excel" + File.separator + "a\0b \u0444.csv", InputCache.relative(tmp, new File(new File(tmp, "excel"), "a\0b \u0444.csv")));
+  }
 }
