@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
@@ -27,6 +28,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import org.hl7.fhir.utilities.validation.ValidationMessage;
+import org.hl7.fhir.utilities.xhtml.NodeType;
+import org.hl7.fhir.utilities.xhtml.XhtmlNode;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueType;
 import org.hl7.fhir.utilities.validation.ValidationMessage.Source;
@@ -409,7 +412,7 @@ class InputCacheTest {
     for (int i = 0; i < 100; i++) {
       l.add("x" + i);
     }
-    InputCacheDigest.TooLarge e = org.junit.jupiter.api.Assertions.assertThrows(InputCacheDigest.TooLarge.class, () -> InputCacheDigest.deep(new Set1(l), null, 50));
+    InputCacheDigest.TooLarge e = assertThrows(InputCacheDigest.TooLarge.class, () -> InputCacheDigest.deep(new Set1(l), null, 50));
     assertTrue(e.getMessage().contains("more than 50 objects, at Set1.s"), e.getMessage());
     assertNotNull(InputCacheDigest.deep(new Set1(l), null, 200));
   }
@@ -421,11 +424,11 @@ class InputCacheTest {
     assertNotEquals(InputCacheDigest.deep(new Set1(null)), InputCacheDigest.deep(new Set1(Arrays.asList("x"))));
   }
 
-  private static org.hl7.fhir.utilities.xhtml.XhtmlNode table(int rows, String cell) {
-    org.hl7.fhir.utilities.xhtml.XhtmlNode div = new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "div");
-    org.hl7.fhir.utilities.xhtml.XhtmlNode t = div.table("grid", false);
+  private static XhtmlNode table(int rows, String cell) {
+    XhtmlNode div = new XhtmlNode(NodeType.Element, "div");
+    XhtmlNode t = div.table("grid", false);
     for (int i = 0; i < rows; i++) {
-      org.hl7.fhir.utilities.xhtml.XhtmlNode tr = t.tr();
+      XhtmlNode tr = t.tr();
       tr.td().attribute("class", "a").attribute("style", "b").tx(cell + i);
       tr.td().ah("#c" + i).tx("code " + i);
     }
@@ -438,12 +441,12 @@ class InputCacheTest {
     String a = InputCacheDigest.deep(table(40000, "x"));
     assertEquals(a, InputCacheDigest.deep(table(40000, "x")));
     assertNotEquals(a, InputCacheDigest.deep(table(40000, "y")));
-    org.hl7.fhir.utilities.xhtml.XhtmlNode p1 = new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "p");
+    XhtmlNode p1 = new XhtmlNode(NodeType.Element, "p");
     p1.attribute("a", "1").attribute("b", "2");
-    org.hl7.fhir.utilities.xhtml.XhtmlNode p2 = new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "p");
+    XhtmlNode p2 = new XhtmlNode(NodeType.Element, "p");
     p2.attribute("a", "1").attribute("b", "3");
     assertNotEquals(InputCacheDigest.deep(p1), InputCacheDigest.deep(p2), "an attribute's value is part of the node");
-    org.hl7.fhir.utilities.xhtml.XhtmlNode p3 = new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "p");
+    XhtmlNode p3 = new XhtmlNode(NodeType.Element, "p");
     p3.attribute("a", "1").attribute("b", "2");
     p3.notPretty();
     assertNotEquals(InputCacheDigest.deep(p1), InputCacheDigest.deep(p3), "a node's flags are part of it");
@@ -603,5 +606,7 @@ class InputCacheTest {
   void relative_worksOnNamesAlone() {
     assertEquals("", InputCache.relative(tmp, tmp));
     assertEquals("excel" + File.separator + "a\0b \u0444.csv", InputCache.relative(tmp, new File(new File(tmp, "excel"), "a\0b \u0444.csv")));
+    // a sibling whose name starts with the root's isn't under it
+    assertThrows(IllegalArgumentException.class, () -> InputCache.relative(tmp, new File(tmp.getPath() + "x", "a.csv")));
   }
 }

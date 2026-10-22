@@ -6,6 +6,7 @@ import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -148,7 +149,7 @@ public class InputCacheDigest {
     private final int maxNodes;
     private int nodes;
     /** the fields the walk is in, so that a graph too large to digest says where it went */
-    private java.util.ArrayDeque<String> path = new java.util.ArrayDeque<>();
+    private ArrayDeque<String> path = new ArrayDeque<>();
 
     Walker(InputCacheDigest d, Function<Object, String> substitute, int maxNodes) {
       this.d = d;
