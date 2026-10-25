@@ -3,6 +3,7 @@ package org.hl7.fhir.igtools.publisher;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
@@ -11,6 +12,7 @@ import java.nio.file.DirectoryIteratorException;
 import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -619,7 +621,11 @@ public class RapidoTracker {
       return;
     }
     if (!Files.isDirectory(dir)) {
-      return; // a link to nothing, a socket, ...: not read by anything
+      if (!rel.isEmpty() && !Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
+        // listed, but can't be looked at (in a folder that can be listed but not searched): can't tell what it is
+        files.put(rel, "unreadable: "+UUID.randomUUID());
+      }
+      return; // else a link to nothing, a socket, ...: not read by anything
     }
     Path c = realPath(dir);
     if (!visited.add(c)) {
@@ -633,6 +639,9 @@ public class RapidoTracker {
         list.add(p);
       }
     } catch (IOException | DirectoryIteratorException e) {
+      // can't tell what's in it, so assume something changed. The folders the build owns, and .git, are skipped above,
+      // so this is a folder of the IG's own that can't be read: the build can't read what's in it either
+      files.put(rel + "/", "unreadable: "+UUID.randomUUID());
       return;
     }
     if (list.isEmpty()) {
@@ -681,6 +690,7 @@ public class RapidoTracker {
         list.add(p);
       }
     } catch (IOException | DirectoryIteratorException e) {
+      h.add("unreadable").add(dir.toAbsolutePath().toString()).add(UUID.randomUUID().toString()); // assume it changed
       return;
     }
     Collections.sort(list);
@@ -691,14 +701,13 @@ public class RapidoTracker {
   }
 
   /**
-   * The file's content. A name the JVM can't map to a Path (any non-ASCII name under a POSIX locale) is a file that
-   * can't be read, as for java.io, not an InvalidPathException that stops the build
+   * The file's content, read through java.io, as the build reads and writes its files. A name the JVM can't map to a
+   * Path (any non-ASCII name under a POSIX locale) is then the file java.io wrote for it (an output written by the
+   * build, say), not an InvalidPathException
    */
   static byte[] read(File f) throws IOException {
-    try {
-      return Files.readAllBytes(f.toPath());
-    } catch (InvalidPathException e) {
-      throw new IOException("Unable to read "+f+": "+e.getMessage(), e);
+    try (FileInputStream in = new FileInputStream(f)) {
+      return in.readAllBytes();
     }
   }
 
