@@ -7,7 +7,11 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryIteratorException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
@@ -458,10 +462,10 @@ public class RapidoTracker {
         igCopies.add(canonical(f.getAbsolutePath()));
       }
     }
-    hashTree(new File(Utilities.path(pf.rootDir, "template")), tmpl, igCopies, templateUsesFshIndex);
+    hashTree(new File(Utilities.path(pf.rootDir, "template")).toPath(), tmpl, igCopies, templateUsesFshIndex);
     for (String f : new TreeSet<>(igCopies)) {
       if (f.contains("-ig-updated.")) {
-        tmpl.add(f).add(igSourceForHash(Files.readAllBytes(new File(f).toPath()), loaded));
+        tmpl.add(f).add(igSourceForHash(read(new File(f)), loaded));
       }
     }
     global.put("template", tmpl.finish());
@@ -577,69 +581,124 @@ public class RapidoTracker {
     return scanTree(new File(pf.rootDir), otherSkip);
   }
 
-  /** every file under root (skipping the canonical paths in skip), relative path to content hash; safe on link loops */
+  /**
+   * every file under root (skipping the canonical paths in skip), relative path to content hash; safe on link loops,
+   * and on names the JVM can't decode (see listTree)
+   */
   static Map<String, String> scanTree(File root, Set<String> skip) {
     Map<String, String> res = new TreeMap<>();
-    listTree(root, root, skip, res, new HashSet<>());
+    Path r;
+    try {
+      r = root.toPath();
+    } catch (InvalidPathException e) {
+      // nothing in it could be read either; can't tell what changed, so assume something did
+      res.put("", "unreadable: "+UUID.randomUUID());
+      return res;
+    }
+    listTree(r, "", skip, res, new HashSet<>());
     return res;
   }
 
-  private static void listTree(File root, File dir, Set<String> skip, Map<String, String> files, Set<String> visited) {
-    String c = canonical(dir.getAbsolutePath());
-    if (skip.contains(c)) {
+  /**
+   * Lists dir, which is at rel below the root. It goes by the Paths a folder listing gives, not by Files made from
+   * names: such a Path keeps the bytes of the name, so a file whose name the JVM can't decode (any non-ASCII name under
+   * a POSIX locale, or one not valid in the file system encoding) is still read, and a change to it seen. Made from the
+   * name instead, the decoded string (with U+FFFD in it) names no file, and isn't a valid Path. Such names can also
+   * decode to the same string, so a name is made unique among those in its folder
+   */
+  private static void listTree(Path dir, String rel, Set<String> skip, Map<String, String> files, Set<Path> visited) {
+    if (skip.contains(canonical(dir.toString()))) {
       return;
     }
-    String rel = root.toPath().relativize(dir.toPath()).toString();
-    if (dir.isFile()) {
+    if (Files.isRegularFile(dir)) {
       try {
-        files.put(rel, new Hasher().add(Files.readAllBytes(dir.toPath())).finish());
+        files.put(rel, new Hasher().add(Files.readAllBytes(dir)).finish());
       } catch (IOException e) {
         files.put(rel, "unreadable: "+UUID.randomUUID()); // can't tell what it holds, so assume it changed
       }
       return;
     }
+    if (!Files.isDirectory(dir)) {
+      return; // a link to nothing, a socket, ...: not read by anything
+    }
+    Path c = realPath(dir);
     if (!visited.add(c)) {
       // a link to a folder that's already been listed (possibly one that contains it)
       files.put(rel + "/", "(same as "+c+")");
       return;
     }
-    String[] list = dir.list();
-    if (list == null) {
+    List<Path> list = new ArrayList<>();
+    try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
+      for (Path p : ds) {
+        list.add(p);
+      }
+    } catch (IOException | DirectoryIteratorException e) {
       return;
     }
-    if (list.length == 0) {
+    if (list.isEmpty()) {
       files.put(rel + "/", "(empty folder)");
     }
-    java.util.Arrays.sort(list); // so that which path to a linked folder gets listed doesn't vary
-    for (String s : list) {
-      listTree(root, new File(dir, s), skip, files, visited);
+    Collections.sort(list); // so that which path to a linked folder gets listed, and which name is made unique, doesn't vary
+    Set<String> names = new HashSet<>();
+    for (Path p : list) {
+      String n = p.getFileName().toString();
+      String u = n;
+      for (int i = 2; !names.add(u); i++) {
+        u = n + "#" + i;
+      }
+      listTree(p, rel.isEmpty() ? u : rel + File.separator + u, skip, files, visited);
     }
   }
 
-  private void hashTree(File dir, Hasher h, Set<String> skip, boolean[] fshIndex) throws IOException {
-    if (!dir.exists()) {
-      h.add("missing").add(dir.getAbsolutePath());
+  private static Path realPath(Path p) {
+    try {
+      return p.toRealPath();
+    } catch (IOException e) {
+      return p.toAbsolutePath().normalize();
+    }
+  }
+
+  /** see listTree() for why this goes by Paths */
+  private void hashTree(Path dir, Hasher h, Set<String> skip, boolean[] fshIndex) throws IOException {
+    if (!Files.exists(dir)) {
+      h.add("missing").add(dir.toAbsolutePath().toString());
       return;
     }
-    if (skip.contains(canonical(dir.getAbsolutePath()))) {
+    if (skip.contains(canonical(dir.toString()))) {
       return;
     }
-    if (dir.isFile()) {
-      byte[] b = Files.readAllBytes(dir.toPath());
-      h.add(dir.getAbsolutePath()).add(b);
+    if (Files.isRegularFile(dir)) {
+      byte[] b = Files.readAllBytes(dir);
+      h.add(dir.toAbsolutePath().toString()).add(b);
       if (fshIndex != null && !fshIndex[0] && new String(b, StandardCharsets.ISO_8859_1).contains("fsh-index")) {
         fshIndex[0] = true;
       }
       return;
     }
-    String[] list = dir.list();
-    if (list == null) {
+    List<Path> list = new ArrayList<>();
+    try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
+      for (Path p : ds) {
+        list.add(p);
+      }
+    } catch (IOException | DirectoryIteratorException e) {
       return;
     }
-    java.util.Arrays.sort(list);
-    h.add("dir").add(dir.getAbsolutePath());
-    for (String s : list) {
-      hashTree(new File(dir, s), h, skip, fshIndex);
+    Collections.sort(list);
+    h.add("dir").add(dir.toAbsolutePath().toString());
+    for (Path p : list) {
+      hashTree(p, h, skip, fshIndex);
+    }
+  }
+
+  /**
+   * The file's content. A name the JVM can't map to a Path (any non-ASCII name under a POSIX locale) is a file that
+   * can't be read, as for java.io, not an InvalidPathException that stops the build
+   */
+  static byte[] read(File f) throws IOException {
+    try {
+      return Files.readAllBytes(f.toPath());
+    } catch (InvalidPathException e) {
+      throw new IOException("Unable to read "+f+": "+e.getMessage(), e);
     }
   }
 
@@ -671,7 +730,7 @@ public class RapidoTracker {
       try {
         File pj = new File(Utilities.path(folder, p.replace("|", "#"), "package", "package.json"));
         if (pj.exists()) {
-          return h.add(Files.readAllBytes(pj.toPath())).finish();
+          return h.add(read(pj)).finish();
         }
       } catch (IOException e) {
         return h.add("unreadable: "+e.getMessage()).finish();
@@ -1214,7 +1273,7 @@ public class RapidoTracker {
       return "missing";
     }
     try {
-      return new Hasher().add(Files.readAllBytes(f.toPath())).finish();
+      return new Hasher().add(read(f)).finish();
     } catch (IOException e) {
       return "unreadable: "+UUID.randomUUID();
     }
