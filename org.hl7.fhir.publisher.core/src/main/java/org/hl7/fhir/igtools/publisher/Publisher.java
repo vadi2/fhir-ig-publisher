@@ -223,11 +223,13 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       loader.setWatchSession(session);
 
       boolean first = true;
+      String failure = null;
       do {
         if (session == null) {
           build(rootDir);
         } else {
           session.startBuild();
+          failure = null;
           try {
             // a page rebuild goes on from where the last build was, so the state it left is kept for it
             if (!rebuildPages(session)) {
@@ -240,6 +242,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
             }
           } catch (Exception e) {
             // keep watching: the next save may fix it
+            failure = e.getMessage() == null ? e.getClass().getName() : e.getMessage();
             log("Publishing Content Failed: " + e.getMessage());
             log("");
             log("Stack Dump (for debugging):");
@@ -247,7 +250,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           }
         }
         first = false;
-      } while (session != null && waitForChanges(monitor, session));
+      } while (session != null && waitForChanges(monitor, session, failure));
     } finally {
       discardPageRebuild();
       if (jekyllDriver != null) {
@@ -374,12 +377,18 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   /**
    * Waits until the content of a watched file is different from what the last build started with. Files that were
    * saved without being changed, and files the build itself wrote, don't count
+   *
+   * @param failure why the last build failed, or null if it didn't: said again here, so that the end of the log doesn't
+   *   look like that of a build that finished
    */
-  private boolean waitForChanges(FileChangeMonitor monitor, WatchSession session) throws InterruptedException, IOException {
+  private boolean waitForChanges(FileChangeMonitor monitor, WatchSession session, String failure) throws InterruptedException, IOException {
     // monitoring is started before looking for changes made while the build ran, so that nothing is missed in between
     monitor.startMonitoring();
     try {
       SourceSnapshot.Changes changes = session.changesSinceBuildStart();
+      if (failure != null) {
+        System.out.println("=== Build Failed: " + failure + " (the output is incomplete) ===");
+      }
       if (changes.isEmpty()) {
         System.out.println("Watching for changes (Cascais:Rapido mode)");
       }
