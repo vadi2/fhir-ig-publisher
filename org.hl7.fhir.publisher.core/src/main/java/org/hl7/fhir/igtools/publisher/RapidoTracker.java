@@ -19,6 +19,7 @@ import java.util.Arrays;
 import java.util.Base64;
 import java.util.Calendar;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -913,7 +914,7 @@ public class RapidoTracker {
       return null;
     }
     for (Map.Entry<String, Set<String>> e : state.entrySet()) {
-      e.getValue().addAll(saved.getJsonObject(e.getKey()).forceArray("added").asStrings());
+      putBack(e.getValue(), saved.getJsonObject(e.getKey()).forceArray("added"));
     }
     for (FetchedResource source : sources) {
       source.addFoundExample(r);
@@ -938,12 +939,7 @@ public class RapidoTracker {
       }
       JsonObject s = state.forceObject(e.getKey());
       s.add("before", stateHash(before));
-      JsonArray added = s.forceArray("added");
-      for (String v : new TreeSet<>(e.getValue())) {
-        if (!before.contains(v)) {
-          added.add(v);
-        }
-      }
+      s.add("added", added(before, e.getValue()));
     }
     if (!isReplayable(state)) {
       return;
@@ -1171,10 +1167,42 @@ public class RapidoTracker {
     return null;
   }
 
-  private static String stateHash(Set<String> values) {
+  /**
+   * How a null in one of the sets of buildState() is saved: the context adds the system of each code it validates to
+   * codeSystemsUsed, which is null for a code that has none (e.g. a code that isn't one of the codes of a required
+   * binding)
+   */
+  static final String NULL_STATE_VALUE = "\u0000null";
+
+  /** what validating a resource added to a set of buildState() (before is the set before, now after), as saved */
+  static JsonArray added(Set<String> before, Set<String> now) {
+    JsonArray res = new JsonArray();
+    for (String v : sortedState(now)) {
+      if (!before.contains(v)) {
+        res.add(v == null ? NULL_STATE_VALUE : v);
+      }
+    }
+    return res;
+  }
+
+  /** adds what added() saved to the set, as validating the resource again would */
+  static void putBack(Set<String> set, JsonArray added) {
+    for (String v : added.asStrings()) {
+      set.add(NULL_STATE_VALUE.equals(v) ? null : v);
+    }
+  }
+
+  /** the values of a set of buildState(), sorted, with null (which a TreeSet can't hold) first */
+  static List<String> sortedState(Set<String> values) {
+    List<String> res = new ArrayList<>(values);
+    res.sort(Comparator.nullsFirst(Comparator.naturalOrder()));
+    return res;
+  }
+
+  static String stateHash(Set<String> values) {
     Hasher h = new Hasher();
-    for (String s : new TreeSet<>(values)) {
-      h.add(s);
+    for (String s : sortedState(values)) {
+      h.add(s == null ? NULL_STATE_VALUE : s);
     }
     return h.finish();
   }

@@ -348,6 +348,61 @@ class PageRebuildTest {
   }
 
   @Test
+  void theMessagesArePutBackAsTheyWereBeforeTheHtmlChecks() throws IOException {
+    pf.suppressedMessages.add("Suppressed%", "test");
+    FetchedFile file = new FetchedFile("input/resources/a.json");
+    FetchedResource res = file.addResource("a");
+    pf.fileList.add(file);
+    ValidationMessage error = new ValidationMessage(Source.InstanceValidator, IssueType.CODEINVALID, "Patient/a: Patient.gender",
+        "bad code", IssueSeverity.ERROR);
+    ValidationMessage suppressed = warning("Suppressed in validation");
+    ValidationMessage ig = warning("An IG level warning");
+    res.getErrors().add(error);
+    res.getErrors().add(suppressed);
+    file.getErrors().add(error);
+    file.getErrors().add(suppressed);
+    pf.errors.add(ig);
+    filter(suppressed);
+    file.setFilteredMessages(new ArrayList<>(Arrays.asList(error)));
+    built();
+
+    // what the html checks and qa then do in the build
+    ValidationMessage link = new ValidationMessage(Source.HtmlChecker, IssueType.NOTFOUND, "index.html",
+        "The link 'x.html' for \"x\" cannot be resolved", IssueSeverity.ERROR);
+    pf.errors.add(link);
+    page.getErrors().add(link);
+    file.getErrors().add(warning("Suppressed html check message"));
+    filter(file.getErrors().get(2));
+    filter(ig);
+    file.setFilteredMessages(new ArrayList<>(file.getErrors()));
+    res.getErrors().clear();
+    suppressed.setComment("changed");
+    error.setMatched(true);
+
+    state.restore();
+    assertEquals(Collections.singletonList(ig), pf.errors);
+    assertEquals(Arrays.asList(error, suppressed), file.getErrors());
+    assertEquals(Arrays.asList(error, suppressed), res.getErrors());
+    assertTrue(page.getErrors().isEmpty());
+    assertEquals(Collections.singletonList(error), file.getFilteredMessages());
+    assertTrue(suppressed.isMatched());
+    assertEquals("test", suppressed.getComment());
+    assertFalse(error.isMatched());
+    assertNull(error.getComment());
+    assertFalse(ig.isMatched());
+    assertEquals(1, pf.suppressedMessages.list("test").get(0).getUseCount());
+    // the same objects: qa matches them, and counts them, as the build did
+    assertTrue(file.getErrors().get(1) == res.getErrors().get(1));
+
+    // and a second page rebuild starts from the same state again
+    pf.errors.add(link);
+    filter(warning("Suppressed html check message"));
+    state.restore();
+    assertEquals(Collections.singletonList(ig), pf.errors);
+    assertEquals(1, pf.suppressedMessages.list("test").get(0).getUseCount());
+  }
+
+  @Test
   void plainContentFromBytes() {
     assertTrue(PageRebuild.isPlainContent("Embrüo".getBytes(StandardCharsets.UTF_8)));
     assertFalse(PageRebuild.isPlainContent("x [[[y]]]".getBytes(StandardCharsets.UTF_8)));
