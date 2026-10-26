@@ -122,6 +122,10 @@ public class SimpleFetcher implements IFetchFile, ILogicalModelResolver {
       ff.setFolder(true);   
       for (File fl : f.listFiles()) {
         if (!isIgnoredFile(fl.getName())) {
+          if (fl.getName().indexOf('\uFFFD') >= 0 && !fl.exists()) {
+            // the listing couldn't decode the name (e.g. a non-ASCII name under the POSIX locale), and java.io can't open a file by a name like that
+            throw new Exception("Unable to read the file "+fl.getPath()+": its name can't be decoded with the file name encoding '"+System.getProperty("sun.jnu.encoding")+"' that Java takes from the locale. Rename the file so its name is plain ASCII, or run the IG Publisher with a UTF-8 locale (e.g. LC_ALL=C.UTF-8)");
+          }
           ff.getFiles().add(fl.getCanonicalPath());
         }
       }
