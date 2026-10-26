@@ -14,6 +14,7 @@ import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -114,6 +115,30 @@ class PageRebuildTest {
     List<String> reason = new ArrayList<>();
     List<FetchedFile> pages = state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# Home, edited")), reason);
     assertEquals(Collections.singletonList(page), pages);
+  }
+
+  @Test
+  void notOnAnotherDay() throws IOException {
+    built();
+    // the build ran yesterday: its pages say so, so they are all written again
+    pf.getExecTime().add(Calendar.DAY_OF_MONTH, -1);
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# Home, edited")), reason));
+    assertEquals("the day changed since the last build", reason.get(0));
+  }
+
+  @Test
+  void sameDay() {
+    Calendar a = Calendar.getInstance();
+    a.set(2026, Calendar.OCTOBER, 25, 23, 59, 0);
+    Calendar b = (Calendar) a.clone();
+    b.set(Calendar.HOUR_OF_DAY, 0);
+    assertTrue(PageRebuild.sameDay(a, b));
+    b.add(Calendar.MINUTE, 24 * 60 + 1);
+    assertFalse(PageRebuild.sameDay(a, b));
+    b.add(Calendar.YEAR, -1);
+    b.add(Calendar.DAY_OF_MONTH, -1);
+    assertFalse(PageRebuild.sameDay(a, b), "the same day of another year");
   }
 
   @Test
