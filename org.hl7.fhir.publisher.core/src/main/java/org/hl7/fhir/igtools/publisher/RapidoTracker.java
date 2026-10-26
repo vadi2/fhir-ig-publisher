@@ -110,6 +110,9 @@ public class RapidoTracker {
   private Map<String, Set<String>> stateBefore;
   /** how many of the IG's profiles the resource being validated was known to conform to before it was validated */
   private int profilesBefore;
+  /** how many validations were reused, and why the others weren't, for the log */
+  private int validationsReused;
+  private final Map<String, Integer> validatedAgain = new TreeMap<>();
   /** the date the loader puts on canonical resources that have none; it differs every build */
   private final String buildDate;
 
@@ -799,25 +802,52 @@ public class RapidoTracker {
         stateBefore.put(e.getKey(), e.getValue() == null ? null : new HashSet<>(e.getValue()));
       }
       profilesBefore = r.getFoundProfiles().size();
+    } else {
+      validationsReused++;
     }
     return res;
   }
 
+  /** null, after counting why the resource is validated again */
+  private List<ValidationMessage> validateAgain(String why) {
+    validatedAgain.merge(why, 1, Integer::sum);
+    return null;
+  }
+
+  /** e.g. "reused 12 validations (3 validated again: 2 changed, 1 build state differs)", for the log */
+  public String validationSummary() {
+    StringBuilder b = new StringBuilder("reused " + validationsReused + (validationsReused == 1 ? " validation" : " validations"));
+    int again = 0;
+    for (int n : validatedAgain.values()) {
+      again += n;
+    }
+    if (again > 0) {
+      b.append(" (").append(again).append(" validated again: ");
+      boolean first = true;
+      for (Map.Entry<String, Integer> e : validatedAgain.entrySet()) {
+        b.append(first ? "" : ", ").append(e.getValue()).append(" ").append(e.getKey());
+        first = false;
+      }
+      b.append(")");
+    }
+    return b.toString();
+  }
+
   private List<ValidationMessage> savedValidation(FetchedFile f, FetchedResource r) {
     if (!validationClean.contains(f)) {
-      return null;
+      return validateAgain("changed");
     }
     JsonObject v = oldFiles.getJsonObject(keys.get(f)).getJsonObject("validation");
     String ri = Integer.toString(f.getResources().indexOf(r));
     JsonObject rv = v == null ? null : v.getJsonObject(ri);
     if (rv == null || !(r.fhirType()+"/"+r.getId()).equals(rv.asString("key"))) {
-      return null;
+      return validateAgain("not saved");
     }
     List<ValidationMessage> res = new ArrayList<>();
     for (JsonObject m : rv.forceArray("messages").asJsonObjects()) {
       ValidationMessage vm = readMessage(m);
       if (vm == null) {
-        return null;
+        return validateAgain("messages unreadable");
       }
       res.add(vm);
     }
@@ -826,20 +856,20 @@ public class RapidoTracker {
     Map<String, Set<String>> state = buildState();
     JsonObject saved = rv.getJsonObject("state");
     if (saved == null || !isReplayable(saved)) {
-      return null;
+      return validateAgain("not replayable");
     }
     // validating an example tells the publisher which of the IG's profiles it conforms to (recordProfileUsage), which
     // the profiles' "no examples" checks and example lists depend on
     List<FetchedResource> sources = profileSources(pf.fileList, rv.getJsonArray("profileUsages"));
     if (sources == null) {
-      return null;
+      return validateAgain("profiles changed");
     }
     if (!sameStateBefore(state, saved)) {
-      return null;
+      return validateAgain("build state differs");
     }
     // the validator attaches the profiles it validated an element against to the element, for the qa page's signposts
     if (!restoreSignposts(r.getElement(), rv.getJsonArray("signposts"), res)) {
-      return null;
+      return validateAgain("signposts changed");
     }
     for (Map.Entry<String, Set<String>> e : state.entrySet()) {
       putBack(e.getValue(), saved.getJsonObject(e.getKey()).forceArray("added"));

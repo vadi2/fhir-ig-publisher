@@ -55,6 +55,7 @@ class RapidoQaMessagesTest {
   private Path w;
 
   private static final Pattern LOG_TOTALS = Pattern.compile("Errors: \\d+, Warnings: \\d+, Info: \\d+, Broken Links: \\d+");
+  private static final Pattern REUSED = Pattern.compile("Rapido Mode: reused (\\d+) validation");
   private static final Pattern SUPPRESSED = Pattern.compile("<li>(.*?) <span style=\"color: (?:navy|maroon)\">\\((\\d+) uses\\)</span></li>");
 
   @Test
@@ -116,6 +117,11 @@ class RapidoQaMessagesTest {
     // else a state meant to test a differential build compares two complete builds
     assertEquals(differential, rapidoLog.contains("Rapido Mode: Differential Build"),
         "The -rapido build after " + state + (differential ? " wasn't" : " was") + " a differential one");
+    if (differential) {
+      // else a differential build that validates everything again passes too
+      Matcher m = REUSED.matcher(rapidoLog);
+      assertTrue(m.find() && Integer.parseInt(m.group(1)) > 0, "The -rapido build after " + state + " didn't reuse any validations");
+    }
     Path r = dir.resolve("r-" + state);
     copy(w, r);
     String completeLog = build(r, false, state + "-complete");
