@@ -15,7 +15,6 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Calendar;
 import java.util.Collections;
@@ -117,6 +116,9 @@ public class RapidoTracker {
   private Map<String, Set<String>> stateBefore;
   /** how many of the IG's profiles the resource being validated was known to conform to before it was validated */
   private int profilesBefore;
+  /** how many validations were reused, and why the others weren't, for the log */
+  private int validationsReused;
+  private final Map<String, Integer> validatedAgain = new TreeMap<>();
   /** the date the loader puts on canonical resources that have none; it differs every build */
   private final String buildDate;
 
@@ -868,25 +870,52 @@ public class RapidoTracker {
         stateBefore.put(e.getKey(), e.getValue() == null ? null : new HashSet<>(e.getValue()));
       }
       profilesBefore = r.getFoundProfiles().size();
+    } else {
+      validationsReused++;
     }
     return res;
   }
 
+  /** null, after counting why the resource is validated again */
+  private List<ValidationMessage> validateAgain(String why) {
+    validatedAgain.merge(why, 1, Integer::sum);
+    return null;
+  }
+
+  /** e.g. "reused 12 validations (3 validated again: 2 changed, 1 build state differs)", for the log */
+  public String validationSummary() {
+    StringBuilder b = new StringBuilder("reused " + validationsReused + (validationsReused == 1 ? " validation" : " validations"));
+    int again = 0;
+    for (int n : validatedAgain.values()) {
+      again += n;
+    }
+    if (again > 0) {
+      b.append(" (").append(again).append(" validated again: ");
+      boolean first = true;
+      for (Map.Entry<String, Integer> e : validatedAgain.entrySet()) {
+        b.append(first ? "" : ", ").append(e.getValue()).append(" ").append(e.getKey());
+        first = false;
+      }
+      b.append(")");
+    }
+    return b.toString();
+  }
+
   private List<ValidationMessage> savedValidation(FetchedFile f, FetchedResource r) {
     if (!validationClean.contains(f)) {
-      return null;
+      return validateAgain("changed");
     }
     JsonObject v = oldFiles.getJsonObject(keys.get(f)).getJsonObject("validation");
     String ri = Integer.toString(f.getResources().indexOf(r));
     JsonObject rv = v == null ? null : v.getJsonObject(ri);
     if (rv == null || !(r.fhirType()+"/"+r.getId()).equals(rv.asString("key"))) {
-      return null;
+      return validateAgain("not saved");
     }
     List<ValidationMessage> res = new ArrayList<>();
     for (JsonObject m : rv.forceArray("messages").asJsonObjects()) {
       ValidationMessage vm = readMessage(m);
       if (vm == null) {
-        return null;
+        return validateAgain("messages unreadable");
       }
       res.add(vm);
     }
@@ -895,23 +924,20 @@ public class RapidoTracker {
     Map<String, Set<String>> state = buildState();
     JsonObject saved = rv.getJsonObject("state");
     if (saved == null || !isReplayable(saved)) {
-      return null;
+      return validateAgain("not replayable");
     }
     // validating an example tells the publisher which of the IG's profiles it conforms to (recordProfileUsage), which
     // the profiles' "no examples" checks and example lists depend on
     List<FetchedResource> sources = profileSources(pf.fileList, rv.getJsonArray("profileUsages"));
     if (sources == null) {
-      return null;
+      return validateAgain("profiles changed");
     }
-    for (Map.Entry<String, Set<String>> e : state.entrySet()) {
-      JsonObject s = saved.getJsonObject(e.getKey());
-      if (e.getValue() == null || s == null || (ORDERED_STATE.contains(e.getKey()) && !stateHash(e.getValue()).equals(s.asString("before")))) {
-        return null;
-      }
+    if (!sameStateBefore(state, saved)) {
+      return validateAgain("build state differs");
     }
     // the validator attaches the profiles it validated an element against to the element, for the qa page's signposts
     if (!restoreSignposts(r.getElement(), rv.getJsonArray("signposts"), res)) {
-      return null;
+      return validateAgain("signposts changed");
     }
     for (Map.Entry<String, Set<String>> e : state.entrySet()) {
       putBack(e.getValue(), saved.getJsonObject(e.getKey()).forceArray("added"));
@@ -931,16 +957,11 @@ public class RapidoTracker {
     }
     JsonObject rv = new JsonObject();
     rv.add("key", r.fhirType()+"/"+r.getId());
-    JsonObject state = rv.forceObject("state");
-    for (Map.Entry<String, Set<String>> e : buildState().entrySet()) {
-      Set<String> before = stateBefore.get(e.getKey());
-      if (e.getValue() == null || before == null) {
-        return; // without knowing what the validator had seen, the result can't be reused
-      }
-      JsonObject s = state.forceObject(e.getKey());
-      s.add("before", stateHash(before));
-      s.add("added", added(before, e.getValue()));
+    JsonObject state = stateChange(stateBefore, buildState());
+    if (state == null) {
+      return; // without knowing what the validator had seen, the result can't be reused
     }
+    rv.add("state", state);
     if (!isReplayable(state)) {
       return;
     }
@@ -1122,8 +1143,41 @@ public class RapidoTracker {
     return s != null && s.forceArray("added").size() == 0;
   }
 
-  /** the parts of buildState() that change what the validator says, not only what the build does after validation */
-  private static final Set<String> ORDERED_STATE = new HashSet<>(Arrays.asList("statusWarnings", "unsupportedCodeSystems"));
+  /**
+   * What recordValidation() saves of the build state: for each set in buildState(), a hash of what it was before the
+   * resource was validated, and what validating it added. null if one of the sets can't be read
+   */
+  static JsonObject stateChange(Map<String, Set<String>> before, Map<String, Set<String>> now) {
+    JsonObject res = new JsonObject();
+    for (Map.Entry<String, Set<String>> e : now.entrySet()) {
+      Set<String> b = before.get(e.getKey());
+      if (e.getValue() == null || b == null) {
+        return null;
+      }
+      JsonObject s = res.forceObject(e.getKey());
+      s.add("before", stateHash(b));
+      s.add("added", added(b, e.getValue()));
+    }
+    return res;
+  }
+
+  /**
+   * Whether every set in buildState() is now what it was before the resource was validated in the build that saved the
+   * state. Only then is what was added then what validating it again would add now: e.g. a code system that the
+   * resource uses but that an earlier one had already added to codeSystemsUsed isn't in what was added, so if the
+   * earlier one no longer uses it, replaying the resource wouldn't put it back. And statusWarnings and
+   * unsupportedCodeSystems change what the validator says, not only what the build does after validation. A state
+   * saved without one of the sets (e.g. by an older build) doesn't match
+   */
+  static boolean sameStateBefore(Map<String, Set<String>> now, JsonObject saved) {
+    for (Map.Entry<String, Set<String>> e : now.entrySet()) {
+      JsonObject s = saved.getJsonObject(e.getKey());
+      if (e.getValue() == null || s == null || !stateHash(e.getValue()).equals(s.asString("before"))) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   /**
    * What validating a resource adds to and that outlives it, so that it has to be replayed when the validation is
@@ -1137,6 +1191,8 @@ public class RapidoTracker {
    *   <li>codeSystemsUsed (BaseWorkerContext): what the IG uses, which the build checks after validation (e.g. for
    *   SNOMED CT's edition); it doesn't change what the validator says</li>
    * </ul>
+   * A validation is only reused if each of them is what it was before the resource was validated last time (see
+   * sameStateBefore())
    */
   private Map<String, Set<String>> buildState() {
     Map<String, Set<String>> res = new LinkedHashMap<>();

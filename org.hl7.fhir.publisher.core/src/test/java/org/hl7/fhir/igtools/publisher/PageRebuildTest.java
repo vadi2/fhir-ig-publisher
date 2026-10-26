@@ -377,7 +377,10 @@ class PageRebuildTest {
     file.setFilteredMessages(new ArrayList<>(file.getErrors()));
     res.getErrors().clear();
     suppressed.setComment("changed");
+    suppressed.setMatched(false);
     error.setMatched(true);
+    error.setComment("changed");
+    ig.setMatched(true);
 
     state.restore();
     assertEquals(Collections.singletonList(ig), pf.errors);
