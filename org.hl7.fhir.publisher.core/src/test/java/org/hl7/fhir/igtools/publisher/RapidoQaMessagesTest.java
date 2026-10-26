@@ -65,45 +65,57 @@ class RapidoQaMessagesTest {
     // the first -rapido build is a complete one
     build(w, true, "s0");
 
-    // an example's error fixed and one introduced, an example for the data type profile that had none, a suppressed
-    // message entry replaced by another, a broken link fixed and another one made
+    // an example's error fixed and one introduced, an example for the data type profile that had none, a broken link
+    // fixed and another one made
     sub("input/examples/Patient-qa-good.json", "\"name\"", "\"gender\": \"qa-worse\",\n  \"address\": [{\"city\": \"Tallinn\"}],\n  \"name\"");
     sub("input/examples/Patient-qa-bad.json", "\"gender\": \"qa-bad\",", "");
-    sub("input/ignoreWarnings.txt", "%should have an OID assigned%", "%Unable to find ImplementationGuide.definition.resource.description%");
     sub("input/pagecontent/other.md", "(no-such-page.html)", "(index.html)");
     append("input/pagecontent/index.md", "\nAnd [another missing page](missing.html).\n");
-    check("s1");
+    check("s1", true);
+    pageEdit("s2");
 
-    append("input/pagecontent/other.md", "\nA page edit.\n");
-    check("s2");
+    // a suppressed message entry replaced by another: -rapido builds everything again for that
+    sub("input/ignoreWarnings.txt", "%should have an OID assigned%", "%Unable to find ImplementationGuide.definition.resource.description%");
+    check("s3", false);
+    pageEdit("s4");
 
-    // all back as it was: the data type profile has no examples again
-    for (String p : new String[] {"input/examples", "input/ignoreWarnings.txt", "input/pagecontent/index.md"}) {
-      Path t = w.resolve(p);
-      if (Files.isDirectory(t)) {
-        deleteAll(t);
-      }
-      copy(fixture.resolve(p), t);
+    // the examples and the pages back as they were: the data type profile has no examples again
+    for (String p : new String[] {"input/examples", "input/pagecontent/index.md"}) {
+      restore(fixture, p);
     }
-    check("s3");
+    check("s5", true);
+    pageEdit("s6");
 
-    append("input/pagecontent/other.md", "\nAnother page edit.\n");
-    check("s4");
+    restore(fixture, "input/ignoreWarnings.txt");
+    check("s7", false);
+    pageEdit("s8");
 
     // the value set loses the code an example uses
     sub("input/resources/ValueSet-qa-valueset.json", "\"system\": \"http://example.org/fhir/rapido-qa/CodeSystem/qa-codes\"",
         "\"system\": \"http://example.org/fhir/rapido-qa/CodeSystem/qa-codes\", \"concept\": [{\"code\": \"a\"}]");
-    check("s5");
+    check("s9", true);
+    pageEdit("s10");
+  }
 
-    append("input/pagecontent/other.md", "\nA last page edit.\n");
-    check("s6");
+  private void pageEdit(String state) throws Exception {
+    append("input/pagecontent/other.md", "\nA page edit before " + state + ".\n");
+    check(state, true);
+  }
+
+  private void restore(Path fixture, String p) throws IOException {
+    Path t = w.resolve(p);
+    if (Files.isDirectory(t)) {
+      deleteAll(t);
+    }
+    copy(fixture.resolve(p), t);
   }
 
   /** a -rapido build of w, and a complete build of a copy of it, must report the same */
-  private void check(String state) throws Exception {
+  private void check(String state, boolean differential) throws Exception {
     String rapidoLog = build(w, true, state);
-    // else this compares two complete builds
-    assertTrue(rapidoLog.contains("Rapido Mode: Differential Build"), "The -rapido build after " + state + " wasn't a differential one");
+    // else a state meant to test a differential build compares two complete builds
+    assertEquals(differential, rapidoLog.contains("Rapido Mode: Differential Build"),
+        "The -rapido build after " + state + (differential ? " wasn't" : " was") + " a differential one");
     Path r = dir.resolve("r-" + state);
     copy(w, r);
     String completeLog = build(r, false, state + "-complete");
