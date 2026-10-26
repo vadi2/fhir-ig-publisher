@@ -9,7 +9,6 @@ import java.lang.reflect.Modifier;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Base64;
 import java.util.Calendar;
 import java.util.Collections;
@@ -835,11 +834,8 @@ public class RapidoTracker {
     if (sources == null) {
       return null;
     }
-    for (Map.Entry<String, Set<String>> e : state.entrySet()) {
-      JsonObject s = saved.getJsonObject(e.getKey());
-      if (e.getValue() == null || s == null || (ORDERED_STATE.contains(e.getKey()) && !stateHash(e.getValue()).equals(s.asString("before")))) {
-        return null;
-      }
+    if (!sameStateBefore(state, saved)) {
+      return null;
     }
     // the validator attaches the profiles it validated an element against to the element, for the qa page's signposts
     if (!restoreSignposts(r.getElement(), rv.getJsonArray("signposts"), res)) {
@@ -863,16 +859,11 @@ public class RapidoTracker {
     }
     JsonObject rv = new JsonObject();
     rv.add("key", r.fhirType()+"/"+r.getId());
-    JsonObject state = rv.forceObject("state");
-    for (Map.Entry<String, Set<String>> e : buildState().entrySet()) {
-      Set<String> before = stateBefore.get(e.getKey());
-      if (e.getValue() == null || before == null) {
-        return; // without knowing what the validator had seen, the result can't be reused
-      }
-      JsonObject s = state.forceObject(e.getKey());
-      s.add("before", stateHash(before));
-      s.add("added", added(before, e.getValue()));
+    JsonObject state = stateChange(stateBefore, buildState());
+    if (state == null) {
+      return; // without knowing what the validator had seen, the result can't be reused
     }
+    rv.add("state", state);
     if (!isReplayable(state)) {
       return;
     }
@@ -1054,8 +1045,41 @@ public class RapidoTracker {
     return s != null && s.forceArray("added").size() == 0;
   }
 
-  /** the parts of buildState() that change what the validator says, not only what the build does after validation */
-  private static final Set<String> ORDERED_STATE = new HashSet<>(Arrays.asList("statusWarnings", "unsupportedCodeSystems"));
+  /**
+   * What recordValidation() saves of the build state: for each set in buildState(), a hash of what it was before the
+   * resource was validated, and what validating it added. null if one of the sets can't be read
+   */
+  static JsonObject stateChange(Map<String, Set<String>> before, Map<String, Set<String>> now) {
+    JsonObject res = new JsonObject();
+    for (Map.Entry<String, Set<String>> e : now.entrySet()) {
+      Set<String> b = before.get(e.getKey());
+      if (e.getValue() == null || b == null) {
+        return null;
+      }
+      JsonObject s = res.forceObject(e.getKey());
+      s.add("before", stateHash(b));
+      s.add("added", added(b, e.getValue()));
+    }
+    return res;
+  }
+
+  /**
+   * Whether every set in buildState() is now what it was before the resource was validated in the build that saved the
+   * state. Only then is what was added then what validating it again would add now: e.g. a code system that the
+   * resource uses but that an earlier one had already added to codeSystemsUsed isn't in what was added, so if the
+   * earlier one no longer uses it, replaying the resource wouldn't put it back. And statusWarnings and
+   * unsupportedCodeSystems change what the validator says, not only what the build does after validation. A state
+   * saved without one of the sets (e.g. by an older build) doesn't match
+   */
+  static boolean sameStateBefore(Map<String, Set<String>> now, JsonObject saved) {
+    for (Map.Entry<String, Set<String>> e : now.entrySet()) {
+      JsonObject s = saved.getJsonObject(e.getKey());
+      if (e.getValue() == null || s == null || !stateHash(e.getValue()).equals(s.asString("before"))) {
+        return false;
+      }
+    }
+    return true;
+  }
 
   /**
    * What validating a resource adds to and that outlives it, so that it has to be replayed when the validation is
@@ -1069,6 +1093,8 @@ public class RapidoTracker {
    *   <li>codeSystemsUsed (BaseWorkerContext): what the IG uses, which the build checks after validation (e.g. for
    *   SNOMED CT's edition); it doesn't change what the validator says</li>
    * </ul>
+   * A validation is only reused if each of them is what it was before the resource was validated last time (see
+   * sameStateBefore())
    */
   private Map<String, Set<String>> buildState() {
     Map<String, Set<String>> res = new LinkedHashMap<>();
