@@ -12,6 +12,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.Comparator;
@@ -254,6 +255,13 @@ public class PageRebuild {
 
   // --- the rebuild ---------------------------------------------------------------------------------------------------
 
+  /** Whether the two times are on the same day, in the time zone that the build writes dates in */
+  static boolean sameDay(Calendar a, Calendar b) {
+    Calendar c = (Calendar) b.clone();
+    c.setTimeZone(a.getTimeZone());
+    return a.get(Calendar.YEAR) == c.get(Calendar.YEAR) && a.get(Calendar.DAY_OF_YEAR) == c.get(Calendar.DAY_OF_YEAR);
+  }
+
   /**
    * Which files to copy to the temp folder again, if the changes are all changes to the content of pages that this state
    * can rebuild; otherwise null, and why not in reason (the first entry)
@@ -262,6 +270,11 @@ public class PageRebuild {
     String nr = getNotReusable();
     if (nr != null) {
       reason.add(nr);
+      return null;
+    }
+    if (!sameDay(pf.getExecTime(), Calendar.getInstance())) {
+      // the pages say what day they were built on (and other files too), and a page rebuild keeps the last build's date
+      reason.add("the day changed since the last build");
       return null;
     }
     if (changes == null || changes.isEmpty()) {
