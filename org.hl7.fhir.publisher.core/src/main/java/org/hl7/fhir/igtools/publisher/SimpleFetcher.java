@@ -26,6 +26,8 @@ import java.io.FileInputStream;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -122,10 +124,7 @@ public class SimpleFetcher implements IFetchFile, ILogicalModelResolver {
       ff.setFolder(true);   
       for (File fl : f.listFiles()) {
         if (!isIgnoredFile(fl.getName())) {
-          if (fl.getName().indexOf('\uFFFD') >= 0 && !fl.exists()) {
-            // the listing couldn't decode the name (e.g. a non-ASCII name under the POSIX locale), and java.io can't open a file by a name like that
-            throw new Exception("Unable to read the file "+fl.getPath()+": its name can't be decoded with the file name encoding '"+System.getProperty("sun.jnu.encoding")+"' that Java takes from the locale. Rename the file so its name is plain ASCII, or run the IG Publisher with a UTF-8 locale (e.g. LC_ALL=C.UTF-8)");
-          }
+          checkFileNameDecoded(fl);
           ff.getFiles().add(fl.getCanonicalPath());
         }
       }
@@ -143,6 +142,33 @@ public class SimpleFetcher implements IFetchFile, ILogicalModelResolver {
       ss.close();
     }
     return ff;
+  }
+
+  /**
+   * A folder listing gives U+FFFD for the bytes of a name that it can't decode with the file name encoding Java takes
+   * from the locale (e.g. a non-ASCII name under the POSIX locale, or a Latin-1 name under a UTF-8 one), and java.io
+   * can't open a file by a name like that
+   */
+  private static void checkFileNameDecoded(File f) {
+    if (f.getName().indexOf('\uFFFD') >= 0 && !f.exists()) {
+      throw new FHIRException(undecodableFileNameMessage(f.getPath(), System.getProperty("sun.jnu.encoding")));
+    }
+  }
+
+  static String undecodableFileNameMessage(String path, String encoding) {
+    if (isUtf8(encoding)) {
+      return "Unable to read the file "+path+": its name isn't valid UTF-8 (e.g. it was made on a system that uses another encoding for file names), so Java can't open it. Rename the file so its name is valid UTF-8, or plain ASCII";
+    } else {
+      return "Unable to read the file "+path+": its name can't be decoded with the file name encoding '"+encoding+"' that Java takes from the locale. Rename the file so its name is plain ASCII, or run the IG Publisher with a UTF-8 locale (e.g. LC_ALL=C.UTF-8)";
+    }
+  }
+
+  private static boolean isUtf8(String encoding) {
+    try {
+      return encoding != null && Charset.forName(encoding).equals(StandardCharsets.UTF_8);
+    } catch (IllegalArgumentException e) {
+      return false;
+    }
   }
 
   public static boolean isIgnoredFile(String name) {
@@ -350,6 +376,7 @@ public class SimpleFetcher implements IFetchFile, ILogicalModelResolver {
       File file = new File(s);
       if (file.exists()) {
         for (File f : file.listFiles()) {
+          checkFileNameDecoded(f);
           if (!f.isDirectory() && !exemptions.contains(f.getAbsolutePath()) && !isExemptFileType(f.getName())) {
 //            System.out.println("scanning: "+f.getAbsolutePath());
             String fn = f.getCanonicalPath();
@@ -555,6 +582,7 @@ public class SimpleFetcher implements IFetchFile, ILogicalModelResolver {
       File[] list = dir.listFiles();
       if (list != null) {
         for (File f : list) {
+          checkFileNameDecoded(f);
           if (f.isDirectory()) {
             scanFolders(f, dirs);
           }
