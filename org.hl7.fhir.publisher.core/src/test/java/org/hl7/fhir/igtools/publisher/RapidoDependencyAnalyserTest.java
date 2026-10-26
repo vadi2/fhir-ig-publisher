@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -641,6 +642,82 @@ class RapidoDependencyAnalyserTest {
     both.add("codeSystemsUsed", state("codeSystemsUsed", "http://loinc.org").getJsonObject("codeSystemsUsed"));
     assertTrue(RapidoTracker.isReplayable(both));
     assertFalse(RapidoTracker.isReplayable(state("codeSystemsUsed")));
+  }
+
+  @Test
+  void aCodeWithoutASystemIsPartOfTheBuildState() {
+    // the context adds the system of each code it validates to codeSystemsUsed: null for a code that has none
+    Set<String> before = new java.util.HashSet<>(Arrays.asList("http://loinc.org"));
+    Set<String> now = new java.util.HashSet<>(Arrays.asList("http://loinc.org", "http://snomed.info/sct", null));
+    assertEquals(Arrays.asList(null, "http://loinc.org", "http://snomed.info/sct"), RapidoTracker.sortedState(now));
+    assertEquals(RapidoTracker.stateHash(now), RapidoTracker.stateHash(new java.util.HashSet<>(Arrays.asList("http://snomed.info/sct", null, "http://loinc.org"))));
+    assertNotEquals(RapidoTracker.stateHash(before), RapidoTracker.stateHash(new java.util.HashSet<>(Arrays.asList("http://loinc.org", null))));
+
+    JsonArray added = JsonParserRoundTrip.of(RapidoTracker.added(before, now));
+    assertEquals(2, added.size());
+    Set<String> replayed = new java.util.HashSet<>(before);
+    RapidoTracker.putBack(replayed, added);
+    assertEquals(now, replayed);
+  }
+
+  /** an empty build state, as buildState() reads it at the start of validation */
+  private static Map<String, Set<String>> emptyBuildState() {
+    Map<String, Set<String>> res = new LinkedHashMap<>();
+    for (String set : new String[] {"statusWarnings", "unsupportedCodeSystems", "codeSystemsUsed"}) {
+      res.put(set, new java.util.HashSet<>());
+    }
+    return res;
+  }
+
+  /** validates a resource that uses these code systems, and returns the state as recordValidation() saves it */
+  private static JsonObject validate(Map<String, Set<String>> state, String... systems) throws IOException {
+    Map<String, Set<String>> before = new LinkedHashMap<>();
+    for (Map.Entry<String, Set<String>> e : state.entrySet()) {
+      before.put(e.getKey(), new java.util.HashSet<>(e.getValue()));
+    }
+    state.get("codeSystemsUsed").addAll(Arrays.asList(systems));
+    JsonObject res = RapidoTracker.stateChange(before, state);
+    return org.hl7.fhir.utilities.json.parser.JsonParser.parseObject(org.hl7.fhir.utilities.json.parser.JsonParser.compose(res));
+  }
+
+  /** reuses a validation as savedValidation() does, if the state lets it; false if it has to be validated again */
+  private static boolean replay(Map<String, Set<String>> state, JsonObject saved) {
+    if (!RapidoTracker.isReplayable(saved) || !RapidoTracker.sameStateBefore(state, saved)) {
+      return false;
+    }
+    for (Map.Entry<String, Set<String>> e : state.entrySet()) {
+      RapidoTracker.putBack(e.getValue(), saved.getJsonObject(e.getKey()).forceArray("added"));
+    }
+    return true;
+  }
+
+  @Test
+  void aValidationIsDoneAgainWhenAnEarlierResourceStopsUsingACodeSystemItUses() throws IOException {
+    String sct = "http://snomed.info/sct";
+    // A and B both use SNOMED CT. A is validated first, so validating B adds nothing to codeSystemsUsed
+    Map<String, Set<String>> first = emptyBuildState();
+    JsonObject a = validate(first, sct);
+    JsonObject b = validate(first, sct);
+    assertEquals(0, b.getJsonObject("codeSystemsUsed").forceArray("added").size());
+
+    // nothing changed: both are reused, and the build state ends up as it was
+    Map<String, Set<String>> same = emptyBuildState();
+    assertTrue(replay(same, a));
+    assertTrue(replay(same, b));
+    assertEquals(first, same);
+
+    // A no longer uses SNOMED CT, so it's validated again. Replaying B wouldn't put SNOMED CT back in codeSystemsUsed,
+    // as validating it would (the build checks it for the SNOMED CT edition), so B is validated again too
+    Map<String, Set<String>> edited = emptyBuildState();
+    validate(edited);
+    assertFalse(replay(edited, b));
+    validate(edited, sct);
+    assertEquals(Set.of(sct), edited.get("codeSystemsUsed"));
+
+    // a state saved without one of the sets isn't replayed
+    JsonObject partial = validate(emptyBuildState(), sct);
+    partial.remove("codeSystemsUsed");
+    assertFalse(replay(emptyBuildState(), partial));
   }
 
   /** what Rapido saves goes through its JSON file */

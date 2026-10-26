@@ -14,6 +14,7 @@ import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -114,6 +115,30 @@ class PageRebuildTest {
     List<String> reason = new ArrayList<>();
     List<FetchedFile> pages = state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# Home, edited")), reason);
     assertEquals(Collections.singletonList(page), pages);
+  }
+
+  @Test
+  void notOnAnotherDay() throws IOException {
+    built();
+    // the build ran yesterday: its pages say so, so they are all written again
+    pf.getExecTime().add(Calendar.DAY_OF_MONTH, -1);
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# Home, edited")), reason));
+    assertEquals("the day changed since the last build", reason.get(0));
+  }
+
+  @Test
+  void sameDay() {
+    Calendar a = Calendar.getInstance();
+    a.set(2026, Calendar.OCTOBER, 25, 23, 59, 0);
+    Calendar b = (Calendar) a.clone();
+    b.set(Calendar.HOUR_OF_DAY, 0);
+    assertTrue(PageRebuild.sameDay(a, b));
+    b.add(Calendar.MINUTE, 24 * 60 + 1);
+    assertFalse(PageRebuild.sameDay(a, b));
+    b.add(Calendar.YEAR, -1);
+    b.add(Calendar.DAY_OF_MONTH, -1);
+    assertFalse(PageRebuild.sameDay(a, b), "the same day of another year");
   }
 
   @Test
@@ -320,6 +345,64 @@ class PageRebuildTest {
     filter(warning("Suppressed html check message"));
     assertEquals(3, pf.suppressedMessages.list("test").get(0).getUseCount());
     assertEquals("test", inQa.getComment());
+  }
+
+  @Test
+  void theMessagesArePutBackAsTheyWereBeforeTheHtmlChecks() throws IOException {
+    pf.suppressedMessages.add("Suppressed%", "test");
+    FetchedFile file = new FetchedFile("input/resources/a.json");
+    FetchedResource res = file.addResource("a");
+    pf.fileList.add(file);
+    ValidationMessage error = new ValidationMessage(Source.InstanceValidator, IssueType.CODEINVALID, "Patient/a: Patient.gender",
+        "bad code", IssueSeverity.ERROR);
+    ValidationMessage suppressed = warning("Suppressed in validation");
+    ValidationMessage ig = warning("An IG level warning");
+    res.getErrors().add(error);
+    res.getErrors().add(suppressed);
+    file.getErrors().add(error);
+    file.getErrors().add(suppressed);
+    pf.errors.add(ig);
+    filter(suppressed);
+    file.setFilteredMessages(new ArrayList<>(Arrays.asList(error)));
+    built();
+
+    // what the html checks and qa then do in the build
+    ValidationMessage link = new ValidationMessage(Source.HtmlChecker, IssueType.NOTFOUND, "index.html",
+        "The link 'x.html' for \"x\" cannot be resolved", IssueSeverity.ERROR);
+    pf.errors.add(link);
+    page.getErrors().add(link);
+    file.getErrors().add(warning("Suppressed html check message"));
+    filter(file.getErrors().get(2));
+    filter(ig);
+    file.setFilteredMessages(new ArrayList<>(file.getErrors()));
+    res.getErrors().clear();
+    suppressed.setComment("changed");
+    suppressed.setMatched(false);
+    error.setMatched(true);
+    error.setComment("changed");
+    ig.setMatched(true);
+
+    state.restore();
+    assertEquals(Collections.singletonList(ig), pf.errors);
+    assertEquals(Arrays.asList(error, suppressed), file.getErrors());
+    assertEquals(Arrays.asList(error, suppressed), res.getErrors());
+    assertTrue(page.getErrors().isEmpty());
+    assertEquals(Collections.singletonList(error), file.getFilteredMessages());
+    assertTrue(suppressed.isMatched());
+    assertEquals("test", suppressed.getComment());
+    assertFalse(error.isMatched());
+    assertNull(error.getComment());
+    assertFalse(ig.isMatched());
+    assertEquals(1, pf.suppressedMessages.list("test").get(0).getUseCount());
+    // the same objects: qa matches them, and counts them, as the build did
+    assertTrue(file.getErrors().get(1) == res.getErrors().get(1));
+
+    // and a second page rebuild starts from the same state again
+    pf.errors.add(link);
+    filter(warning("Suppressed html check message"));
+    state.restore();
+    assertEquals(Collections.singletonList(ig), pf.errors);
+    assertEquals(1, pf.suppressedMessages.list("test").get(0).getUseCount());
   }
 
   @Test
