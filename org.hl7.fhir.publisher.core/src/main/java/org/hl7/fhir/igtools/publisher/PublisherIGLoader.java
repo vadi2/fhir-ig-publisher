@@ -338,7 +338,24 @@ public class PublisherIGLoader extends PublisherBase {
       throw new Exception("Error Parsing File "+ pf.igName +": "+e.getMessage(), e);
     }
     pf.templateManager.loadTemplateOverrides(ini, pf.rootDir);
-    pf.template = pf.templateManager.loadTemplate(templateName, pf.rootDir, pf.packageId(), settings.getMode() == PublisherUtils.IGBuildMode.AUTOBUILD, pf.logOptions.contains("template"), false); // Rapido has to produce every fragment that a full build does
+    try {
+      pf.template = pf.templateManager.loadTemplate(templateName, pf.rootDir, pf.packageId(), settings.getMode() == PublisherUtils.IGBuildMode.AUTOBUILD, pf.logOptions.contains("template"), false); // Rapido has to produce every fragment that a full build does
+    } catch (Throwable e) {
+      if (watchSession != null) {
+        // a template that is being worked on, and can't be loaded now: fixing it needs a rebuild
+        try {
+          watchSession.watchTemplateFolders(pf.templateManager.getLocalFolders());
+        } catch (IOException e2) {
+          e.addSuppressed(e2);
+        }
+      }
+      throw e;
+    }
+    if (watchSession != null) {
+      // a template that is being worked on: a change to it needs a rebuild
+      watchSession.watchTemplateFolders(pf.templateManager.getLocalFolders());
+      pf.template.setOutputListener(watchSession.templateOutputs());
+    }
     if (pf.template.hasExtraTemplates()) {
       processExtraTemplates(pf.template.getExtraTemplates());
     }

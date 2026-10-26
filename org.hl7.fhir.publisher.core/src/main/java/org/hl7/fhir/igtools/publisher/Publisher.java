@@ -29,6 +29,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.lang.reflect.Field;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
@@ -61,6 +62,7 @@ import org.hl7.fhir.igtools.renderers.*;
 import org.hl7.fhir.igtools.renderers.ValidationPresenter.IGLanguageInformation;
 import org.hl7.fhir.igtools.ui.IGPublisherUI;
 import org.hl7.fhir.igtools.web.*;
+import org.hl7.fhir.services.comparison.ResourceComparer;
 import org.hl7.fhir.services.context.*;
 import org.hl7.fhir.services.elementmodel.Element;
 import org.hl7.fhir.model.utilities.formats.FhirFormat;
@@ -195,13 +197,14 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     FileChangeMonitor monitor = null;
     WatchSession session = null;
     JekyllDriver jekyllDriver = null;
+    List<FileChangeMonitor.MonitoredPath> watched = null;
     // settings that a build adds to: each build starts again from what the command line said
     List<String> cliNoNarratives = new ArrayList<>(settings.getNoNarratives());
     List<String> cliNoValidate = new ArrayList<>(settings.getNoValidate());
     try {
       if (settings.isWatchMode()) {
         String igDir = new File(rootDir).isFile() ? FileUtilities.getDirectoryForFile(rootDir) : rootDir;
-        List<FileChangeMonitor.MonitoredPath> watched = Arrays.asList(
+        watched = new ArrayList<>(Arrays.asList(
                 FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "ig.ini"))),
                 FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "sushi-config.yaml"))),
                 FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "publication-request.json"))),
@@ -209,13 +212,14 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
                 FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "fsh.ini"))), // which SUSHI to run
                 FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(igDir, "input"))),
                 FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(igDir, "fsh"))), // SUSHI's older layout
-                FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(igDir, "fsh-generated"))));
+                FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(igDir, "fsh-generated")))));
         monitor = new FileChangeMonitor(watched);
         List<Path> paths = new ArrayList<>();
         for (FileChangeMonitor.MonitoredPath p : watched) {
           paths.add(p.getPath());
         }
         session = new WatchSession(Paths.get(igDir), paths);
+        session.setLog(this::log);
         PackageListFetcher.rememberFetches();
         jekyllDriver = JekyllDriver.forCommand(settings.jekyllCommand);
         generator.setWatchTools(jekyllDriver, new FullIgZip());
@@ -247,6 +251,17 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           }
         }
         first = false;
+        if (session != null) {
+          List<Path> added = session.takeNotMonitored();
+          if (!added.isEmpty()) {
+            // the build loaded its template from a local folder
+            for (Path p : added) {
+              watched.add(FileChangeMonitor.MonitoredPath.recursive(p));
+            }
+            monitor.close();
+            monitor = new FileChangeMonitor(watched);
+          }
+        }
       } while (session != null && waitForChanges(monitor, session));
     } finally {
       discardPageRebuild();
@@ -267,13 +282,35 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * Puts back the state that a build changes outside PublisherFields to what a fresh start has, so that a rebuild
    * in watch mode doesn't see what the previous build did
    */
-  private void resetForRebuild(List<String> cliNoNarratives, List<String> cliNoValidate) {
+  void resetForRebuild(List<String> cliNoNarratives, List<String> cliNoValidate) {
     settings.getNoNarratives().clear();
     settings.getNoNarratives().addAll(cliNoNarratives);
     settings.getNoValidate().clear();
     settings.getNoValidate().addAll(cliNoValidate);
     HierarchicalTableGenerator.ACTIVE_TABLES = false;
     HierarchicalTableGenerator.uuid = UUIDUtilities.makeUuidLC();
+    resetComparisonIds();
+  }
+
+  /**
+   * The comparisons (previous version, IPA, IPS, imposes) are numbered by a counter that only a fresh start resets
+   * (ResourceComparer.counter): without this, a rebuild names their pages sd-21-..., sd-22-..., where a build writes
+   * sd-1-..., sd-2-.... If it can't be reset (the core library changed), the rebuild fails rather than write pages
+   * under other names than a build does
+   */
+  static void resetComparisonIds() {
+    resetCounter(ResourceComparer.class, "counter");
+  }
+
+  static void resetCounter(Class<?> c, String field) {
+    try {
+      Field f = c.getDeclaredField(field);
+      f.setAccessible(true);
+      f.setInt(null, 0);
+    } catch (Exception e) {
+      throw new IllegalStateException("Watch mode can't rebuild: unable to reset " + c.getName() + "." + field
+          + ", which numbers the comparison pages (" + e + "); restart the publisher instead", e);
+    }
   }
 
   private void discardPageRebuild() {
