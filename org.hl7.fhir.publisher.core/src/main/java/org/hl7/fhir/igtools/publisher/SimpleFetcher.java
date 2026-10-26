@@ -408,7 +408,9 @@ public class SimpleFetcher implements IFetchFile, ILogicalModelResolver {
             String fn = f.getCanonicalPath();
             String ext = Utilities.getFileExtension(fn);
             if (!Utilities.existsInList(ext, "md", "txt") && !fn.endsWith(".gitignore") && !fn.contains("-spreadsheet") && !isIgnoredFile(f.getName())) {
-              checkFileNameDecoded(f);
+              if (mightLoadAsResource(ext, context)) {
+                checkFileNameDecoded(f);
+              }
               boolean ok = false;
               if (!Utilities.existsInList(ext, fixedFileTypes()))
                 try {
@@ -513,6 +515,14 @@ public class SimpleFetcher implements IFetchFile, ILogicalModelResolver {
 
   private boolean isExemptFileType(String name) {
     return name.endsWith(".svg");
+  }
+
+  // scan() never opens .html (or .adl without openEHR), and images and documents can't parse as a resource, so a name that can't be decoded doesn't matter
+  private boolean mightLoadAsResource(String ext, IWorkerContext context) {
+    if (Utilities.existsInList(ext, "html", "jpg", "png", "gif", "mp3", "mp4", "pfd", "doc", "docx", "ppt", "pptx", "svg")) {
+      return false;
+    }
+    return !"adl".equals(ext) || context.hasPackage("openehr.base", null);
   }
 
   private List<String> fixedFileTypes() {

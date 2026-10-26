@@ -66,7 +66,7 @@ class SimpleFetcherTest {
   }
 
   @ParameterizedTest
-  @CsvSource({"touch, Notizen-\\374.md", "touch, Ablauf-\\374.svg", "touch, ._\\374bersicht.json", "mkdir, \\374bersicht"})
+  @CsvSource({"touch, Notizen-\\374.md", "touch, Ablauf-\\374.svg", "touch, ._\\374bersicht.json", "touch, \\374bersicht.html", "mkdir, \\374bersicht"})
   @EnabledOnOs(OS.LINUX)
   void scanSkipsUndecodableNamesItDoesNotRead(String command, String name) throws Exception {
     rawName(command, name);
