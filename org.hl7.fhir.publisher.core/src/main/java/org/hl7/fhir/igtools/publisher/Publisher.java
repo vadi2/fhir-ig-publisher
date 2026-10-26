@@ -221,6 +221,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           paths.add(p.getPath());
         }
         session = new WatchSession(Paths.get(igDir), paths);
+        session.setLog(this::log);
         PackageListFetcher.rememberFetches();
         jekyllDriver = JekyllDriver.forCommand(settings.jekyllCommand);
         generator.setWatchTools(jekyllDriver, new FullIgZip());
