@@ -4,15 +4,20 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.Mockito.mock;
 
 import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.List;
 
+import org.hl7.fhir.utilities.logging.ILoggingService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
 class SimpleFetcherTest {
 
@@ -21,17 +26,17 @@ class SimpleFetcherTest {
 
   @Test
   void undecodableFileNameUnderAsciiSaysToUseAUtf8Locale() {
-    String message = SimpleFetcher.undecodableFileNameMessage("input/pagecontent/��levaade.md", "ANSI_X3.4-1968");
+    String message = SimpleFetcher.undecodableFileNameMessage("input/pagecontent/\uFFFD\uFFFDlevaade.md", "ANSI_X3.4-1968");
 
-    assertTrue(message.startsWith("Unable to read the file input/pagecontent/��levaade.md: its name can't be decoded with the file name encoding 'ANSI_X3.4-1968'"), message);
+    assertTrue(message.startsWith("Unable to read input/pagecontent/\uFFFD\uFFFDlevaade.md: its name can't be decoded with the file name encoding 'ANSI_X3.4-1968'"), message);
     assertTrue(message.contains("LC_ALL=C.UTF-8"), message);
   }
 
   @Test
   void undecodableFileNameUnderUtf8SaysToRenameIt() {
-    String message = SimpleFetcher.undecodableFileNameMessage("input/pagecontent/�levaade.md", "UTF-8");
+    String message = SimpleFetcher.undecodableFileNameMessage("input/pagecontent/\uFFFDlevaade.md", "UTF-8");
 
-    assertTrue(message.startsWith("Unable to read the file input/pagecontent/�levaade.md: its name isn't valid UTF-8"), message);
+    assertTrue(message.startsWith("Unable to read input/pagecontent/\uFFFDlevaade.md: its name isn't valid UTF-8"), message);
     assertFalse(message.contains("locale"), message);
   }
 
@@ -47,7 +52,7 @@ class SimpleFetcherTest {
       }
     });
 
-    assertEquals(expectedMessage("�levaade.md"), e.getMessage());
+    assertEquals(expectedMessage("\uFFFDlevaade.md"), e.getMessage());
   }
 
   @Test
@@ -55,9 +60,18 @@ class SimpleFetcherTest {
   void scanReportsUndecodableFileName() throws Exception {
     rawName("touch", "Patient-\\374.json");
 
-    Exception e = assertThrows(Exception.class, () -> new SimpleFetcher(null).scan(dir.toString(), null, false, new ArrayList<>()));
+    Exception e = assertThrows(Exception.class, () -> fetcher().scan(dir.toString(), null, false, new ArrayList<>()));
 
-    assertEquals(expectedMessage("Patient-�.json"), e.getMessage());
+    assertEquals(expectedMessage("Patient-\uFFFD.json"), e.getMessage());
+  }
+
+  @ParameterizedTest
+  @CsvSource({"touch, Notizen-\\374.md", "touch, Ablauf-\\374.svg", "touch, ._\\374bersicht.json", "mkdir, \\374bersicht"})
+  @EnabledOnOs(OS.LINUX)
+  void scanSkipsUndecodableNamesItDoesNotRead(String command, String name) throws Exception {
+    rawName(command, name);
+
+    assertTrue(fetcher().scan(dir.toString(), null, false, new ArrayList<>()).isEmpty());
   }
 
   @Test
@@ -65,9 +79,24 @@ class SimpleFetcherTest {
   void scanFoldersReportsUndecodableFolderName() throws Exception {
     rawName("mkdir", "\\374bersicht");
 
-    Exception e = assertThrows(Exception.class, () -> new SimpleFetcher(null).scanFolders(dir.toString(), new ArrayList<>()));
+    Exception e = assertThrows(Exception.class, () -> fetcher().scanFolders(dir.toString(), new ArrayList<>()));
 
-    assertEquals(expectedMessage("�bersicht"), e.getMessage());
+    assertEquals(expectedMessage("\uFFFDbersicht"), e.getMessage());
+  }
+
+  @Test
+  @EnabledOnOs(OS.LINUX)
+  void scanFoldersLeavesUndecodableFileName() throws Exception {
+    rawName("touch", "\\374bersicht.md");
+    List<String> dirs = new ArrayList<>();
+
+    fetcher().scanFolders(dir.toString(), dirs);
+
+    assertEquals(List.of(dir.toFile().getAbsolutePath()), dirs);
+  }
+
+  private SimpleFetcher fetcher() {
+    return new SimpleFetcher(mock(ILoggingService.class));
   }
 
   /**
