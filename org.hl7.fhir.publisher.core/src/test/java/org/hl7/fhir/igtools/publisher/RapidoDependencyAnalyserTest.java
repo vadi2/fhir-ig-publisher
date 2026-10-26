@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -541,6 +542,22 @@ class RapidoDependencyAnalyserTest {
     both.add("codeSystemsUsed", state("codeSystemsUsed", "http://loinc.org").getJsonObject("codeSystemsUsed"));
     assertTrue(RapidoTracker.isReplayable(both));
     assertFalse(RapidoTracker.isReplayable(state("codeSystemsUsed")));
+  }
+
+  @Test
+  void aCodeWithoutASystemIsPartOfTheBuildState() {
+    // the context adds the system of each code it validates to codeSystemsUsed: null for a code that has none
+    Set<String> before = new java.util.HashSet<>(Arrays.asList("http://loinc.org"));
+    Set<String> now = new java.util.HashSet<>(Arrays.asList("http://loinc.org", "http://snomed.info/sct", null));
+    assertEquals(Arrays.asList(null, "http://loinc.org", "http://snomed.info/sct"), RapidoTracker.sortedState(now));
+    assertEquals(RapidoTracker.stateHash(now), RapidoTracker.stateHash(new java.util.HashSet<>(Arrays.asList("http://snomed.info/sct", null, "http://loinc.org"))));
+    assertNotEquals(RapidoTracker.stateHash(before), RapidoTracker.stateHash(new java.util.HashSet<>(Arrays.asList("http://loinc.org", null))));
+
+    JsonArray added = JsonParserRoundTrip.of(RapidoTracker.added(before, now));
+    assertEquals(2, added.size());
+    Set<String> replayed = new java.util.HashSet<>(before);
+    RapidoTracker.putBack(replayed, added);
+    assertEquals(now, replayed);
   }
 
   /** what Rapido saves goes through its JSON file */
