@@ -110,6 +110,18 @@ jobs:
             rapido-qa) props="-Dtest=RapidoQaMessagesTest -Drapido.qa.ig=true" ;;
             scenarios) props="-Dtest=XplatScenarioTest -Dxplat.qa=true -Dxplat.side=${{ matrix.code }} -Dxplat.out=$RUNNER_TEMP/xplat" ;;
           esac
+          if [ "$RUNNER_OS" = Windows ]; then
+            # the user temp folder's path has an 8.3 short name in it (C:\Users\RUNNER~1\...), and the publisher's
+            # page loader can't build an IG from such a path (it compares stated and canonical path lengths). That fails
+            # on the base code too: scenario D shows it, and RapidoQaMessagesTest's @TempDir runs in RUNNER_TEMP instead
+            short=$(powershell -NoProfile -Command "(New-Object -ComObject Scripting.FileSystemObject).GetFolder('$LOCALAPPDATA\Temp').ShortPath" | tr -d '\r')
+            echo "short temp path: $short"
+            if [ "${{ matrix.suite }}" = scenarios ]; then props="$props -Dxplat.shortTemp=$short"; fi
+            if [ "${{ matrix.suite }}" = rapido-qa ]; then
+              export TMP="$(cygpath -w "$RUNNER_TEMP")\\jtmp" TEMP="$(cygpath -w "$RUNNER_TEMP")\\jtmp"
+              mkdir -p "$RUNNER_TEMP/jtmp"; echo "TMP=$TMP"
+            fi
+          fi
           set +e
           (cd src && mvn -B -ntp -pl org.hl7.fhir.publisher.core -am test \
              -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false -Dcheckstyle.skip=true $props)

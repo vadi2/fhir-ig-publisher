@@ -32,6 +32,7 @@ import org.hl7.fhir.utilities.json.model.JsonProperty;
 import org.hl7.fhir.utilities.json.parser.JsonParser;
 import org.hl7.fhir.utilities.npm.NpmPackage;
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledIfSystemProperty;
 import org.w3c.dom.Document;
@@ -42,11 +43,11 @@ import org.w3c.dom.NodeList;
  * Cross-platform QA scenarios (qa/xplat branch only, not for merge). It builds the rapido-qa-ig fixture in separate
  * JVMs, as the command line does, and records each check in target/xplat/checks.txt:
  * <ul>
- *   <li>a page whose file name is non-ASCII (Latin-1, and outside Latin-1), across -rapido builds</li>
+ *   <li>files whose names are non-ASCII (Latin-1, and outside Latin-1), across -rapido builds</li>
  *   <li>a case-only rename of a resource file between two -rapido builds</li>
  *   <li>a -rapido -watch session with output, temp and input files held open (and, on Windows, an input file locked
- *   exclusively, as Excel does) during a page rebuild and a resource rebuild, then a case-only rename and a
- *   non-ASCII page edit</li>
+ *   exclusively, as Excel does) during a page rebuild and a resource rebuild, then a case-only rename and an edit of
+ *   an image whose name is non-ASCII</li>
  * </ul>
  * Checks marked hard fail the test on both code sides; those about what the changed Rapido code promises (differential
  * builds, page rebuilds, a -rapido build reporting what a complete build does) are hard only with -Dxplat.side=all2.
@@ -76,39 +77,73 @@ class XplatScenarioTest {
 
   // --- scenarios ------------------------------------------------------------------------------------------------------
 
-  @Test
-  void nonAsciiPageLatin1() throws Exception {
-    nonAsciiPage("A1-nonascii-latin1", LATIN);
-  }
+  // A page whose file name is non-ASCII can't be built with the IG templates at all: they include the page by name
+  // ({% include <name>.md %}) and Jekyll's include tag only takes ASCII file names ("Invalid syntax for include tag. File
+  // contains invalid characters or sequences"), on the upstream base as well. So the non-ASCII names here are those of an
+  // image (copied to the output, a page-folder file for watch mode) and of a file no build reads (the other-files scan)
 
   @Test
-  void nonAsciiPageWide() throws Exception {
-    nonAsciiPage("A2-nonascii-wide", WIDE);
-  }
-
-  private void nonAsciiPage(String name, String page) throws Exception {
-    scenario = name;
-    Path base = fresh(name);
+  void nonAsciiFileNames() throws Exception {
+    scenario = "A-nonascii-names";
+    Path base = fresh(scenario);
     Path w = base.resolve("w");
     copy(FIXTURE, w);
-    addPage(w, page, "XPLAT-NA-0");
+    addNonAscii(w);
 
     Build b0 = build(w, true, base, "a0");
     hard("rapido build 1 (complete) succeeds", b0.ok(), b0.tail());
-    hard("rapido build 1: output/" + page + ".html has the page", contains(w, "output/" + page + ".html", "XPLAT-NA-0"), listOutput(w, page));
+    hard("rapido build 1: output/" + LATIN + ".svg is there", contains(w, "output/" + LATIN + ".svg", "XPLAT-IMG-0"), listOutput(w, ".svg"));
+    hard("rapido build 1: output/" + WIDE + ".svg is there", contains(w, "output/" + WIDE + ".svg", "XPLAT-IMG-0"), listOutput(w, ".svg"));
 
-    append(w, "input/pagecontent/" + page + ".md", "\nXPLAT-NA-1\n");
     Build b1 = build(w, true, base, "a1");
-    hard("rapido build 2 (page edited) succeeds", b1.ok(), b1.tail());
-    hard("rapido build 2: output/" + page + ".html has the edit", contains(w, "output/" + page + ".html", "XPLAT-NA-1"), listOutput(w, page));
-    all2("rapido build 2 is differential", b1.log.contains("Rapido Mode: Differential Build"), kind(b1.log));
+    hard("rapido build 2 (no change) succeeds", b1.ok(), b1.tail());
+    all2("rapido build 2 (no change) is differential: the non-ASCII names don't force a complete build", b1.log.contains("Rapido Mode: Differential Build"), kind(b1.log));
 
-    Path r = base.resolve("r1");
+    sub(w, "input/images/" + LATIN + ".svg", "XPLAT-IMG-0", "XPLAT-IMG-1");
+    sub(w, "input/notes/" + LATIN + "-" + WIDE + ".txt", "0", "1");
+    Build b2 = build(w, true, base, "a2");
+    hard("rapido build 3 (non-ASCII image and other file edited) succeeds", b2.ok(), b2.tail());
+    hard("rapido build 3: output/" + LATIN + ".svg has the edit", contains(w, "output/" + LATIN + ".svg", "XPLAT-IMG-1"), listOutput(w, ".svg"));
+    info("rapido build 3 kind", true, kind(b2.log));
+
+    Path r = base.resolve("r2");
     copy(w, r);
-    Build c1 = build(r, false, base, "a1-complete");
-    hard("complete build of a fresh copy succeeds", c1.ok(), c1.tail());
-    hard("complete build: output/" + page + ".html has the edit", contains(r, "output/" + page + ".html", "XPLAT-NA-1"), listOutput(r, page));
-    parity("rapido build 2 reports what the complete build does", w, b1, r, c1);
+    Build c2 = build(r, false, base, "a2-complete");
+    hard("complete build of a fresh copy succeeds", c2.ok(), c2.tail());
+    parity("rapido build 3 reports what the complete build does", w, b2, r, c2);
+
+    Build b3 = build(w, true, base, "a3");
+    hard("rapido build 4 (no change) succeeds", b3.ok(), b3.tail());
+    all2("rapido build 4 (no change) is differential", b3.log.contains("Rapido Mode: Differential Build"), kind(b3.log));
+    parity("rapido build 4 reports what the complete build does", w, b3, r, c2);
+  }
+
+  /**
+   * Windows only: the IG in a folder whose path has an 8.3 short name in it (C:\\Users\\RUNNER~1\\...), which is what
+   * java.io.tmpdir and JUnit's @TempDir give on a Windows runner. Evidence only (no hard checks): it shows whether a
+   * build from such a path works, on both sides.
+   */
+  @Test
+  void shortPathOnWindows() throws Exception {
+    scenario = "D-short-path";
+    String shortTemp = System.getProperty("xplat.shortTemp", "");
+    Assumptions.assumeTrue(!shortTemp.isEmpty() && shortTemp.contains("~"), "no 8.3 short path to test with");
+    Path base = fresh(scenario);
+    Path w = Paths.get(shortTemp, "xplat-D", "w");
+    if (Files.exists(w)) {
+      deleteAll(w);
+    }
+    copy(FIXTURE, w);
+    info("the IG folder has a short name in it", true, w + " = " + w.toRealPath());
+    Build c0 = build(w, false, base, "d0-complete");
+    info("complete build from a short path succeeds", c0.ok(), c0.ok() ? "" : missingSource(c0.log) + " | " + c0.tail());
+    Build b0 = build(w, true, base, "d1-rapido");
+    info("rapido build from a short path succeeds", b0.ok(), b0.ok() ? "" : missingSource(b0.log) + " | " + b0.tail());
+  }
+
+  private static String missingSource(String log) {
+    Matcher m = Pattern.compile("Template based HTML file \\S+ is missing source file \\S+").matcher(log);
+    return m.find() ? m.group() : "(no 'missing source file' message)";
   }
 
   @Test
@@ -150,7 +185,7 @@ class XplatScenarioTest {
     Path base = fresh(scenario);
     Path w = base.resolve("w");
     copy(FIXTURE, w);
-    addPage(w, LATIN, "XPLAT-W-NA-0");
+    addNonAscii(w);
     // stands for a spreadsheet the author has open in Excel, which locks it
     Files.write(w.resolve("input/held-open.xlsx"), "not really a spreadsheet".getBytes(StandardCharsets.UTF_8));
 
@@ -207,12 +242,12 @@ class XplatScenarioTest {
       info("watch: rebuild kind after the case-only rename", true, s.kind());
       hard("watch: no rebuild nobody asked for", s.quiet(), s.tail());
 
-      // 4. a non-ASCII page edited
-      append(w, "input/pagecontent/" + LATIN + ".md", "\nXPLAT-W-NA-1\n");
+      // 4. an image with a non-ASCII name edited
+      sub(w, "input/images/" + LATIN + ".svg", "XPLAT-IMG-0", "XPLAT-IMG-1");
       done = s.await(5);
-      hard("watch: rebuild after a non-ASCII page edit finishes", done && !s.failed(), s.tail());
-      hard("watch: output/" + LATIN + ".html has the edit", contains(w, "output/" + LATIN + ".html", "XPLAT-W-NA-1"), listOutput(w, "gr"));
-      all2("watch: the non-ASCII page edit is a page rebuild", s.section().contains("Rapido Mode: Page Rebuild"), s.kind());
+      hard("watch: rebuild after a non-ASCII image edit finishes", done && !s.failed(), s.tail());
+      hard("watch: output/" + LATIN + ".svg has the edit", contains(w, "output/" + LATIN + ".svg", "XPLAT-IMG-1"), listOutput(w, ".svg"));
+      info("watch: rebuild kind after the non-ASCII image edit", true, s.kind());
       hard("watch: no rebuild nobody asked for", s.quiet(), s.tail());
     } finally {
       for (Closeable c : held) {
@@ -462,12 +497,15 @@ class XplatScenarioTest {
     return p;
   }
 
-  /** a markdown page, in the IG's page list and linked from the home page */
-  private static void addPage(Path w, String page, String text) throws IOException {
-    Files.write(w.resolve("input/pagecontent/" + page + ".md"), ("A page whose file name is not ASCII. " + text + "\n").getBytes(StandardCharsets.UTF_8));
-    sub(w, "input/ImplementationGuide-rapido-qa.json", "\"sourceUrl\": \"other.html\"",
-        "\"sourceUrl\": \"" + page + ".html\", \"name\": \"" + page + ".html\", \"title\": \"Non-ASCII " + page + "\", \"generation\": \"markdown\"}, {\"sourceUrl\": \"other.html\"");
-    append(w, "input/pagecontent/index.md", "\nSee [the non-ASCII page](" + page + ".html).\n");
+  /** images with non-ASCII names, linked from the home page, and a file with one that no build reads */
+  private static void addNonAscii(Path w) throws IOException {
+    Files.createDirectories(w.resolve("input/images"));
+    Files.createDirectories(w.resolve("input/notes"));
+    for (String n : new String[] {LATIN, WIDE}) {
+      Files.write(w.resolve("input/images/" + n + ".svg"), ("<svg xmlns=\"http://www.w3.org/2000/svg\" width=\"10\" height=\"10\"><!-- XPLAT-IMG-0 --></svg>\n").getBytes(StandardCharsets.UTF_8));
+    }
+    Files.write(w.resolve("input/notes/" + LATIN + "-" + WIDE + ".txt"), "0\n".getBytes(StandardCharsets.UTF_8));
+    append(w, "input/pagecontent/index.md", "\n![a](" + LATIN + ".svg) ![b](" + WIDE + ".svg)\n");
   }
 
   /** renames in two steps: a move to a name that differs only in case is a no-op on a case-insensitive file system */
