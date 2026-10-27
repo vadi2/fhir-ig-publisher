@@ -419,7 +419,9 @@ class XplatScenarioTest {
     /** waits until the session has said it is watching n times; false if it stopped or took too long */
     boolean await(int n) throws InterruptedException {
       this.n = n;
-      long giveUp = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(30);
+      // a rebuild here takes well under a minute; once one hasn't come at all, the session isn't seeing edits (the
+      // base code's watch on Linux and Windows), and waiting long again for each later step only makes the job slow
+      long giveUp = System.currentTimeMillis() + TimeUnit.MINUTES.toMillis(stalled ? 2 : 12);
       while (System.currentTimeMillis() < giveUp) {
         if (count(text(), WATCHING) >= n) {
           return true;
@@ -429,8 +431,11 @@ class XplatScenarioTest {
         }
         Thread.sleep(2000);
       }
+      stalled = true;
       return false;
     }
+
+    private boolean stalled;
 
     /** nothing started another build, for a while after the last one */
     boolean quiet() throws InterruptedException {
