@@ -4,20 +4,21 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
-import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -25,11 +26,6 @@ class StaleTempFilesTest {
 
   @TempDir
   Path temp;
-
-  @BeforeEach
-  void supported() {
-    assumeTrue(StaleTempFiles.isSupported(temp.toString()), "the file system has no status-change times");
-  }
 
   private Path write(String name, String content) throws IOException {
     Path p = temp.resolve(name);
@@ -203,5 +199,31 @@ class StaleTempFilesTest {
     assertFalse(cyrillic.exists());
 
     assertNull(StaleTempFiles.path("a\0b.html"));
+  }
+
+  /**
+   * A file system without status-change times (no 'unix' view: Windows, or here a zip file system): the template's
+   * writes are still recorded, by modification time. Watch mode on Windows used to stop at the template, in the first
+   * build ("View 'unix' not available")
+   */
+  @Test
+  void theTemplatesWritesAreRecordedWithoutStatusChangeTimes() throws Exception {
+    try (FileSystem zip = FileSystems.newFileSystem(temp.resolve("temp.zip"), Map.of("create", "true"))) {
+      assertFalse(zip.supportedFileAttributeViews().contains("unix"));
+      Path t = zip.getPath("/temp");
+      Files.createDirectories(t.resolve("pages/_includes"));
+      Path before = Files.write(t.resolve("pages/_includes/artifacts.xml"), new byte[] {'a'});
+      StaleTempFiles st = new StaleTempFiles(t, Collections.singletonList(t.resolve("_rapido")));
+      st.markTemplate();
+      Path svg = Files.write(t.resolve("pages/_includes/sample.svg"), new byte[] {'s'});
+      st.saveTemplateWrites();
+      assertEquals(Collections.singletonList("pages/_includes/sample.svg"), Files.readAllLines(t.resolve("_rapido/template-written.txt")));
+      tick();
+
+      st = new StaleTempFiles(t, Collections.singletonList(t.resolve("_rapido")));
+      st.mark();
+      assertEquals(Collections.singletonList(svg), st.findTemplateLeftovers());
+      assertTrue(Files.exists(before));
+    }
   }
 }

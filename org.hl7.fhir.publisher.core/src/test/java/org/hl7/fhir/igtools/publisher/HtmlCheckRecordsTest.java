@@ -92,7 +92,8 @@ class HtmlCheckRecordsTest {
     Files.write(dir.resolve("out/sub/b.html"), new byte[0]);
     boolean[] links = new boolean[1];
     Set<String> tree = HtmlCheckRecords.listTree(dir.resolve("out").toString(), links);
-    assertEquals(new HashSet<>(Arrays.asList("", "a.html", "sub", "sub/b.html")), tree);
+    // with the file system's separator: the tree is only compared with another listing
+    assertEquals(new HashSet<>(Arrays.asList("", "a.html", "sub", Path.of("sub", "b.html").toString())), tree);
     assertFalse(links[0]);
 
     HtmlCheckRecords records = new HtmlCheckRecords("sig");
