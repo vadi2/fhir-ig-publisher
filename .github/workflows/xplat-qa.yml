@@ -11,7 +11,7 @@ on:
       all2_ref:
         description: 'code under test (perf2/all2 commit)'
         required: false
-        default: '8a4c60452577deab36256173130339379af77ea5'
+        default: '7839d3067b40e477ea7a5c10deec7ebec12c36a8'
       base_ref:
         description: 'upstream base commit'
         required: false
@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  ALL2_REF: ${{ inputs.all2_ref || '8a4c60452577deab36256173130339379af77ea5' }}
+  ALL2_REF: ${{ inputs.all2_ref || '7839d3067b40e477ea7a5c10deec7ebec12c36a8' }}
   BASE_REF: ${{ inputs.base_ref || '0bac8e38d39781c8095d21c297bff29f80b59a84' }}
   PYTHONIOENCODING: utf-8
 
