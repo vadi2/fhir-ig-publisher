@@ -666,7 +666,8 @@ public class RapidoTracker {
       for (int i = 2; !names.add(u); i++) {
         u = n + "#" + i;
       }
-      listTree(p, rel.isEmpty() ? u : rel + File.separator + u, skip, files, visited);
+      // with '/' between the names on any OS, as the state is the same file on any OS
+      listTree(p, rel.isEmpty() ? u : rel + "/" + u, skip, files, visited);
     }
   }
 
