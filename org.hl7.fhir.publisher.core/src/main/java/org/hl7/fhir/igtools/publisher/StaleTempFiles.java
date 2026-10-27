@@ -43,26 +43,45 @@ public class StaleTempFiles {
   private final Path templateMarker;
   private final Path templateWrites;
   private final Set<Path> skip = new HashSet<>();
+  // whether the file system has status-change times (see time())
+  private final boolean statusChangeTimes;
 
   /**
    * @param skip folders (or files) under temp that are left alone (e.g. Rapido's own state)
    */
   public StaleTempFiles(String temp, Collection<String> skip) {
-    this.temp = Paths.get(temp).toAbsolutePath().normalize();
+    this(Paths.get(temp), toPaths(skip));
+  }
+
+  /** a temp folder on any file system (the tests use one without status-change times) */
+  StaleTempFiles(Path temp, Collection<Path> skip) {
+    this.temp = temp.toAbsolutePath().normalize();
     this.marker = this.temp.resolve("_rapido").resolve("build-start");
     this.claims = this.temp.resolve("_rapido").resolve("claimed.txt");
     this.templateMarker = this.temp.resolve("_rapido").resolve("template-start");
     this.templateWrites = this.temp.resolve("_rapido").resolve("template-written.txt");
-    for (String s : skip) {
-      this.skip.add(Paths.get(s).toAbsolutePath().normalize());
+    for (Path s : skip) {
+      this.skip.add(s.toAbsolutePath().normalize());
     }
     this.skip.add(marker);
     this.skip.add(claims);
     this.skip.add(templateMarker);
     this.skip.add(templateWrites);
+    this.statusChangeTimes = this.temp.getFileSystem().supportedFileAttributeViews().contains("unix");
   }
 
-  /** Whether the file system has status-change times; if not, this can't be used */
+  private static List<Path> toPaths(Collection<String> paths) {
+    List<Path> res = new ArrayList<>();
+    for (String s : paths) {
+      res.add(Paths.get(s));
+    }
+    return res;
+  }
+
+  /**
+   * Whether the file system has status-change times; if not (Windows), a differential build can't tell what's stale,
+   * so watch mode has to make each build a complete one (see time())
+   */
   public static boolean isSupported(String folder) {
     try {
       Path p = Paths.get(folder);
@@ -95,9 +114,9 @@ public class StaleTempFiles {
     if (before.isEmpty()) {
       return res;
     }
-    FileTime start = ctime(marker);
+    FileTime start = time(marker);
     walk(file -> {
-      if (!isTableImage(file) && before.contains(key(file)) && ctime(file).compareTo(start) < 0) {
+      if (!isTableImage(file) && before.contains(key(file)) && time(file).compareTo(start) < 0) {
         res.add(file);
       }
     });
@@ -137,10 +156,10 @@ public class StaleTempFiles {
     // the clock for status-change times is coarse: make sure what's written from now on is strictly after the marker,
     // so that what was written before it can't be mistaken for the script's
     Path probe = templateMarker.resolveSibling("template-probe");
-    FileTime start = ctime(templateMarker);
+    FileTime start = time(templateMarker);
     for (int i = 0; i < 1000; i++) {
       Files.write(probe, new byte[0]);
-      if (ctime(probe).compareTo(start) > 0) {
+      if (time(probe).compareTo(start) > 0) {
         break;
       }
       Thread.sleep(1);
@@ -152,9 +171,9 @@ public class StaleTempFiles {
   public void saveTemplateWrites() throws IOException {
     List<String> res = new ArrayList<>();
     if (Files.exists(templateMarker)) {
-      FileTime start = ctime(templateMarker);
+      FileTime start = time(templateMarker);
       walk(file -> {
-        if (ctime(file).compareTo(start) > 0) {
+        if (time(file).compareTo(start) > 0) {
           res.add(temp.relativize(file).toString());
         }
       });
@@ -173,10 +192,10 @@ public class StaleTempFiles {
     if (!Files.exists(templateWrites) || !Files.exists(marker)) {
       return res;
     }
-    FileTime start = ctime(marker);
+    FileTime start = time(marker);
     for (String s : Files.readAllLines(templateWrites, StandardCharsets.UTF_8)) {
       Path p = temp.resolve(s).normalize();
-      if (!s.isEmpty() && p.startsWith(temp) && !skip.contains(p) && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) && ctime(p).compareTo(start) < 0) {
+      if (!s.isEmpty() && p.startsWith(temp) && !skip.contains(p) && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) && time(p).compareTo(start) < 0) {
         res.add(p);
       }
     }
@@ -232,8 +251,17 @@ public class StaleTempFiles {
     return p.getFileName().toString().startsWith("tbl_bck");
   }
 
-  private static FileTime ctime(Path p) throws IOException {
-    return (FileTime) Files.getAttribute(p, CTIME, LinkOption.NOFOLLOW_LINKS);
+  /**
+   * When the file was last written: its status-change time, which a program can't set (it can set the modification
+   * time back, as a copy that keeps the source's time does). Where the file system has no status-change times (Windows:
+   * there's no 'unix' view), the modification time, so that a build can still run the template and record what it
+   * claims: isSupported() is false there, so each build is a complete one, and nothing is deleted by what this finds
+   */
+  private FileTime time(Path p) throws IOException {
+    if (statusChangeTimes) {
+      return (FileTime) Files.getAttribute(p, CTIME, LinkOption.NOFOLLOW_LINKS);
+    }
+    return Files.getLastModifiedTime(p, LinkOption.NOFOLLOW_LINKS);
   }
 
   /** a claimed path as kept in the claims file: absolute, normalised, in lower case (as the publisher keeps it) */
