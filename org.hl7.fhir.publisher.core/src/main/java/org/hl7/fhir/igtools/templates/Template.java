@@ -450,7 +450,7 @@ public class Template {
               }
             }
           } else if (new File(newJson).exists()) {
-            try (FileInputStream f = new FileInputStream(newXml)) {
+            try (FileInputStream f = new FileInputStream(newJson)) {
               if (USE_R5_IG_FORMAT) {
                 return (ImplementationGuide) VersionConvertorFactory_50_N.convertResource(new org.hl7.fhir.r5.formats.JsonParser().parse(f));
               } else {
@@ -470,7 +470,7 @@ public class Template {
             }
           }
           else if (new File(newJson).exists()) {
-            try (FileInputStream f = new FileInputStream(newXml)) {
+            try (FileInputStream f = new FileInputStream(newJson)) {
               if (USE_R5_IG_FORMAT) {
                 loadModifiedIg((ImplementationGuide) VersionConvertorFactory_50_N.convertResource(new org.hl7.fhir.r5.formats.JsonParser().parse(f)), ig);
               } else {

@@ -61,6 +61,14 @@ class TemplateScriptTest {
     assertEquals(List.of(), filesOpenUnder(dir));
   }
 
+  @Test
+  void onLoadScriptCanWriteOnlyJson() throws Exception {
+    ImplementationGuide updated = runOnLoad("json");
+
+    assertEquals("Test", updated.getName());
+    assertTrue(Files.notExists(dir.resolve("template/onLoad-ig-updated.xml")));
+  }
+
   /**
    * Runs a template whose onLoad target hands back the IG it was given, written in the given format.
    */
