@@ -1,6 +1,8 @@
 package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
@@ -28,7 +30,7 @@ class PublisherRapidoDevTemplateTest {
     IniFile buildTracker = new IniFile(dir.resolve(".build-tracker.ini").toString());
     buildTracker.setBooleanProperty("status", "started", true, null);
     buildTracker.setBooleanProperty("status", "complete", true, null);
-    buildTracker.setStringProperty("status", "uuid", HierarchicalTableGenerator.uuid, null);
+    buildTracker.setStringProperty("status", "uuid", "the-last-build", null);
     // what the last build tracked: each file's hash, combined with the hash of the IG it depends on
     buildTracker.setStringProperty("tracked", "ig.json", "1", null);
     buildTracker.setStringProperty("tracked", "changed.md", Long.toString(37 * 5 + 1), null);
@@ -47,6 +49,12 @@ class PublisherRapidoDevTemplateTest {
     publisher.checkDependencies(ig, buildTracker);
 
     assertEquals(List.of(ig, changed, unchanged), pf.changeList);
+    // recorded like any other build, so that a build that fails is followed by a complete one
+    IniFile saved = new IniFile(dir.resolve(".build-tracker.ini").toString());
+    assertTrue(saved.getBooleanProperty("status", "started"));
+    assertFalse(saved.getBooleanProperty("status", "complete"));
+    assertEquals(Long.toString(37 * 6 + 1), saved.getStringProperty("tracked", "changed.md"));
+    assertEquals(HierarchicalTableGenerator.uuid, buildTracker.getStringProperty("status", "uuid"));
   }
 
   private static FetchedFile file(String name, long hash) {
