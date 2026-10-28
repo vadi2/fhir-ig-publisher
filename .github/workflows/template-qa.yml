@@ -1,0 +1,60 @@
+# QA for the Template stream fix (qa/template-streams branch only, not for merge).
+# Runs TemplateScriptTest on each OS against the fix and against the upstream base it came from (with the same test
+# copied in), so the Windows delete check can be seen failing before and passing after.
+name: template-qa
+
+on:
+  push:
+    branches: [ qa/template-streams ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  FIX_REF: 9ca4ed7254e929be690d1ce05934c8e9d013c8e2
+  BASE_REF: 0bac8e38d39781c8095d21c297bff29f80b59a84
+
+jobs:
+  test:
+    name: ${{ matrix.os }} / ${{ matrix.code }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, macos-latest, ubuntu-latest ]
+        code: [ fix, base ]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
+          ref: ${{ matrix.code == 'fix' && env.FIX_REF || env.BASE_REF }}
+      - uses: actions/checkout@v4
+        with:
+          path: fix
+          ref: ${{ env.FIX_REF }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: src/pom.xml
+      - name: Copy the test onto base
+        if: matrix.code == 'base'
+        run: |
+          t=org.hl7.fhir.publisher.core/src/test/java/org/hl7/fhir/igtools/templates
+          mkdir -p src/$t && cp fix/$t/TemplateScriptTest.java src/$t/
+      - name: Run TemplateScriptTest
+        run: |
+          if [ "$RUNNER_OS" = Windows ]; then
+            export TMP="$(cygpath -w "$RUNNER_TEMP")\\jtmp" TEMP="$(cygpath -w "$RUNNER_TEMP")\\jtmp"; mkdir -p "$RUNNER_TEMP/jtmp"
+          fi
+          cd src && mvn -B -ntp -pl org.hl7.fhir.publisher.core -am test -Dtest=TemplateScriptTest \
+            -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false -Dcheckstyle.skip=true
+      - name: Test reports
+        if: always()
+        run: cat src/org.hl7.fhir.publisher.core/target/surefire-reports/*TemplateScriptTest.txt || true
