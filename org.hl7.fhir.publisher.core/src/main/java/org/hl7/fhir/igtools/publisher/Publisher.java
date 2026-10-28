@@ -240,11 +240,26 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           // nothing
         }
       }
-    } while (monitor != null && thereIsAFileChange(monitor));
+    } while (monitor != null && thereIsAFileChange(monitor, buildOutputFolders(rootDir)));
   }
 
-  private boolean thereIsAFileChange(FileChangeMonitor monitor) throws InterruptedException {
-    monitor.startMonitoring();
+  /**
+   * the watched folders that this build wrote to, so that what it wrote doesn't start another build
+   */
+  private List<Path> buildOutputFolders(String rootDir) throws IOException {
+    List<Path> folders = new ArrayList<>();
+    if (pf.isSushi) {
+      folders.add(Paths.get(Utilities.path(rootDir, "fsh-generated")));
+    }
+    if (pf.module != null && pf.module.useRoutine("preProcess")) {
+      // a module that pre-processes the IG generates content in input (e.g. the cross-version module)
+      folders.add(Paths.get(Utilities.path(rootDir, "input")));
+    }
+    return folders;
+  }
+
+  private boolean thereIsAFileChange(FileChangeMonitor monitor, List<Path> buildOutputFolders) throws InterruptedException {
+    monitor.startMonitoring(buildOutputFolders);
     System.out.println("Watching for changes (Cascais:Rapido mode)");
     while (true) {
       if (monitor.hasChanges()) {

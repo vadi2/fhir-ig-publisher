@@ -1,5 +1,6 @@
 package org.hl7.fhir.igtools.publisher;
 
+import java.io.Closeable;
 import java.io.IOException;
 import java.nio.file.*;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -14,7 +15,7 @@ import java.util.stream.Collectors;
  * - macOS: Polling-based (fast, reliable)
  * - Other OS: WatchService-based (efficient)
  */
-public class FileChangeMonitor {
+public class FileChangeMonitor implements Closeable {
   private final FileChangeMonitorImpl impl;
 
   public static class FileChangeEvent {
@@ -86,7 +87,15 @@ public class FileChangeMonitor {
   }
 
   public void startMonitoring() {
-    impl.startMonitoring();
+    impl.startMonitoring(Collections.emptyList());
+  }
+
+  /**
+   * Start monitoring after a build. The changes made while not monitoring are reported, except those in
+   * buildOutputFolders: the folders that the build itself wrote to (e.g. fsh-generated, when SUSHI ran)
+   */
+  public void startMonitoring(Collection<Path> buildOutputFolders) {
+    impl.startMonitoring(buildOutputFolders);
   }
 
   public boolean hasChanges() {
@@ -125,9 +134,14 @@ public class FileChangeMonitor {
     impl.stopMonitoring();
   }
 
+  @Override
+  public void close() throws IOException {
+    impl.close();
+  }
+
   // Private interface for implementations
   private interface FileChangeMonitorImpl {
-    void startMonitoring();
+    void startMonitoring(Collection<Path> buildOutputFolders);
     boolean hasChanges();
     List<FileChangeEvent> getChanges();
     List<Path> getChangedFiles();
@@ -137,6 +151,7 @@ public class FileChangeMonitor {
     FileChangeEvent waitForChange() throws InterruptedException;
     void clearChanges();
     void stopMonitoring();
+    void close() throws IOException;
   }
 
   // WatchService implementation (Linux, Windows)
@@ -194,7 +209,7 @@ public class FileChangeMonitor {
     }
 
     @Override
-    public void startMonitoring() {
+    public void startMonitoring(Collection<Path> buildOutputFolders) {
       if (monitoring) return;
 
       // If executor was shutdown, create a new one
@@ -202,48 +217,18 @@ public class FileChangeMonitor {
         executor = Executors.newSingleThreadExecutor();
       }
       monitoring = true;
-      discardPendingEvents();
+      try {
+        reportPendingEvents(buildOutputFolders);
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
 
       executor.submit(() -> {
         try {
           while (monitoring) {
             WatchKey key = watchService.poll(100, TimeUnit.MILLISECONDS);
-            if (key == null) continue;
-
-            Path directory = watchKeys.get(key);
-            if (directory == null) continue;
-
-            for (WatchEvent<?> event : key.pollEvents()) {
-              WatchEvent.Kind<?> kind = event.kind();
-              if (kind == StandardWatchEventKinds.OVERFLOW) continue;
-
-              @SuppressWarnings("unchecked")
-              WatchEvent<Path> ev = (WatchEvent<Path>) event;
-              Path filename = ev.context();
-              Path changedPath = directory.resolve(filename).toAbsolutePath();
-
-              Set<Path> files = monitoredFiles.get(directory);
-              if (files != null && !files.contains(changedPath)) {
-                continue;
-              }
-
-              FileChangeEvent.ChangeType changeType;
-              if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
-                changeType = FileChangeEvent.ChangeType.CREATED;
-              } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
-                changeType = FileChangeEvent.ChangeType.MODIFIED;
-              } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
-                changeType = FileChangeEvent.ChangeType.DELETED;
-              } else {
-                continue;
-              }
-
-              changeQueue.offer(new FileChangeEvent(changedPath, changeType));
-            }
-
-            boolean valid = key.reset();
-            if (!valid) {
-              watchKeys.remove(key);
+            if (key != null) {
+              processEvents(key, Collections.emptyList());
             }
           }
         } catch (InterruptedException e) {
@@ -253,17 +238,73 @@ public class FileChangeMonitor {
     }
 
     /**
-     * The watch service queues events while nothing is monitoring, and those are what the build itself wrote while
-     * it ran (e.g. SUSHI's output in fsh-generated); reporting them would start another build straight away
+     * The watch service queues events while nothing is monitoring. Those in the folders the build wrote to are the
+     * build's own (e.g. SUSHI's output in fsh-generated): reporting them would start another build straight away.
+     * The others are edits made while the build ran, and need another build
      */
-    private void discardPendingEvents() {
+    private void reportPendingEvents(Collection<Path> buildOutputFolders) throws InterruptedException {
+      List<Path> ignored = buildOutputFolders.stream().map(p -> p.toAbsolutePath().normalize()).collect(Collectors.toList());
       WatchKey key;
-      while ((key = watchService.poll()) != null) {
-        key.pollEvents();
-        if (!key.reset()) {
-          watchKeys.remove(key);
+      // a short wait, for the events of the build's last writes to arrive
+      while ((key = watchService.poll(50, TimeUnit.MILLISECONDS)) != null) {
+        processEvents(key, ignored);
+      }
+    }
+
+    private void processEvents(WatchKey key, List<Path> ignored) {
+      Path directory = watchKeys.get(key);
+      if (directory != null) {
+        for (WatchEvent<?> event : key.pollEvents()) {
+          WatchEvent.Kind<?> kind = event.kind();
+          Path changedPath;
+          FileChangeEvent.ChangeType changeType;
+          if (kind == StandardWatchEventKinds.OVERFLOW) {
+            // events were lost, so something in the directory changed
+            changedPath = directory.toAbsolutePath();
+            changeType = FileChangeEvent.ChangeType.MODIFIED;
+          } else {
+            @SuppressWarnings("unchecked")
+            WatchEvent<Path> ev = (WatchEvent<Path>) event;
+            Path filename = ev.context();
+            changedPath = directory.resolve(filename).toAbsolutePath();
+
+            Set<Path> files = monitoredFiles.get(directory);
+            if (files != null && !files.contains(changedPath)) {
+              continue;
+            }
+
+            if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
+              changeType = FileChangeEvent.ChangeType.CREATED;
+            } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
+              changeType = FileChangeEvent.ChangeType.MODIFIED;
+            } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
+              changeType = FileChangeEvent.ChangeType.DELETED;
+            } else {
+              continue;
+            }
+          }
+          if (isIn(changedPath, ignored)) {
+            continue;
+          }
+
+          changeQueue.offer(new FileChangeEvent(changedPath, changeType));
         }
       }
+
+      boolean valid = key.reset();
+      if (!valid) {
+        watchKeys.remove(key);
+      }
+    }
+
+    private boolean isIn(Path path, List<Path> folders) {
+      Path p = path.normalize();
+      for (Path folder : folders) {
+        if (p.startsWith(folder)) {
+          return true;
+        }
+      }
+      return false;
     }
 
     @Override
@@ -366,6 +407,12 @@ public class FileChangeMonitor {
         }
       }
     }
+
+    @Override
+    public void close() throws IOException {
+      stopMonitoring();
+      watchService.close();
+    }
   }
 
   // Polling implementation (macOS)
@@ -462,8 +509,10 @@ public class FileChangeMonitor {
       }
     }
 
+    // compares with the files as they were when it last looked, so the changes made while not monitoring are reported
+    // (all of them: buildOutputFolders isn't used here)
     @Override
-    public void startMonitoring() {
+    public void startMonitoring(Collection<Path> buildOutputFolders) {
       if (monitoring) return;
 
       // If scheduler was shutdown, create a new one
@@ -622,6 +671,11 @@ public class FileChangeMonitor {
           Thread.currentThread().interrupt();
         }
       }
+    }
+
+    @Override
+    public void close() {
+      stopMonitoring();
     }
   }
 

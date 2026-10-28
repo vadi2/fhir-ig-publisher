@@ -24,6 +24,7 @@ class FileChangeMonitorTest {
   Path dir;
 
   private Path page;
+  private Path fshGenerated;
   private FileChangeMonitor monitor;
 
   @BeforeEach
@@ -32,15 +33,18 @@ class FileChangeMonitorTest {
     Files.createDirectories(dir.resolve("input/pagecontent"));
     page = dir.resolve("input/pagecontent/index.md");
     Files.writeString(page, "one");
-    // as the publisher's watch mode does: some files in the IG folder, and the input folder
+    fshGenerated = dir.resolve("fsh-generated");
+    Files.createDirectories(fshGenerated.resolve("resources"));
+    // as the publisher's watch mode does: some files in the IG folder, the input folder, and SUSHI's output
     monitor = new FileChangeMonitor(List.of(
         FileChangeMonitor.MonitoredPath.file(dir.resolve("ig.ini")),
-        FileChangeMonitor.MonitoredPath.recursive(dir.resolve("input"))));
+        FileChangeMonitor.MonitoredPath.recursive(dir.resolve("input")),
+        FileChangeMonitor.MonitoredPath.recursive(fshGenerated)));
   }
 
   @AfterEach
-  void tearDown() {
-    monitor.stopMonitoring();
+  void tearDown() throws Exception {
+    monitor.close();
   }
 
   @Test
@@ -64,7 +68,7 @@ class FileChangeMonitorTest {
 
   @Test
   void changesAreReportedAfterMonitoringIsStartedAgain() throws Exception {
-    monitor.stopMonitoring();
+    monitor.close();
     // only the folder, so that this doesn't depend on the files being watched too
     monitor = new FileChangeMonitor(List.of(FileChangeMonitor.MonitoredPath.recursive(dir.resolve("input"))));
     monitor.startMonitoring();
@@ -80,13 +84,47 @@ class FileChangeMonitorTest {
   }
 
   @Test
-  void changesMadeWhileNotMonitoringAreNotReported() throws Exception {
-    // what a build writes, between the monitor being made (or stopped) and started
-    Files.writeString(page, "written by the build");
+  void whatTheBuildWroteIsNotReported() throws Exception {
+    // what SUSHI writes while the build runs, between the monitor being made (or stopped) and started
+    Files.writeString(fshGenerated.resolve("resources/StructureDefinition-example.json"), "{}");
+    Thread.sleep(500);
+
+    monitor.startMonitoring(List.of(fshGenerated));
+
+    assertNull(monitor.waitForChange(2, TimeUnit.SECONDS));
+  }
+
+  @Test
+  void anEditMadeWhileABuildRanIsReportedWhenMonitoringStartsAgain() throws Exception {
+    monitor.startMonitoring();
+    monitor.stopMonitoring();
+    // the build runs: SUSHI writes its output, and the user saves a page
+    Files.writeString(fshGenerated.resolve("resources/StructureDefinition-example.json"), "{}");
+    Files.writeString(page, "edited during the build");
+    Thread.sleep(500);
+
+    monitor.startMonitoring(List.of(fshGenerated));
+
+    FileChangeMonitor.FileChangeEvent event = monitor.waitForChange(10, TimeUnit.SECONDS);
+    assertNotNull(event, "the edit made during the build wasn't reported");
+    assertEquals(page.toAbsolutePath(), event.getPath());
+    for (FileChangeMonitor.FileChangeEvent other : monitor.getChanges()) {
+      assertEquals(page.toAbsolutePath(), other.getPath());
+    }
+  }
+
+  @Test
+  void lostEventsAreReportedAsAChange() throws Exception {
+    // more events than the watch service keeps for a folder: it then reports an overflow, and the change to
+    // ig.ini is lost in it
+    for (int i = 0; i < 600; i++) {
+      Files.writeString(dir.resolve("other-" + i + ".txt"), "not watched");
+    }
+    Files.writeString(dir.resolve("ig.ini"), "[IG]\nchanged");
     Thread.sleep(500);
 
     monitor.startMonitoring();
 
-    assertNull(monitor.waitForChange(2, TimeUnit.SECONDS));
+    assertNotNull(monitor.waitForChange(10, TimeUnit.SECONDS), "the lost change wasn't reported");
   }
 }
