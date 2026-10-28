@@ -204,7 +204,13 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       ));
     }
 
+    Path input = Paths.get(Utilities.path(rootDir, "input"));
+    Map<Path, String> inputAtStart = null;
     do {
+      if (monitor != null) {
+        // so that what a module writes in input during the build can be told from edits
+        inputAtStart = FileChangeMonitor.fileStates(input);
+      }
       pf = new PublisherFields();
       loader.setPf(pf);
       processor.setPf(pf);
@@ -240,7 +246,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           // nothing
         }
       }
-    } while (monitor != null && thereIsAFileChange(monitor, buildOutputs(rootDir)));
+    } while (monitor != null && thereIsAFileChange(monitor, buildOutputs(rootDir), moduleWrites(input, inputAtStart)));
   }
 
   /**
@@ -251,13 +257,19 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     if (pf.isSushi) {
       outputs.add(Paths.get(Utilities.path(rootDir, "fsh-generated")));
     }
-    // what a module that pre-processes the IG wrote in input (e.g. the cross-version module)
-    outputs.addAll(pf.moduleOutputs);
     return outputs;
   }
 
-  private boolean thereIsAFileChange(FileChangeMonitor monitor, List<Path> buildOutputs) throws InterruptedException {
-    monitor.startMonitoring(buildOutputs);
+  /**
+   * what a module that pre-processes the IG wrote in input (e.g. the cross-version module): the edits in input are
+   * then found by comparing its files
+   */
+  private FileChangeMonitor.FolderWrites moduleWrites(Path input, Map<Path, String> inputAtStart) {
+    return pf.moduleWrites == null ? null : new FileChangeMonitor.FolderWrites(input, inputAtStart, pf.moduleWrites);
+  }
+
+  private boolean thereIsAFileChange(FileChangeMonitor monitor, List<Path> buildOutputs, FileChangeMonitor.FolderWrites moduleWrites) throws InterruptedException {
+    monitor.startMonitoring(buildOutputs, moduleWrites);
     System.out.println("Watching for changes (Cascais:Rapido mode)");
     while (true) {
       if (monitor.hasChanges()) {

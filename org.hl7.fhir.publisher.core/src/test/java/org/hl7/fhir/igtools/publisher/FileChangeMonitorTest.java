@@ -41,8 +41,12 @@ class FileChangeMonitorTest {
     Files.writeString(page, "one");
     fshGenerated = dir.resolve("fsh-generated");
     Files.createDirectories(fshGenerated.resolve("resources"));
-    // as the publisher's watch mode does: some files in the IG folder, the input folder, and SUSHI's output
-    monitor = new FileChangeMonitor(List.of(
+    monitor = newMonitor();
+  }
+
+  // as the publisher's watch mode does: some files in the IG folder, the input folder, and SUSHI's output
+  private FileChangeMonitor newMonitor() throws Exception {
+    return new FileChangeMonitor(List.of(
         FileChangeMonitor.MonitoredPath.file(dir.resolve("ig.ini")),
         FileChangeMonitor.MonitoredPath.recursive(dir.resolve("input")),
         FileChangeMonitor.MonitoredPath.recursive(fshGenerated)));
@@ -207,6 +211,125 @@ class FileChangeMonitorTest {
 
     Set<Path> changed = FileChangeMonitor.changedFiles(before, FileChangeMonitor.fileStates(dir.resolve("input")));
     assertEquals(Set.of(page.toAbsolutePath(), deleted.toAbsolutePath(), added.toAbsolutePath()), changed);
+  }
+
+  @Test
+  void whatAModuleWritesInInputDoesntStartAnotherBuild() throws Exception {
+    Path input = dir.resolve("input");
+    Path includes = input.resolve("includes");
+    Files.createDirectories(includes);
+    Path extensions = input.resolve("extensions");
+    Files.createDirectories(extensions);
+    Files.writeString(extensions.resolve("old.xml"), "old");
+    monitor.close();
+    monitor = newMonitor();
+
+    // the build starts
+    Map<Path, String> atStart = FileChangeMonitor.fileStates(input);
+    // and the module pre-processes the IG: more files in a folder than the watch service keeps the events of, a folder
+    // made again, and a new one
+    Map<Path, String> before = FileChangeMonitor.fileStates(input);
+    for (int i = 0; i < 600; i++) {
+      Files.writeString(includes.resolve("cross-version-" + i + ".xhtml"), "<div/>");
+    }
+    Files.writeString(input.resolve("xver-ig.xml"), "<ImplementationGuide/>");
+    Files.delete(extensions.resolve("old.xml"));
+    Files.delete(extensions);
+    Files.createDirectories(extensions);
+    Files.writeString(extensions.resolve("new.xml"), "new");
+    Files.createDirectories(input.resolve("codes"));
+    Files.writeString(input.resolve("codes/ConceptMap-example.xml"), "<ConceptMap/>");
+    Map<Path, String> after = FileChangeMonitor.fileStates(input);
+    Thread.sleep(500);
+
+    monitor.startMonitoring(List.of(), new FileChangeMonitor.FolderWrites(input, atStart, FileChangeMonitor.writtenFiles(before, after)));
+
+    assertNull(monitor.waitForChange(2, TimeUnit.SECONDS));
+  }
+
+  @Test
+  void editsAreReportedWhenAModuleWritesInInput() throws Exception {
+    Path input = dir.resolve("input");
+    Path generated = input.resolve("xver-ig.xml");
+    Files.writeString(generated, "<ImplementationGuide/>");
+    Path other = input.resolve("pagecontent/other.md");
+
+    Map<Path, String> atStart = FileChangeMonitor.fileStates(input);
+    // the user edits a page before the module runs, a page after, and what the module wrote
+    Files.writeString(page, "edited before the module ran");
+    Map<Path, String> before = FileChangeMonitor.fileStates(input);
+    Thread.sleep(50);
+    Files.writeString(generated, "<ImplementationGuide id=\"x\"/>");
+    Files.createDirectories(input.resolve("includes"));
+    Files.writeString(input.resolve("includes/cross-version.xhtml"), "<div/>");
+    Map<Path, String> after = FileChangeMonitor.fileStates(input);
+    Files.writeString(other, "edited after the module ran");
+    Files.writeString(generated, "<ImplementationGuide id=\"edited\"/>");
+    Thread.sleep(500);
+
+    monitor.startMonitoring(List.of(), new FileChangeMonitor.FolderWrites(input, atStart, FileChangeMonitor.writtenFiles(before, after)));
+
+    List<Path> reported = reportedPaths(other);
+    assertTrue(reported.containsAll(List.of(page.toAbsolutePath(), other.toAbsolutePath(), generated.toAbsolutePath())), reported.toString());
+    assertTrue(!reported.contains(input.resolve("includes/cross-version.xhtml").toAbsolutePath()), "what the module wrote was reported: " + reported);
+  }
+
+  @Test
+  void aFolderThatIsDeletedAndMadeAgainStraightAwayIsWatched() throws Exception {
+    monitor.startMonitoring();
+    Path pages = dir.resolve("input/pagecontent");
+    Files.delete(page);
+    Files.delete(pages);
+    Files.createDirectories(pages);
+    Thread.sleep(500);
+    monitor.clearChanges();
+
+    Files.writeString(page, "back again");
+    assertTrue(reportedPaths(page).contains(page.toAbsolutePath()), "the folder made again isn't watched");
+    // nor what's made in it
+    Path sub = pages.resolve("sub/page.md");
+    Files.createDirectories(sub.getParent());
+    Thread.sleep(200);
+    monitor.clearChanges();
+    Files.writeString(sub, "new");
+    assertTrue(reportedPaths(sub).contains(sub.toAbsolutePath()), "a folder made in the folder made again isn't watched");
+  }
+
+  @Test
+  void aWatchedFolderThatIsDeletedAndMadeAgainStraightAwayIsWatched() throws Exception {
+    monitor.startMonitoring();
+    // e.g. SUSHI clearing its output
+    Files.delete(fshGenerated.resolve("resources"));
+    Files.delete(fshGenerated);
+    Files.createDirectories(fshGenerated.resolve("resources"));
+    Thread.sleep(500);
+    monitor.clearChanges();
+
+    Path sd = fshGenerated.resolve("resources/StructureDefinition-example.json");
+    Files.writeString(sd, "{}");
+    assertTrue(reportedPaths(sd).contains(sd.toAbsolutePath()), "fsh-generated made again isn't watched");
+  }
+
+  @Test
+  void aFolderMadeWhenEventsWereLostIsWatched() throws Exception {
+    Path includes = dir.resolve("input/includes");
+    Files.createDirectories(includes);
+    monitor.close();
+    monitor = newMonitor();
+    for (int i = 0; i < 600; i++) {
+      Files.writeString(includes.resolve("include-" + i + ".xhtml"), "<div/>");
+    }
+    Path sub = includes.resolve("sub");
+    Files.createDirectories(sub);
+    Thread.sleep(500);
+    monitor.startMonitoring();
+    assertNotNull(monitor.waitForChange(10, TimeUnit.SECONDS));
+    Thread.sleep(300);
+    monitor.clearChanges();
+
+    Path file = sub.resolve("include.xhtml");
+    Files.writeString(file, "<div/>");
+    assertTrue(reportedPaths(file).contains(file.toAbsolutePath()), "the folder made when events were lost isn't watched");
   }
 
   // the paths reported, until the one expected (or 10 seconds)

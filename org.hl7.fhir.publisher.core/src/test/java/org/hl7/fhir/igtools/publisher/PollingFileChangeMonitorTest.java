@@ -6,7 +6,9 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
@@ -68,5 +70,26 @@ class PollingFileChangeMonitorTest {
     assertNotNull(event, "the edit made during the build wasn't reported");
     assertEquals(page, event.getPath());
     assertNull(monitor.waitForChange(1, TimeUnit.SECONDS));
+  }
+
+  @Test
+  void onlyTheEditsAreReportedWhenAModuleWritesInInput() throws Exception {
+    Path input = dir.resolve("input");
+    Map<Path, String> atStart = FileChangeMonitor.fileStates(input);
+    Map<Path, String> before = FileChangeMonitor.fileStates(input);
+    Path generated = input.resolve("includes/cross-version.xhtml");
+    Files.createDirectories(generated.getParent());
+    Files.writeString(generated, "<div/>");
+    Map<Path, String> after = FileChangeMonitor.fileStates(input);
+    Files.writeString(page, "edited during the build");
+
+    monitor.startMonitoring(List.of(), new FileChangeMonitor.FolderWrites(input, atStart, FileChangeMonitor.writtenFiles(before, after)));
+
+    List<Path> reported = new ArrayList<>();
+    FileChangeMonitor.FileChangeEvent event;
+    while ((event = monitor.waitForChange(1, TimeUnit.SECONDS)) != null) {
+      reported.add(event.getPath());
+    }
+    assertEquals(List.of(page), reported);
   }
 }
