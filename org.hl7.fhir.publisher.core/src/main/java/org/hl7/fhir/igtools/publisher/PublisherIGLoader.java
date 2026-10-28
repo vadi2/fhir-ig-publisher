@@ -285,9 +285,15 @@ public class PublisherIGLoader extends PublisherBase {
     pf.module = loadModule(ini.getStringProperty("IG", "module"));
     if (pf.module.useRoutine("preProcess")) {
       log("== Ask "+ pf.module.name()+" to pre-process the IG ============================");
+      Path input = Paths.get(Utilities.path(pf.rootDir, "input"));
+      Map<Path, String> inputBefore = settings.isWatchMode() ? FileChangeMonitor.fileStates(input) : null;
       if (!pf.module.preProcess(pf.rootDir)) {
         throw new Exception("Process terminating due to Module failure");
       } else {
+        if (inputBefore != null) {
+          // so that watch mode doesn't take what it wrote for an edit
+          pf.moduleOutputs.addAll(FileChangeMonitor.changedFiles(inputBefore, FileChangeMonitor.fileStates(input)));
+        }
         log("== Done ====================================================================");
       }
     }

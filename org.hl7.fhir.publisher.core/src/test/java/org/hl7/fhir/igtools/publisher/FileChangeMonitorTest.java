@@ -3,10 +3,16 @@ package org.hl7.fhir.igtools.publisher;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.ByteArrayOutputStream;
+import java.io.PrintStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 import org.junit.jupiter.api.AfterEach;
@@ -111,6 +117,114 @@ class FileChangeMonitorTest {
     for (FileChangeMonitor.FileChangeEvent other : monitor.getChanges()) {
       assertEquals(page.toAbsolutePath(), other.getPath());
     }
+  }
+
+  @Test
+  void onlyTheFilesTheBuildWroteAreIgnored() throws Exception {
+    // a module that pre-processes the IG writes some files in input; the user edits another one meanwhile
+    Path generated = dir.resolve("input/xver-ig.xml");
+    Files.writeString(generated, "<ImplementationGuide/>");
+    Files.writeString(page, "edited during the build");
+    Thread.sleep(500);
+    PrintStream out = System.out;
+    ByteArrayOutputStream log = new ByteArrayOutputStream();
+    System.setOut(new PrintStream(log, true));
+    try {
+      monitor.startMonitoring(List.of(generated));
+    } finally {
+      System.setOut(out);
+    }
+
+    List<Path> reported = reportedPaths(page);
+    assertTrue(reported.contains(page.toAbsolutePath()), "the edit made during the build wasn't reported");
+    assertTrue(!reported.contains(generated.toAbsolutePath()), "what the build wrote was reported: " + reported);
+    assertTrue(log.toString().contains("changes made by the build, in " + dir.resolve("input").toAbsolutePath()), log.toString());
+  }
+
+  @Test
+  void aFolderMadeWhileMonitoringIsWatched() throws Exception {
+    monitor.startMonitoring();
+    Path images = dir.resolve("input/images/new");
+    Files.createDirectories(images);
+    Files.writeString(images.resolve("one.png"), "one");
+
+    assertTrue(reportedPaths(images.resolve("one.png")).contains(images.resolve("one.png").toAbsolutePath()), "the file in the new folder wasn't reported");
+    Thread.sleep(200);
+    monitor.clearChanges();
+    Files.writeString(images.resolve("two.png"), "two");
+    assertTrue(reportedPaths(images.resolve("two.png")).contains(images.resolve("two.png").toAbsolutePath()), "the new folder isn't watched");
+  }
+
+  @Test
+  void aFolderThatIsDeletedAndMadeAgainIsWatched() throws Exception {
+    monitor.startMonitoring();
+    // e.g. git switching branches
+    Path pages = dir.resolve("input/pagecontent");
+    Files.delete(page);
+    Files.delete(pages);
+    Thread.sleep(500);
+    Files.createDirectories(pages);
+    Thread.sleep(500);
+    monitor.clearChanges();
+    Files.writeString(page, "back again");
+
+    assertTrue(reportedPaths(page).contains(page.toAbsolutePath()), "the folder made again isn't watched");
+  }
+
+  @Test
+  void aWatchedFolderThatIsMadeLaterIsWatched() throws Exception {
+    // fsh-generated, before SUSHI first runs
+    monitor.close();
+    Files.delete(fshGenerated.resolve("resources"));
+    Files.delete(fshGenerated);
+    monitor = new FileChangeMonitor(List.of(
+        FileChangeMonitor.MonitoredPath.file(dir.resolve("ig.ini")),
+        FileChangeMonitor.MonitoredPath.recursive(fshGenerated)));
+    monitor.startMonitoring();
+    Path sd = fshGenerated.resolve("resources/StructureDefinition-example.json");
+    Files.createDirectories(sd.getParent());
+    Files.writeString(sd, "{}");
+
+    assertTrue(reportedPaths(sd).contains(sd.toAbsolutePath()), "fsh-generated isn't watched once it's made");
+    Thread.sleep(200);
+    monitor.clearChanges();
+    Files.writeString(sd, "{ }");
+    assertTrue(reportedPaths(sd).contains(sd.toAbsolutePath()), "fsh-generated isn't watched once it's made");
+  }
+
+  @Test
+  void theFilesAStepOfTheBuildWroteAreFound() throws Exception {
+    Path unchanged = dir.resolve("input/unchanged.md");
+    Files.writeString(unchanged, "same");
+    Path deleted = dir.resolve("input/deleted.md");
+    Files.writeString(deleted, "going");
+    Map<Path, String> before = FileChangeMonitor.fileStates(dir.resolve("input"));
+
+    Files.writeString(page, "a longer page than it was");
+    Files.delete(deleted);
+    Path added = dir.resolve("input/added.md");
+    Files.writeString(added, "new");
+
+    Set<Path> changed = FileChangeMonitor.changedFiles(before, FileChangeMonitor.fileStates(dir.resolve("input")));
+    assertEquals(Set.of(page.toAbsolutePath(), deleted.toAbsolutePath(), added.toAbsolutePath()), changed);
+  }
+
+  // the paths reported, until the one expected (or 10 seconds)
+  private List<Path> reportedPaths(Path expected) throws InterruptedException {
+    List<Path> paths = new ArrayList<>();
+    long end = System.currentTimeMillis() + 10000;
+    while (System.currentTimeMillis() < end && !paths.contains(expected.toAbsolutePath())) {
+      FileChangeMonitor.FileChangeEvent event = monitor.waitForChange(100, TimeUnit.MILLISECONDS);
+      if (event != null) {
+        paths.add(event.getPath());
+      }
+    }
+    // and anything else that came with it
+    FileChangeMonitor.FileChangeEvent event;
+    while ((event = monitor.waitForChange(300, TimeUnit.MILLISECONDS)) != null) {
+      paths.add(event.getPath());
+    }
+    return paths;
   }
 
   @Test

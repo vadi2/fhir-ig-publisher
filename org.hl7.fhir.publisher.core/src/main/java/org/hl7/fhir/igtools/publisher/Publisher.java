@@ -240,26 +240,24 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           // nothing
         }
       }
-    } while (monitor != null && thereIsAFileChange(monitor, buildOutputFolders(rootDir)));
+    } while (monitor != null && thereIsAFileChange(monitor, buildOutputs(rootDir)));
   }
 
   /**
-   * the watched folders that this build wrote to, so that what it wrote doesn't start another build
+   * the watched files and folders that this build wrote to, so that what it wrote doesn't start another build
    */
-  private List<Path> buildOutputFolders(String rootDir) throws IOException {
-    List<Path> folders = new ArrayList<>();
+  private List<Path> buildOutputs(String rootDir) throws IOException {
+    List<Path> outputs = new ArrayList<>();
     if (pf.isSushi) {
-      folders.add(Paths.get(Utilities.path(rootDir, "fsh-generated")));
+      outputs.add(Paths.get(Utilities.path(rootDir, "fsh-generated")));
     }
-    if (pf.module != null && pf.module.useRoutine("preProcess")) {
-      // a module that pre-processes the IG generates content in input (e.g. the cross-version module)
-      folders.add(Paths.get(Utilities.path(rootDir, "input")));
-    }
-    return folders;
+    // what a module that pre-processes the IG wrote in input (e.g. the cross-version module)
+    outputs.addAll(pf.moduleOutputs);
+    return outputs;
   }
 
-  private boolean thereIsAFileChange(FileChangeMonitor monitor, List<Path> buildOutputFolders) throws InterruptedException {
-    monitor.startMonitoring(buildOutputFolders);
+  private boolean thereIsAFileChange(FileChangeMonitor monitor, List<Path> buildOutputs) throws InterruptedException {
+    monitor.startMonitoring(buildOutputs);
     System.out.println("Watching for changes (Cascais:Rapido mode)");
     while (true) {
       if (monitor.hasChanges()) {

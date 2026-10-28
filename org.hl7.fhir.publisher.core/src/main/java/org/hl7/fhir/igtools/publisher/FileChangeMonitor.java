@@ -66,7 +66,12 @@ public class FileChangeMonitor implements Closeable {
   }
 
   public FileChangeMonitor(List<MonitoredPath> pathsToMonitor) throws IOException {
-    if (isMacOS()) {
+    this(pathsToMonitor, isMacOS());
+  }
+
+  // polling can be chosen on any OS, for testing
+  FileChangeMonitor(List<MonitoredPath> pathsToMonitor, boolean polling) throws IOException {
+    if (polling) {
       System.out.println("Detected macOS - using polling-based file monitor");
       impl = new PollingFileChangeMonitorImpl(pathsToMonitor, 200);
     } else {
@@ -91,11 +96,68 @@ public class FileChangeMonitor implements Closeable {
   }
 
   /**
-   * Start monitoring after a build. The changes made while not monitoring are reported, except those in
-   * buildOutputFolders: the folders that the build itself wrote to (e.g. fsh-generated, when SUSHI ran)
+   * Start monitoring after a build. The changes made while not monitoring are reported, except those to
+   * buildOutputs: the files and folders that the build itself wrote to (e.g. fsh-generated, when SUSHI ran)
    */
-  public void startMonitoring(Collection<Path> buildOutputFolders) {
-    impl.startMonitoring(buildOutputFolders);
+  public void startMonitoring(Collection<Path> buildOutputs) {
+    impl.startMonitoring(buildOutputs);
+  }
+
+  /**
+   * the modified time and size of each file in a folder, so that changedFiles can tell what a step of the build wrote
+   */
+  static Map<Path, String> fileStates(Path folder) throws IOException {
+    Map<Path, String> states = new HashMap<>();
+    if (Files.isDirectory(folder)) {
+      Files.walkFileTree(folder, new SimpleFileVisitor<Path>() {
+        @Override
+        public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+          states.put(file.toAbsolutePath().normalize(), attrs.lastModifiedTime() + "/" + attrs.size());
+          return FileVisitResult.CONTINUE;
+        }
+      });
+    }
+    return states;
+  }
+
+  static Set<Path> changedFiles(Map<Path, String> before, Map<Path, String> after) {
+    Set<Path> changed = new HashSet<>();
+    for (Map.Entry<Path, String> e : after.entrySet()) {
+      if (!e.getValue().equals(before.get(e.getKey()))) {
+        changed.add(e.getKey());
+      }
+    }
+    for (Path p : before.keySet()) {
+      if (!after.containsKey(p)) {
+        changed.add(p);
+      }
+    }
+    return changed;
+  }
+
+  private static List<Path> normalised(Collection<Path> paths) {
+    return paths.stream().map(p -> p.toAbsolutePath().normalize()).collect(Collectors.toList());
+  }
+
+  // the build output that path is, or is in; null if none
+  private static Path outputFor(Path path, List<Path> buildOutputs) {
+    Path p = path.toAbsolutePath().normalize();
+    for (Path output : buildOutputs) {
+      if (p.startsWith(output)) {
+        return output;
+      }
+    }
+    return null;
+  }
+
+  private static Path folderOf(Path output) {
+    return Files.isDirectory(output) || output.getParent() == null ? output : output.getParent();
+  }
+
+  private static void logIgnored(int count, Set<Path> where) {
+    if (count > 0) {
+      System.out.println("Ignored " + count + " changes made by the build, in " + where.stream().sorted().map(Path::toString).collect(Collectors.joining(", ")));
+    }
   }
 
   public boolean hasChanges() {
@@ -141,7 +203,7 @@ public class FileChangeMonitor implements Closeable {
 
   // Private interface for implementations
   private interface FileChangeMonitorImpl {
-    void startMonitoring(Collection<Path> buildOutputFolders);
+    void startMonitoring(Collection<Path> buildOutputs);
     boolean hasChanges();
     List<FileChangeEvent> getChanges();
     List<Path> getChangedFiles();
@@ -160,6 +222,12 @@ public class FileChangeMonitor implements Closeable {
     private final Map<WatchKey, Path> watchKeys;
     // directories that are only watched for some of their files (MonitoredPath.file): directory -> those files
     private final Map<Path, Set<Path>> monitoredFiles;
+    // directories watched with their sub-directories, so that a new sub-directory is watched too
+    private final Set<Path> recursiveDirs = ConcurrentHashMap.newKeySet();
+    // the MonitoredPath.recursive folders (absolute)
+    private final Set<Path> recursiveRoots = ConcurrentHashMap.newKeySet();
+    // recursive folders that don't exist (yet, or any more), watched for in their parent (e.g. fsh-generated before SUSHI runs)
+    private final Set<Path> awaitedDirs = ConcurrentHashMap.newKeySet();
     private ExecutorService executor;
     private final BlockingQueue<FileChangeEvent> changeQueue;
     private volatile boolean monitoring;
@@ -175,6 +243,9 @@ public class FileChangeMonitor implements Closeable {
       for (MonitoredPath monitoredPath : pathsToMonitor) {
         Path path = monitoredPath.path;
 
+        if (monitoredPath.recursive) {
+          recursiveRoots.add(path.toAbsolutePath().normalize());
+        }
         if (Files.isDirectory(path)) {
           if (monitoredPath.recursive) {
             registerRecursive(path);
@@ -184,6 +255,8 @@ public class FileChangeMonitor implements Closeable {
         } else if (Files.exists(path)) {
           monitoredFiles.computeIfAbsent(path.getParent(), d -> ConcurrentHashMap.newKeySet()).add(path.toAbsolutePath());
           registerDirectory(path.getParent());
+        } else if (monitoredPath.recursive) {
+          awaitDirectory(path);
         }
       }
     }
@@ -193,9 +266,48 @@ public class FileChangeMonitor implements Closeable {
         @Override
         public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) throws IOException {
           registerDirectory(dir);
+          recursiveDirs.add(dir);
           return FileVisitResult.CONTINUE;
         }
       });
+    }
+
+    // watch the parent folder for the folder to be made
+    private void awaitDirectory(Path directory) throws IOException {
+      Path parent = directory.getParent();
+      if (parent != null && Files.isDirectory(parent)) {
+        if (!recursiveDirs.contains(parent)) {
+          monitoredFiles.computeIfAbsent(parent, d -> ConcurrentHashMap.newKeySet());
+        }
+        awaitedDirs.add(directory.toAbsolutePath().normalize());
+        registerDirectory(parent);
+      }
+    }
+
+    // a folder made after monitoring started (e.g. by git, or a new input/images/x): watch it, and report what's in it already
+    private void watchNewDirectory(Path directory, List<Path> buildOutputs, Set<Path> ignoredIn, int[] ignored) {
+      try {
+        registerRecursive(directory);
+        Files.walkFileTree(directory, new SimpleFileVisitor<Path>() {
+          @Override
+          public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+            report(file.toAbsolutePath(), FileChangeEvent.ChangeType.CREATED, buildOutputs, ignoredIn, ignored);
+            return FileVisitResult.CONTINUE;
+          }
+        });
+      } catch (IOException e) {
+        System.out.println("Unable to watch " + directory + ": " + e.getMessage());
+      }
+    }
+
+    private void report(Path path, FileChangeEvent.ChangeType changeType, List<Path> buildOutputs, Set<Path> ignoredIn, int[] ignored) {
+      Path output = outputFor(path, buildOutputs);
+      if (output != null) {
+        ignored[0]++;
+        ignoredIn.add(folderOf(output));
+      } else {
+        changeQueue.offer(new FileChangeEvent(path, changeType));
+      }
     }
 
     private void registerDirectory(Path directory) throws IOException {
@@ -209,7 +321,7 @@ public class FileChangeMonitor implements Closeable {
     }
 
     @Override
-    public void startMonitoring(Collection<Path> buildOutputFolders) {
+    public void startMonitoring(Collection<Path> buildOutputs) {
       if (monitoring) return;
 
       // If executor was shutdown, create a new one
@@ -218,7 +330,7 @@ public class FileChangeMonitor implements Closeable {
       }
       monitoring = true;
       try {
-        reportPendingEvents(buildOutputFolders);
+        reportPendingEvents(buildOutputs);
       } catch (InterruptedException e) {
         Thread.currentThread().interrupt();
       }
@@ -228,7 +340,7 @@ public class FileChangeMonitor implements Closeable {
           while (monitoring) {
             WatchKey key = watchService.poll(100, TimeUnit.MILLISECONDS);
             if (key != null) {
-              processEvents(key, Collections.emptyList());
+              processEvents(key, Collections.emptyList(), new HashSet<>(), new int[1]);
             }
           }
         } catch (InterruptedException e) {
@@ -242,16 +354,19 @@ public class FileChangeMonitor implements Closeable {
      * build's own (e.g. SUSHI's output in fsh-generated): reporting them would start another build straight away.
      * The others are edits made while the build ran, and need another build
      */
-    private void reportPendingEvents(Collection<Path> buildOutputFolders) throws InterruptedException {
-      List<Path> ignored = buildOutputFolders.stream().map(p -> p.toAbsolutePath().normalize()).collect(Collectors.toList());
+    private void reportPendingEvents(Collection<Path> buildOutputs) throws InterruptedException {
+      List<Path> outputs = normalised(buildOutputs);
+      Set<Path> ignoredIn = new HashSet<>();
+      int[] ignored = new int[1];
       WatchKey key;
       // a short wait, for the events of the build's last writes to arrive
       while ((key = watchService.poll(50, TimeUnit.MILLISECONDS)) != null) {
-        processEvents(key, ignored);
+        processEvents(key, outputs, ignoredIn, ignored);
       }
+      logIgnored(ignored[0], ignoredIn);
     }
 
-    private void processEvents(WatchKey key, List<Path> ignored) {
+    private void processEvents(WatchKey key, List<Path> buildOutputs, Set<Path> ignoredIn, int[] ignored) {
       Path directory = watchKeys.get(key);
       if (directory != null) {
         for (WatchEvent<?> event : key.pollEvents()) {
@@ -268,6 +383,11 @@ public class FileChangeMonitor implements Closeable {
             Path filename = ev.context();
             changedPath = directory.resolve(filename).toAbsolutePath();
 
+            if (kind == StandardWatchEventKinds.ENTRY_CREATE && Files.isDirectory(changedPath, LinkOption.NOFOLLOW_LINKS)
+                && (recursiveDirs.contains(directory) || awaitedDirs.remove(changedPath.normalize()))) {
+              watchNewDirectory(changedPath, buildOutputs, ignoredIn, ignored);
+            }
+
             Set<Path> files = monitoredFiles.get(directory);
             if (files != null && !files.contains(changedPath)) {
               continue;
@@ -283,28 +403,26 @@ public class FileChangeMonitor implements Closeable {
               continue;
             }
           }
-          if (isIn(changedPath, ignored)) {
-            continue;
-          }
-
-          changeQueue.offer(new FileChangeEvent(changedPath, changeType));
+          report(changedPath, changeType, buildOutputs, ignoredIn, ignored);
         }
       }
 
       boolean valid = key.reset();
       if (!valid) {
         watchKeys.remove(key);
-      }
-    }
-
-    private boolean isIn(Path path, List<Path> folders) {
-      Path p = path.normalize();
-      for (Path folder : folders) {
-        if (p.startsWith(folder)) {
-          return true;
+        recursiveDirs.remove(directory);
+        if (directory != null) {
+          System.out.println("No longer watching " + directory + ": it was deleted or moved");
+          if (recursiveRoots.contains(directory.toAbsolutePath().normalize())) {
+            // watched again when it's made again
+            try {
+              awaitDirectory(directory);
+            } catch (IOException e) {
+              System.out.println("Unable to watch for " + directory + ": " + e.getMessage());
+            }
+          }
         }
       }
-      return false;
     }
 
     @Override
@@ -509,11 +627,12 @@ public class FileChangeMonitor implements Closeable {
       }
     }
 
-    // compares with the files as they were when it last looked, so the changes made while not monitoring are reported
-    // (all of them: buildOutputFolders isn't used here)
+    // compares with the files as they were when it last looked, so the changes made while not monitoring are reported,
+    // except those to the build's outputs: those files are taken as they are now
     @Override
-    public void startMonitoring(Collection<Path> buildOutputFolders) {
+    public void startMonitoring(Collection<Path> buildOutputs) {
       if (monitoring) return;
+      acceptBuildOutputs(normalised(buildOutputs));
 
       // If scheduler was shutdown, create a new one
       if (scheduler.isShutdown() || scheduler.isTerminated()) {
@@ -531,9 +650,36 @@ public class FileChangeMonitor implements Closeable {
       }, pollIntervalMs, pollIntervalMs, TimeUnit.MILLISECONDS);
     }
 
-    private void checkForChanges() {
-      Map<Path, FileSnapshot> currentSnapshots = new ConcurrentHashMap<>();
+    private void acceptBuildOutputs(List<Path> buildOutputs) {
+      if (buildOutputs.isEmpty()) {
+        return;
+      }
+      Map<Path, FileSnapshot> currentSnapshots = scan();
+      Set<Path> ignoredIn = new HashSet<>();
+      int ignored = 0;
+      for (Path path : new ArrayList<>(fileSnapshots.keySet())) {
+        Path output = outputFor(path, buildOutputs);
+        if (output != null && !currentSnapshots.containsKey(path)) {
+          fileSnapshots.remove(path);
+          ignored++;
+          ignoredIn.add(folderOf(output));
+        }
+      }
+      for (Map.Entry<Path, FileSnapshot> entry : currentSnapshots.entrySet()) {
+        Path output = outputFor(entry.getKey(), buildOutputs);
+        if (output != null) {
+          FileSnapshot old = fileSnapshots.put(entry.getKey(), entry.getValue());
+          if (old == null || old.hasChanged(entry.getValue())) {
+            ignored++;
+            ignoredIn.add(folderOf(output));
+          }
+        }
+      }
+      logIgnored(ignored, ignoredIn);
+    }
 
+    private Map<Path, FileSnapshot> scan() {
+      Map<Path, FileSnapshot> currentSnapshots = new ConcurrentHashMap<>();
       for (MonitoredPath monitoredPath : monitoredPaths) {
         try {
           if (Files.isDirectory(monitoredPath.path)) {
@@ -549,6 +695,11 @@ public class FileChangeMonitor implements Closeable {
           // Directory might have been deleted, continue
         }
       }
+      return currentSnapshots;
+    }
+
+    private void checkForChanges() {
+      Map<Path, FileSnapshot> currentSnapshots = scan();
 
       for (Map.Entry<Path, FileSnapshot> entry : fileSnapshots.entrySet()) {
         Path path = entry.getKey();
