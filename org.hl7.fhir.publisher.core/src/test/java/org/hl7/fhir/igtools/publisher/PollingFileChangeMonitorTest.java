@@ -75,7 +75,6 @@ class PollingFileChangeMonitorTest {
   @Test
   void onlyTheEditsAreReportedWhenAModuleWritesInInput() throws Exception {
     Path input = dir.resolve("input");
-    Map<Path, String> atStart = FileChangeMonitor.fileStates(input);
     Map<Path, String> before = FileChangeMonitor.fileStates(input);
     Path generated = input.resolve("includes/cross-version.xhtml");
     Files.createDirectories(generated.getParent());
@@ -83,7 +82,7 @@ class PollingFileChangeMonitorTest {
     Map<Path, String> after = FileChangeMonitor.fileStates(input);
     Files.writeString(page, "edited during the build");
 
-    monitor.startMonitoring(List.of(), new FileChangeMonitor.FolderWrites(input, atStart, FileChangeMonitor.writtenFiles(before, after)));
+    monitor.startMonitoring(List.of(), new FileChangeMonitor.FolderWrites(input, before, FileChangeMonitor.changedFiles(before, after), List.of(input.resolve("fsh"))));
 
     List<Path> reported = new ArrayList<>();
     FileChangeMonitor.FileChangeEvent event;

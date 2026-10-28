@@ -292,7 +292,8 @@ public class PublisherIGLoader extends PublisherBase {
       } else {
         if (inputBefore != null) {
           // so that watch mode doesn't take what it wrote for an edit
-          pf.moduleWrites = FileChangeMonitor.writtenFiles(inputBefore, FileChangeMonitor.fileStates(input));
+          pf.inputBeforeModule = inputBefore;
+          pf.moduleWrites = FileChangeMonitor.changedFiles(inputBefore, FileChangeMonitor.fileStates(input));
         }
         log("== Done ====================================================================");
       }

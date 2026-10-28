@@ -204,13 +204,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       ));
     }
 
-    Path input = Paths.get(Utilities.path(rootDir, "input"));
-    Map<Path, String> inputAtStart = null;
+    // in watch mode, what a module's pre-processing wrote in input, in any build so far
+    Set<Path> moduleOutputs = new HashSet<>();
     do {
-      if (monitor != null) {
-        // so that what a module writes in input during the build can be told from edits
-        inputAtStart = FileChangeMonitor.fileStates(input);
-      }
       pf = new PublisherFields();
       loader.setPf(pf);
       processor.setPf(pf);
@@ -246,7 +242,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           // nothing
         }
       }
-    } while (monitor != null && thereIsAFileChange(monitor, buildOutputs(rootDir), moduleWrites(input, inputAtStart)));
+    } while (monitor != null && thereIsAFileChange(monitor, buildOutputs(rootDir), moduleWrites(rootDir, moduleOutputs)));
   }
 
   /**
@@ -261,11 +257,18 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   }
 
   /**
-   * what a module that pre-processes the IG wrote in input (e.g. the cross-version module): the edits in input are
-   * then found by comparing its files
+   * what a module that pre-processes the IG wrote in input (e.g. the cross-version module): the edits in input are then
+   * found by comparing its files with how they were before the module ran. What it wrote is known by path, from this
+   * build and those before (on Windows, a file it hasn't closed may not look changed yet), so a user's edit made while
+   * it ran, to a file it also writes, is taken for its own. It doesn't write FSH, so input/fsh is watched as usual
    */
-  private FileChangeMonitor.FolderWrites moduleWrites(Path input, Map<Path, String> inputAtStart) {
-    return pf.moduleWrites == null ? null : new FileChangeMonitor.FolderWrites(input, inputAtStart, pf.moduleWrites);
+  private FileChangeMonitor.FolderWrites moduleWrites(String rootDir, Set<Path> moduleOutputs) throws IOException {
+    if (pf.moduleWrites == null) {
+      return null;
+    }
+    moduleOutputs.addAll(pf.moduleWrites);
+    return new FileChangeMonitor.FolderWrites(Paths.get(Utilities.path(rootDir, "input")), pf.inputBeforeModule, moduleOutputs,
+        List.of(Paths.get(Utilities.path(rootDir, "input", "fsh"))));
   }
 
   private boolean thereIsAFileChange(FileChangeMonitor monitor, List<Path> buildOutputs, FileChangeMonitor.FolderWrites moduleWrites) throws InterruptedException {

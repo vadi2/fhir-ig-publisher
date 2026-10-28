@@ -113,38 +113,49 @@ public class FileChangeMonitor implements Closeable {
   /**
    * What a step of the build wrote in a watched folder (e.g. a module's pre-processing, in input). The folder's events
    * can't tell those writes from the user's edits (events for the folders themselves, lost events), so its files are
-   * compared instead: what changed since the build started, other than as the step left it, is an edit
+   * compared instead: what changed since before the step ran is an edit, unless the step writes that path
    */
   public static class FolderWrites {
     private final Path folder;
-    private final Map<Path, String> atBuildStart;
-    private final Map<Path, String> written;
+    private final Map<Path, String> beforeStep;
+    private final Set<Path> written;
+    private final List<Path> notWritten;
 
     /**
-     * @param atBuildStart the fileStates of the folder when the build started
-     * @param written the files the step wrote, as it left them (see writtenFiles)
+     * @param beforeStep the fileStates of the folder before the step ran
+     * @param written the paths the step writes: changes to them are ignored, whatever they are
+     * @param notWritten folders in folder that the step doesn't write to: their events are reported as usual
      */
-    public FolderWrites(Path folder, Map<Path, String> atBuildStart, Map<Path, String> written) {
+    public FolderWrites(Path folder, Map<Path, String> beforeStep, Set<Path> written, List<Path> notWritten) {
       this.folder = folder.toAbsolutePath().normalize();
-      this.atBuildStart = atBuildStart;
-      this.written = written;
+      this.beforeStep = beforeStep;
+      this.written = new HashSet<>(normalised(written));
+      this.notWritten = normalised(notWritten);
     }
 
-    // the files edited since the build started; ignored counts the step's writes
+    private boolean covers(Path path) {
+      return path.startsWith(folder) && outputFor(path, notWritten) == null;
+    }
+
+    // the files edited since before the step ran; ignored counts the step's writes
     private List<FileChangeEvent> edits(int[] ignored) {
       Map<Path, String> now;
       try {
         now = fileStates(folder);
       } catch (IOException e) {
-        System.out.println("Unable to look for changes in " + folder + ": " + e.getMessage());
-        return Collections.emptyList();
+        // a rebuild, rather than an edit missed
+        System.out.println("Unable to look for changes in " + folder + " (edits may have been missed): " + e.getMessage());
+        return List.of(new FileChangeEvent(folder, FileChangeEvent.ChangeType.MODIFIED));
       }
       List<FileChangeEvent> edits = new ArrayList<>();
-      for (Path path : changedFiles(atBuildStart, now)) {
-        if (written.containsKey(path) && Objects.equals(written.get(path), now.get(path))) {
+      // (an edit within the file system's timestamp resolution that keeps the size isn't seen)
+      for (Path path : changedFiles(beforeStep, now)) {
+        if (!covers(path)) {
+          // reported by its events
+        } else if (written.contains(path)) {
           ignored[0]++;
         } else {
-          edits.add(new FileChangeEvent(path, !atBuildStart.containsKey(path) ? FileChangeEvent.ChangeType.CREATED
+          edits.add(new FileChangeEvent(path, !beforeStep.containsKey(path) ? FileChangeEvent.ChangeType.CREATED
               : !now.containsKey(path) ? FileChangeEvent.ChangeType.DELETED : FileChangeEvent.ChangeType.MODIFIED));
         }
       }
@@ -173,15 +184,6 @@ public class FileChangeMonitor implements Closeable {
       });
     }
     return states;
-  }
-
-  // the files changed between before and after, as they are after (null if deleted)
-  static Map<Path, String> writtenFiles(Map<Path, String> before, Map<Path, String> after) {
-    Map<Path, String> written = new HashMap<>();
-    for (Path path : changedFiles(before, after)) {
-      written.put(path, after.get(path));
-    }
-    return written;
   }
 
   static Set<Path> changedFiles(Map<Path, String> before, Map<Path, String> after) {
@@ -241,7 +243,7 @@ public class FileChangeMonitor implements Closeable {
     // whether the change to path isn't to be reported (by its event)
     boolean covers(Path path) {
       Path p = path.toAbsolutePath().normalize();
-      return (compared != null && p.startsWith(compared.folder)) || outputFor(p, outputs) != null;
+      return (compared != null && compared.covers(p)) || outputFor(p, outputs) != null;
     }
 
     void count(Path path) {
@@ -489,6 +491,7 @@ public class FileChangeMonitor implements Closeable {
               } catch (RuntimeException e) {
                 // keep watching: the console says it is
                 System.out.println("Error processing file changes: " + e);
+                e.printStackTrace(System.out);
               }
             }
           }
@@ -509,63 +512,90 @@ public class FileChangeMonitor implements Closeable {
       WatchKey key;
       // a short wait, for the events of the build's last writes to arrive
       while ((key = watchService.poll(50, TimeUnit.MILLISECONDS)) != null) {
-        processEvents(key, ignored);
+        try {
+          processEvents(key, ignored);
+        } catch (RuntimeException e) {
+          // keep watching
+          System.out.println("Error processing file changes: " + e);
+          e.printStackTrace(System.out);
+        }
       }
     }
 
     private void processEvents(WatchKey key, Ignored ignored) {
       Path directory = watchKeys.get(key);
-      if (directory != null) {
-        for (WatchEvent<?> event : key.pollEvents()) {
-          WatchEvent.Kind<?> kind = event.kind();
-          Path changedPath;
-          FileChangeEvent.ChangeType changeType;
-          if (kind == StandardWatchEventKinds.OVERFLOW) {
-            // events were lost, so something in the directory changed
-            changedPath = directory;
-            changeType = FileChangeEvent.ChangeType.MODIFIED;
-            if (recursiveDirs.contains(directory)) {
-              // and folders made in it then weren't seen
-              try {
-                registerRecursive(directory);
-              } catch (IOException e) {
-                System.out.println("Unable to watch " + directory + ": " + e.getMessage());
-              }
-            }
-          } else {
-            @SuppressWarnings("unchecked")
-            WatchEvent<Path> ev = (WatchEvent<Path>) event;
-            Path filename = ev.context();
-            changedPath = directory.resolve(filename);
-
-            if (kind == StandardWatchEventKinds.ENTRY_CREATE && Files.isDirectory(changedPath, LinkOption.NOFOLLOW_LINKS)
-                && (recursiveDirs.contains(directory) || awaitedDirs.remove(changedPath))) {
-              watchNewDirectory(changedPath, ignored);
-            }
-            if (kind == StandardWatchEventKinds.ENTRY_MODIFY && Files.isDirectory(changedPath, LinkOption.NOFOLLOW_LINKS)) {
-              // (Windows) something in a sub-folder changed: that folder's own events say what
-              continue;
-            }
-
-            Set<Path> files = monitoredFiles.get(directory);
-            if (files != null && !files.contains(changedPath)) {
-              continue;
-            }
-
-            if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
-              changeType = FileChangeEvent.ChangeType.CREATED;
-            } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
-              changeType = FileChangeEvent.ChangeType.MODIFIED;
-            } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
-              changeType = FileChangeEvent.ChangeType.DELETED;
-            } else {
-              continue;
+      try {
+        if (directory != null) {
+          for (WatchEvent<?> event : key.pollEvents()) {
+            try {
+              processEvent(directory, event, ignored);
+            } catch (RuntimeException e) {
+              System.out.println("Error processing a change in " + directory + ": " + e);
+              e.printStackTrace(System.out);
             }
           }
-          report(changedPath, changeType, ignored);
+        }
+      } finally {
+        resetKey(key, directory, ignored);
+      }
+    }
+
+    private void processEvent(Path directory, WatchEvent<?> event, Ignored ignored) {
+      WatchEvent.Kind<?> kind = event.kind();
+      Path changedPath;
+      FileChangeEvent.ChangeType changeType;
+      if (kind == StandardWatchEventKinds.OVERFLOW) {
+        // events were lost, so something in the directory changed
+        changedPath = directory;
+        changeType = FileChangeEvent.ChangeType.MODIFIED;
+        if (recursiveDirs.contains(directory)) {
+          // and folders made in it then weren't seen
+          try {
+            registerRecursive(directory);
+          } catch (IOException e) {
+            System.out.println("Unable to watch " + directory + ": " + e.getMessage());
+          }
+        }
+        // nor folders waited for in it
+        for (Path awaited : new ArrayList<>(awaitedDirs)) {
+          if (directory.equals(awaited.getParent()) && Files.isDirectory(awaited, LinkOption.NOFOLLOW_LINKS) && awaitedDirs.remove(awaited)) {
+            watchNewDirectory(awaited, ignored);
+          }
+        }
+      } else {
+        @SuppressWarnings("unchecked")
+        WatchEvent<Path> ev = (WatchEvent<Path>) event;
+        Path filename = ev.context();
+        changedPath = directory.resolve(filename);
+
+        if (kind == StandardWatchEventKinds.ENTRY_CREATE && Files.isDirectory(changedPath, LinkOption.NOFOLLOW_LINKS)
+            && (recursiveDirs.contains(directory) || awaitedDirs.remove(changedPath))) {
+          watchNewDirectory(changedPath, ignored);
+        }
+        if (kind == StandardWatchEventKinds.ENTRY_MODIFY && Files.isDirectory(changedPath, LinkOption.NOFOLLOW_LINKS)) {
+          // (Windows) something in a sub-folder changed: that folder's own events say what
+          return;
+        }
+
+        Set<Path> files = monitoredFiles.get(directory);
+        if (files != null && !files.contains(changedPath)) {
+          return;
+        }
+
+        if (kind == StandardWatchEventKinds.ENTRY_CREATE) {
+          changeType = FileChangeEvent.ChangeType.CREATED;
+        } else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) {
+          changeType = FileChangeEvent.ChangeType.MODIFIED;
+        } else if (kind == StandardWatchEventKinds.ENTRY_DELETE) {
+          changeType = FileChangeEvent.ChangeType.DELETED;
+        } else {
+          return;
         }
       }
+      report(changedPath, changeType, ignored);
+    }
 
+    private void resetKey(WatchKey key, Path directory, Ignored ignored) {
       boolean valid = key.reset();
       if (!valid) {
         watchKeys.remove(key);

@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
+import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -224,9 +225,7 @@ class FileChangeMonitorTest {
     monitor.close();
     monitor = newMonitor();
 
-    // the build starts
-    Map<Path, String> atStart = FileChangeMonitor.fileStates(input);
-    // and the module pre-processes the IG: more files in a folder than the watch service keeps the events of, a folder
+    // the module pre-processes the IG: more files in a folder than the watch service keeps the events of, a folder
     // made again, and a new one
     Map<Path, String> before = FileChangeMonitor.fileStates(input);
     for (int i = 0; i < 600; i++) {
@@ -242,7 +241,27 @@ class FileChangeMonitorTest {
     Map<Path, String> after = FileChangeMonitor.fileStates(input);
     Thread.sleep(500);
 
-    monitor.startMonitoring(List.of(), new FileChangeMonitor.FolderWrites(input, atStart, FileChangeMonitor.writtenFiles(before, after)));
+    monitor.startMonitoring(List.of(), moduleWrites(before, FileChangeMonitor.changedFiles(before, after)));
+
+    assertNull(monitor.waitForChange(2, TimeUnit.SECONDS));
+  }
+
+  // as the publisher does, for a module that pre-processes the IG
+  private FileChangeMonitor.FolderWrites moduleWrites(Map<Path, String> before, Set<Path> written) {
+    return new FileChangeMonitor.FolderWrites(dir.resolve("input"), before, written, List.of(dir.resolve("input/fsh")));
+  }
+
+  @Test
+  void whatAModuleWroteInAnEarlierBuildIsntReported() throws Exception {
+    // on Windows, what it writes may not look changed until it closes the file: after it's done
+    Path generated = dir.resolve("input/xver-ig.xml");
+    Map<Path, String> before = FileChangeMonitor.fileStates(dir.resolve("input"));
+    Map<Path, String> after = FileChangeMonitor.fileStates(dir.resolve("input"));
+    Files.writeString(generated, "<ImplementationGuide/>");
+    Thread.sleep(500);
+
+    // it wrote it in an earlier build too
+    monitor.startMonitoring(List.of(), moduleWrites(before, Set.of(generated)));
 
     assertNull(monitor.waitForChange(2, TimeUnit.SECONDS));
   }
@@ -252,26 +271,31 @@ class FileChangeMonitorTest {
     Path input = dir.resolve("input");
     Path generated = input.resolve("xver-ig.xml");
     Files.writeString(generated, "<ImplementationGuide/>");
+    Path fsh = input.resolve("fsh/profile.fsh");
+    Files.createDirectories(fsh.getParent());
+    Files.writeString(fsh, "Profile: A");
     Path other = input.resolve("pagecontent/other.md");
+    monitor.close();
+    monitor = newMonitor();
 
-    Map<Path, String> atStart = FileChangeMonitor.fileStates(input);
-    // the user edits a page before the module runs, a page after, and what the module wrote
-    Files.writeString(page, "edited before the module ran");
     Map<Path, String> before = FileChangeMonitor.fileStates(input);
     Thread.sleep(50);
+    // the module writes, and the user saves some FSH meanwhile
     Files.writeString(generated, "<ImplementationGuide id=\"x\"/>");
     Files.createDirectories(input.resolve("includes"));
     Files.writeString(input.resolve("includes/cross-version.xhtml"), "<div/>");
+    Files.writeString(fsh, "Profile: B edited");
     Map<Path, String> after = FileChangeMonitor.fileStates(input);
+    // then a page
     Files.writeString(other, "edited after the module ran");
-    Files.writeString(generated, "<ImplementationGuide id=\"edited\"/>");
     Thread.sleep(500);
 
-    monitor.startMonitoring(List.of(), new FileChangeMonitor.FolderWrites(input, atStart, FileChangeMonitor.writtenFiles(before, after)));
+    monitor.startMonitoring(List.of(), moduleWrites(before, FileChangeMonitor.changedFiles(before, after)));
 
     List<Path> reported = reportedPaths(other);
-    assertTrue(reported.containsAll(List.of(page.toAbsolutePath(), other.toAbsolutePath(), generated.toAbsolutePath())), reported.toString());
+    assertTrue(reported.containsAll(List.of(other.toAbsolutePath(), fsh.toAbsolutePath())), reported.toString());
     assertTrue(!reported.contains(input.resolve("includes/cross-version.xhtml").toAbsolutePath()), "what the module wrote was reported: " + reported);
+    assertTrue(!reported.contains(generated.toAbsolutePath()), "what the module wrote was reported: " + reported);
   }
 
   @Test
@@ -280,7 +304,7 @@ class FileChangeMonitorTest {
     Path pages = dir.resolve("input/pagecontent");
     Files.delete(page);
     Files.delete(pages);
-    Files.createDirectories(pages);
+    makeAgain(pages);
     Thread.sleep(500);
     monitor.clearChanges();
 
@@ -301,7 +325,7 @@ class FileChangeMonitorTest {
     // e.g. SUSHI clearing its output
     Files.delete(fshGenerated.resolve("resources"));
     Files.delete(fshGenerated);
-    Files.createDirectories(fshGenerated.resolve("resources"));
+    makeAgain(fshGenerated.resolve("resources"));
     Thread.sleep(500);
     monitor.clearChanges();
 
@@ -330,6 +354,42 @@ class FileChangeMonitorTest {
     Path file = sub.resolve("include.xhtml");
     Files.writeString(file, "<div/>");
     assertTrue(reportedPaths(file).contains(file.toAbsolutePath()), "the folder made when events were lost isn't watched");
+  }
+
+  @Test
+  void aWatchedFolderMadeWhenEventsWereLostIsWatched() throws Exception {
+    // fsh-generated, waited for in the IG folder, made when that folder's events were lost
+    monitor.close();
+    Files.delete(fshGenerated.resolve("resources"));
+    Files.delete(fshGenerated);
+    monitor = newMonitor();
+    for (int i = 0; i < 600; i++) {
+      Files.writeString(dir.resolve("notes-" + i + ".txt"), "not watched");
+    }
+    Files.createDirectories(fshGenerated.resolve("resources"));
+    Thread.sleep(500);
+    monitor.startMonitoring();
+    Thread.sleep(300);
+    monitor.clearChanges();
+
+    Path sd = fshGenerated.resolve("resources/StructureDefinition-example.json");
+    Files.writeString(sd, "{}");
+    assertTrue(reportedPaths(sd).contains(sd.toAbsolutePath()), "fsh-generated isn't watched");
+  }
+
+  // on Windows, a deleted folder that was watched can be pending delete for a moment
+  private static void makeAgain(Path folder) throws Exception {
+    for (int i = 0; ; i++) {
+      try {
+        Files.createDirectories(folder);
+        return;
+      } catch (AccessDeniedException e) {
+        if (i == 50) {
+          throw e;
+        }
+        Thread.sleep(100);
+      }
+    }
   }
 
   // the paths reported, until the one expected (or 10 seconds)
