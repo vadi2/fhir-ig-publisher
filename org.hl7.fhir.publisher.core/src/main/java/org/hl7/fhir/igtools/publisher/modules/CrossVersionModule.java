@@ -118,15 +118,21 @@ public class CrossVersionModule implements IPublisherModule, ProfileKnowledgePro
         engine.logProgress("Generating extensions");
         FileUtilities.createDirectory(Utilities.path(path, "temp", "xver", "x-extensions"));
         for (StructureDefinition sd : engine.getExtensions()) {
-          new JsonParser(cu.getWorker().getModelContext()).setOutputStyle(OutputStyle.PRETTY).compose(new FileOutputStream(Utilities.path(path, "temp", "xver", "x-extensions", "StructureDefinition-"+sd.getId()+".json")), sd);
+          try (FileOutputStream out = new FileOutputStream(Utilities.path(path, "temp", "xver", "x-extensions", "StructureDefinition-"+sd.getId()+".json"))) {
+            new JsonParser(cu.getWorker().getModelContext()).setOutputStyle(OutputStyle.PRETTY).compose(out, sd);
+          }
           genExtensionPage(path, sd);
         }  
         for (ValueSet vs : engine.getNewValueSets().values()) {
-          new JsonParser(cu.getWorker().getModelContext()).setOutputStyle(OutputStyle.PRETTY).compose(new FileOutputStream(Utilities.path(path, "temp", "xver", "x-extensions", "ValueSet-"+vs.getId()+".json")), vs);
+          try (FileOutputStream out = new FileOutputStream(Utilities.path(path, "temp", "xver", "x-extensions", "ValueSet-"+vs.getId()+".json"))) {
+            new JsonParser(cu.getWorker().getModelContext()).setOutputStyle(OutputStyle.PRETTY).compose(out, vs);
+          }
         }
         genSummaryPages(path);
         genZips(path); 
-        new XmlParser(cu.getWorker().getModelContext()).setOutputStyle(OutputStyle.PRETTY).compose(new FileOutputStream(Utilities.path(path, "input", "xver-ig.xml")), ig);
+        try (FileOutputStream out = new FileOutputStream(Utilities.path(path, "input", "xver-ig.xml"))) {
+          new XmlParser(cu.getWorker().getModelContext()).setOutputStyle(OutputStyle.PRETTY).compose(out, ig);
+        }
 
         return true;
       } else {

@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import java.io.ByteArrayOutputStream;
 import java.io.PrintStream;
 import java.nio.file.AccessDeniedException;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -67,6 +68,15 @@ class FileChangeMonitorTest {
 
     assertNotNull(event, "the edit to index.md wasn't reported");
     assertEquals(page.toAbsolutePath(), event.getPath());
+  }
+
+  @Test
+  void itSaysWhetherItIsWatching() throws Exception {
+    assertTrue(!monitor.isWatching());
+    monitor.startMonitoring();
+    assertTrue(monitor.isWatching());
+    monitor.stopMonitoring();
+    assertTrue(!monitor.isWatching());
   }
 
   @Test
@@ -166,9 +176,9 @@ class FileChangeMonitorTest {
     // e.g. git switching branches
     Path pages = dir.resolve("input/pagecontent");
     Files.delete(page);
-    Files.delete(pages);
+    deleteFolder(pages);
     Thread.sleep(500);
-    Files.createDirectories(pages);
+    makeAgain(pages);
     Thread.sleep(500);
     monitor.clearChanges();
     Files.writeString(page, "back again");
@@ -180,14 +190,14 @@ class FileChangeMonitorTest {
   void aWatchedFolderThatIsMadeLaterIsWatched() throws Exception {
     // fsh-generated, before SUSHI first runs
     monitor.close();
-    Files.delete(fshGenerated.resolve("resources"));
-    Files.delete(fshGenerated);
+    deleteFolder(fshGenerated.resolve("resources"));
+    deleteFolder(fshGenerated);
     monitor = new FileChangeMonitor(List.of(
         FileChangeMonitor.MonitoredPath.file(dir.resolve("ig.ini")),
         FileChangeMonitor.MonitoredPath.recursive(fshGenerated)));
     monitor.startMonitoring();
     Path sd = fshGenerated.resolve("resources/StructureDefinition-example.json");
-    Files.createDirectories(sd.getParent());
+    makeAgain(sd.getParent());
     Files.writeString(sd, "{}");
 
     assertTrue(reportedPaths(sd).contains(sd.toAbsolutePath()), "fsh-generated isn't watched once it's made");
@@ -233,8 +243,8 @@ class FileChangeMonitorTest {
     }
     Files.writeString(input.resolve("xver-ig.xml"), "<ImplementationGuide/>");
     Files.delete(extensions.resolve("old.xml"));
-    Files.delete(extensions);
-    Files.createDirectories(extensions);
+    deleteFolder(extensions);
+    makeAgain(extensions);
     Files.writeString(extensions.resolve("new.xml"), "new");
     Files.createDirectories(input.resolve("codes"));
     Files.writeString(input.resolve("codes/ConceptMap-example.xml"), "<ConceptMap/>");
@@ -303,7 +313,7 @@ class FileChangeMonitorTest {
     monitor.startMonitoring();
     Path pages = dir.resolve("input/pagecontent");
     Files.delete(page);
-    Files.delete(pages);
+    deleteFolder(pages);
     makeAgain(pages);
     Thread.sleep(500);
     monitor.clearChanges();
@@ -323,8 +333,8 @@ class FileChangeMonitorTest {
   void aWatchedFolderThatIsDeletedAndMadeAgainStraightAwayIsWatched() throws Exception {
     monitor.startMonitoring();
     // e.g. SUSHI clearing its output
-    Files.delete(fshGenerated.resolve("resources"));
-    Files.delete(fshGenerated);
+    deleteFolder(fshGenerated.resolve("resources"));
+    deleteFolder(fshGenerated);
     makeAgain(fshGenerated.resolve("resources"));
     Thread.sleep(500);
     monitor.clearChanges();
@@ -360,13 +370,13 @@ class FileChangeMonitorTest {
   void aWatchedFolderMadeWhenEventsWereLostIsWatched() throws Exception {
     // fsh-generated, waited for in the IG folder, made when that folder's events were lost
     monitor.close();
-    Files.delete(fshGenerated.resolve("resources"));
-    Files.delete(fshGenerated);
+    deleteFolder(fshGenerated.resolve("resources"));
+    deleteFolder(fshGenerated);
     monitor = newMonitor();
     for (int i = 0; i < 600; i++) {
       Files.writeString(dir.resolve("notes-" + i + ".txt"), "not watched");
     }
-    Files.createDirectories(fshGenerated.resolve("resources"));
+    makeAgain(fshGenerated.resolve("resources"));
     Thread.sleep(500);
     monitor.startMonitoring();
     Thread.sleep(300);
@@ -375,6 +385,21 @@ class FileChangeMonitorTest {
     Path sd = fshGenerated.resolve("resources/StructureDefinition-example.json");
     Files.writeString(sd, "{}");
     assertTrue(reportedPaths(sd).contains(sd.toAbsolutePath()), "fsh-generated isn't watched");
+  }
+
+  // on Windows, what's in a folder that is watched can be pending delete for a moment
+  private static void deleteFolder(Path folder) throws Exception {
+    for (int i = 0; ; i++) {
+      try {
+        Files.delete(folder);
+        return;
+      } catch (DirectoryNotEmptyException | AccessDeniedException e) {
+        if (i == 50) {
+          throw e;
+        }
+        Thread.sleep(100);
+      }
+    }
   }
 
   // on Windows, a deleted folder that was watched can be pending delete for a moment

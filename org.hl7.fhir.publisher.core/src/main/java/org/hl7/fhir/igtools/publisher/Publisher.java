@@ -193,14 +193,17 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
 
     String rootDir = settings.getConfigFile();
     FileChangeMonitor monitor = null;
+    Path watchRoot = null;
     if (settings.isWatchMode()) {
+      watchRoot = watchRoot(rootDir);
+      Path igIni = new File(rootDir).isFile() ? Paths.get(rootDir).toAbsolutePath().normalize() : watchRoot.resolve("ig.ini");
       monitor = new FileChangeMonitor(Arrays.asList(
-              FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(rootDir, "ig.ini"))),
-              FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(rootDir, "sushi-config.yaml"))),
-              FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(rootDir, "publication-request.json"))),
-              FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(rootDir, "sushi-ignoreWarnings.txt"))),
-              FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(rootDir, "input"))),
-              FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(rootDir, "fsh-generated")))
+              FileChangeMonitor.MonitoredPath.file(igIni),
+              FileChangeMonitor.MonitoredPath.file(watchRoot.resolve("sushi-config.yaml")),
+              FileChangeMonitor.MonitoredPath.file(watchRoot.resolve("publication-request.json")),
+              FileChangeMonitor.MonitoredPath.file(watchRoot.resolve("sushi-ignoreWarnings.txt")),
+              FileChangeMonitor.MonitoredPath.recursive(watchRoot.resolve("input")),
+              FileChangeMonitor.MonitoredPath.recursive(watchRoot.resolve("fsh-generated"))
       ));
     }
 
@@ -242,16 +245,24 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           // nothing
         }
       }
-    } while (monitor != null && thereIsAFileChange(monitor, buildOutputs(rootDir), moduleWrites(rootDir, moduleOutputs)));
+    } while (monitor != null && thereIsAFileChange(monitor, buildOutputs(watchRoot), moduleWrites(watchRoot, moduleOutputs)));
+  }
+
+  /**
+   * the IG's folder, for watch mode: -ig names it, or its ig.ini
+   */
+  static Path watchRoot(String configFile) {
+    File f = new File(configFile).getAbsoluteFile();
+    return (f.isFile() ? f.getParentFile() : f).toPath().normalize();
   }
 
   /**
    * the watched files and folders that this build wrote to, so that what it wrote doesn't start another build
    */
-  private List<Path> buildOutputs(String rootDir) throws IOException {
+  private List<Path> buildOutputs(Path watchRoot) {
     List<Path> outputs = new ArrayList<>();
     if (pf.isSushi) {
-      outputs.add(Paths.get(Utilities.path(rootDir, "fsh-generated")));
+      outputs.add(watchRoot.resolve("fsh-generated"));
     }
     return outputs;
   }
@@ -262,13 +273,13 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * build and those before (on Windows, a file it hasn't closed may not look changed yet), so a user's edit made while
    * it ran, to a file it also writes, is taken for its own. It doesn't write FSH, so input/fsh is watched as usual
    */
-  private FileChangeMonitor.FolderWrites moduleWrites(String rootDir, Set<Path> moduleOutputs) throws IOException {
+  private FileChangeMonitor.FolderWrites moduleWrites(Path watchRoot, Set<Path> moduleOutputs) {
     if (pf.moduleWrites == null) {
       return null;
     }
     moduleOutputs.addAll(pf.moduleWrites);
-    return new FileChangeMonitor.FolderWrites(Paths.get(Utilities.path(rootDir, "input")), pf.inputBeforeModule, moduleOutputs,
-        List.of(Paths.get(Utilities.path(rootDir, "input", "fsh"))));
+    return new FileChangeMonitor.FolderWrites(watchRoot.resolve("input"), pf.inputBeforeModule, moduleOutputs,
+        List.of(watchRoot.resolve("input").resolve("fsh")));
   }
 
   private boolean thereIsAFileChange(FileChangeMonitor monitor, List<Path> buildOutputs, FileChangeMonitor.FolderWrites moduleWrites) throws InterruptedException {
@@ -280,6 +291,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         monitor.clearChanges();
         monitor.stopMonitoring();
         return true;
+      } else if (!monitor.isWatching()) {
+        throw new IllegalStateException("No longer watching for changes (see the error above): run the IG Publisher again");
       } else {
         Thread.sleep(100);
       }

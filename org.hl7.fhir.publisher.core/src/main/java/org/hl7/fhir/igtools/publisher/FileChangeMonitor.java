@@ -286,6 +286,13 @@ public class FileChangeMonitor implements Closeable {
     return impl.hasChanges();
   }
 
+  /**
+   * false if monitoring isn't started, or has stopped because of an error (which was printed)
+   */
+  public boolean isWatching() {
+    return impl.isWatching();
+  }
+
   public List<FileChangeEvent> getChanges() {
     return impl.getChanges();
   }
@@ -327,6 +334,7 @@ public class FileChangeMonitor implements Closeable {
   private interface FileChangeMonitorImpl {
     void startMonitoring(Collection<Path> buildOutputs, FolderWrites folderWrites);
     boolean hasChanges();
+    boolean isWatching();
     List<FileChangeEvent> getChanges();
     List<Path> getChangedFiles();
     void printChanges();
@@ -351,6 +359,7 @@ public class FileChangeMonitor implements Closeable {
     // recursive folders that don't exist (yet, or any more), watched for in their parent (e.g. fsh-generated before SUSHI runs)
     private final Set<Path> awaitedDirs = ConcurrentHashMap.newKeySet();
     private ExecutorService executor;
+    private Future<?> task;
     private final BlockingQueue<FileChangeEvent> changeQueue;
     private volatile boolean monitoring;
 
@@ -421,6 +430,8 @@ public class FileChangeMonitor implements Closeable {
         if (Files.isDirectory(dir, LinkOption.NOFOLLOW_LINKS) && awaitedDirs.remove(dir)) {
           watchNewDirectory(dir, ignored);
         }
+      } else {
+        System.out.println("Unable to watch for " + dir + ": " + parent + " isn't a folder");
       }
     }
 
@@ -481,7 +492,7 @@ public class FileChangeMonitor implements Closeable {
       ignored.comparedEdits().forEach(changeQueue::offer);
       ignored.log();
 
-      executor.submit(() -> {
+      task = executor.submit(() -> {
         try {
           while (monitoring) {
             WatchKey key = watchService.poll(100, TimeUnit.MILLISECONDS);
@@ -497,10 +508,18 @@ public class FileChangeMonitor implements Closeable {
           }
         } catch (InterruptedException e) {
           Thread.currentThread().interrupt();
-        } catch (ClosedWatchServiceException e) {
-          // closed
+        } catch (Throwable e) {
+          if (monitoring) {
+            System.out.println("No longer watching for changes: " + e);
+            e.printStackTrace(System.out);
+          }
         }
       });
+    }
+
+    @Override
+    public boolean isWatching() {
+      return monitoring && task != null && !task.isDone();
     }
 
     /**
@@ -532,6 +551,8 @@ public class FileChangeMonitor implements Closeable {
             } catch (RuntimeException e) {
               System.out.println("Error processing a change in " + directory + ": " + e);
               e.printStackTrace(System.out);
+              // so that the change isn't lost
+              report(directory, FileChangeEvent.ChangeType.MODIFIED, ignored);
             }
           }
         }
@@ -728,6 +749,7 @@ public class FileChangeMonitor implements Closeable {
     private final Map<Path, FileSnapshot> fileSnapshots;
     private final List<MonitoredPath> monitoredPaths;
     private ScheduledExecutorService scheduler;
+    private ScheduledFuture<?> task;
     private final BlockingQueue<FileChangeEvent> changeQueue;
     private volatile boolean monitoring;
     private final long pollIntervalMs;
@@ -840,13 +862,23 @@ public class FileChangeMonitor implements Closeable {
 
       monitoring = true;
 
-      scheduler.scheduleAtFixedRate(() -> {
+      task = scheduler.scheduleAtFixedRate(() -> {
         try {
           checkForChanges();
         } catch (Exception e) {
           System.err.println("Error checking for changes: " + e.getMessage());
+        } catch (Error e) {
+          // this ends the checks
+          System.out.println("No longer watching for changes: " + e);
+          e.printStackTrace(System.out);
+          throw e;
         }
       }, pollIntervalMs, pollIntervalMs, TimeUnit.MILLISECONDS);
+    }
+
+    @Override
+    public boolean isWatching() {
+      return monitoring && task != null && !task.isDone();
     }
 
     // the files of the build's outputs (and of the folder compared instead) are taken as they are now
