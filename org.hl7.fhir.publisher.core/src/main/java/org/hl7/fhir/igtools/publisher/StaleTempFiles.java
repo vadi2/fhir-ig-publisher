@@ -82,12 +82,13 @@ public class StaleTempFiles {
    * Whether the file system has status-change times; if not (Windows), a differential build can't tell what's stale,
    * so watch mode has to make each build a complete one (see time())
    */
-  public static boolean isSupported(String folder) {
+  public static boolean isSupported(String folder) throws IOException {
+    Path p = Paths.get(folder);
+    Files.createDirectories(p);
     try {
-      Path p = Paths.get(folder);
-      Files.createDirectories(p);
       return Files.getAttribute(p, CTIME) instanceof FileTime;
-    } catch (Exception e) {
+    } catch (UnsupportedOperationException | IllegalArgumentException e) {
+      // no 'unix' view, or no ctime in it
       return false;
     }
   }

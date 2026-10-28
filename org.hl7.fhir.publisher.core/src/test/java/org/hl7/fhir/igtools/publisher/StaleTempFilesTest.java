@@ -2,6 +2,7 @@ package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -191,5 +192,13 @@ class StaleTempFilesTest {
       assertEquals(Collections.singletonList(svg), st.findTemplateLeftovers());
       assertTrue(Files.exists(before));
     }
+  }
+
+  /** a temp folder that can't be made is the build's error, not a file system without status-change times */
+  @Test
+  void aTempFolderThatCantBeMadeIsAnError() throws Exception {
+    Path file = write("not-a-folder", "x");
+
+    assertThrows(IOException.class, () -> StaleTempFiles.isSupported(file.resolve("temp").toString()));
   }
 }
