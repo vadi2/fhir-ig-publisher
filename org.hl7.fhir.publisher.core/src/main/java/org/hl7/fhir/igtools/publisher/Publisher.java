@@ -209,43 +209,54 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
 
     // in watch mode, what a module's pre-processing wrote in input, in any build so far
     Set<Path> moduleOutputs = new HashSet<>();
-    do {
-      pf = new PublisherFields();
-      loader.setPf(pf);
-      processor.setPf(pf);
-      generator.setPf(pf);
-      pf.resolver = this;
-      setLogger(this);
+    try {
+      do {
+        pf = new PublisherFields();
+        loader.setPf(pf);
+        processor.setPf(pf);
+        generator.setPf(pf);
+        pf.resolver = this;
+        setLogger(this);
 
-      pf.tt = new TimeTracker();
-      loader.initialize();
-      if (pf.validator != null) {
-        pf.validator.setTracker(this);
-      }
+        pf.tt = new TimeTracker();
+        loader.initialize();
+        if (pf.validator != null) {
+          pf.validator.setTracker(this);
+        }
 
-      if (pf.isBuildingTemplate) {
-        packageTemplate();
-      } else {
-        log("Load IG");
+        if (pf.isBuildingTemplate) {
+          packageTemplate();
+        } else {
+          log("Load IG");
+          try {
+            createIg();
+          } catch (Exception e) {
+            recordOutcome(e, null);
+            throw e;
+          }
+        }
+        if (pf.templateLoaded && new File(rootDir).exists()) {
+          FileUtilities.clearDirectory(Utilities.path(rootDir, "template"));
+        }
+        if (pf.folderToDelete != null) {
+          try {
+            FileUtilities.clearDirectory(pf.folderToDelete);
+            new File(pf.folderToDelete).delete();
+          } catch (Throwable e) {
+            // nothing
+          }
+        }
+      } while (monitor != null && thereIsAFileChange(monitor, buildOutputs(watchRoot), moduleWrites(watchRoot, moduleOutputs)));
+    } finally {
+      if (monitor != null) {
+        // its thread would keep the JVM running
         try {
-          createIg();
-        } catch (Exception e) {
-          recordOutcome(e, null);
-          throw e;
+          monitor.close();
+        } catch (IOException e) {
+          System.out.println("Unable to close the file monitor: " + e.getMessage());
         }
       }
-      if (pf.templateLoaded && new File(rootDir).exists()) {
-        FileUtilities.clearDirectory(Utilities.path(rootDir, "template"));
-      }
-      if (pf.folderToDelete != null) {
-        try {
-          FileUtilities.clearDirectory(pf.folderToDelete);
-          new File(pf.folderToDelete).delete();
-        } catch (Throwable e) {
-          // nothing
-        }
-      }
-    } while (monitor != null && thereIsAFileChange(monitor, buildOutputs(watchRoot), moduleWrites(watchRoot, moduleOutputs)));
+    }
   }
 
   /**

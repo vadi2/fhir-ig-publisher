@@ -96,7 +96,10 @@ public class CrossVersionModule implements IPublisherModule, ProfileKnowledgePro
     try {
       cleanup(path);
       if (engine.process(path)) {
-        ImplementationGuide ig = (ImplementationGuide) new XmlParser(cu.getWorker().getModelContext()).parse(new FileInputStream(Utilities.path(path, "input", "xver-ig.xml")));
+        ImplementationGuide ig;
+        try (FileInputStream in = new FileInputStream(Utilities.path(path, "input", "xver-ig.xml"))) {
+          ig = (ImplementationGuide) new XmlParser(cu.getWorker().getModelContext()).parse(in);
+        }
         ImplementationGuideDefinitionPageComponent resPage = ig.getPageByName("cross-version-resources.html");
         ImplementationGuideDefinitionPageComponent dtPage = ig.getPageByName("cross-version-types.html");
         resPage.getPageList().clear();
