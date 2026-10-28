@@ -143,7 +143,8 @@ public class FileChangeMonitor {
   private static class WatchServiceFileChangeMonitorImpl implements FileChangeMonitorImpl {
     private final WatchService watchService;
     private final Map<WatchKey, Path> watchKeys;
-    private final Set<Path> monitoredFiles;
+    // directories that are only watched for some of their files (MonitoredPath.file): directory -> those files
+    private final Map<Path, Set<Path>> monitoredFiles;
     private ExecutorService executor;
     private final BlockingQueue<FileChangeEvent> changeQueue;
     private volatile boolean monitoring;
@@ -151,7 +152,7 @@ public class FileChangeMonitor {
     public WatchServiceFileChangeMonitorImpl(List<MonitoredPath> pathsToMonitor) throws IOException {
       this.watchService = FileSystems.getDefault().newWatchService();
       this.watchKeys = new ConcurrentHashMap<>();
-      this.monitoredFiles = ConcurrentHashMap.newKeySet();
+      this.monitoredFiles = new ConcurrentHashMap<>();
       this.executor = Executors.newSingleThreadExecutor();
       this.changeQueue = new LinkedBlockingQueue<>();
       this.monitoring = false;
@@ -166,7 +167,7 @@ public class FileChangeMonitor {
             registerDirectory(path);
           }
         } else if (Files.exists(path)) {
-          monitoredFiles.add(path.toAbsolutePath());
+          monitoredFiles.computeIfAbsent(path.getParent(), d -> ConcurrentHashMap.newKeySet()).add(path.toAbsolutePath());
           registerDirectory(path.getParent());
         }
       }
@@ -201,6 +202,7 @@ public class FileChangeMonitor {
         executor = Executors.newSingleThreadExecutor();
       }
       monitoring = true;
+      discardPendingEvents();
 
       executor.submit(() -> {
         try {
@@ -220,7 +222,8 @@ public class FileChangeMonitor {
               Path filename = ev.context();
               Path changedPath = directory.resolve(filename).toAbsolutePath();
 
-              if (!monitoredFiles.isEmpty() && !monitoredFiles.contains(changedPath)) {
+              Set<Path> files = monitoredFiles.get(directory);
+              if (files != null && !files.contains(changedPath)) {
                 continue;
               }
 
@@ -247,6 +250,20 @@ public class FileChangeMonitor {
           Thread.currentThread().interrupt();
         }
       });
+    }
+
+    /**
+     * The watch service queues events while nothing is monitoring, and those are what the build itself wrote while
+     * it ran (e.g. SUSHI's output in fsh-generated); reporting them would start another build straight away
+     */
+    private void discardPendingEvents() {
+      WatchKey key;
+      while ((key = watchService.poll()) != null) {
+        key.pollEvents();
+        if (!key.reset()) {
+          watchKeys.remove(key);
+        }
+      }
     }
 
     @Override
@@ -333,6 +350,7 @@ public class FileChangeMonitor {
       changeQueue.clear();
     }
 
+    // the watch service is left open, so that monitoring can be started again
     @Override
     public void stopMonitoring() {
       monitoring = false;
@@ -342,12 +360,9 @@ public class FileChangeMonitor {
           if (!executor.awaitTermination(5, TimeUnit.SECONDS)) {
             executor.shutdownNow();
           }
-          watchService.close();
         } catch (InterruptedException e) {
           executor.shutdownNow();
           Thread.currentThread().interrupt();
-        } catch (IOException e) {
-          System.err.println("Error closing watch service: " + e.getMessage());
         }
       }
     }
