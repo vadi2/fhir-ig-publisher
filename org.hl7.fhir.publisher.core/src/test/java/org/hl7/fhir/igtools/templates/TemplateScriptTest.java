@@ -74,6 +74,17 @@ class TemplateScriptTest {
   }
 
   @Test
+  void onLoadScriptWritingOnlyJsonIgnoresAnUpdatedXmlFromAnEarlierRun() throws Exception {
+    Files.createDirectories(dir.resolve("template"));
+    Files.writeString(dir.resolve("template/onLoad-ig-updated.xml"),
+        "<ImplementationGuide xmlns=\"http://hl7.org/fhir\"><name value=\"Stale\"/></ImplementationGuide>");
+
+    ImplementationGuide updated = runOnLoad("json");
+
+    assertEquals("Test", updated.getName());
+  }
+
+  @Test
   void onGenerateScriptCanWriteOnlyJson() throws Exception {
     Template template = template("onGenerate",
         "<property name=\"onGenerate.files\" value=\"\"/>\n"

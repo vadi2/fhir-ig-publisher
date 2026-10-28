@@ -387,6 +387,8 @@ public class Template {
     String fn = Utilities.path(templateDir, target + "-ig-updated.");
     File jsonIg = new File(sfn +"json");
     File xmlIg = new File(sfn + "xml");
+    File jsonUpdated = new File(fn + "json");
+    File xmlUpdated = new File(fn + "xml");
     if (ig != null) {
       antProject.setProperty(target + ".ig.source", sfn);
       antProject.setProperty(target + ".ig.dest", fn);
@@ -394,6 +396,9 @@ public class Template {
         jsonIg.delete();
       if (xmlIg.exists())
         xmlIg.delete();
+      // a file left over from an earlier run would otherwise be read back as this run's output
+      Files.deleteIfExists(jsonUpdated.toPath());
+      Files.deleteIfExists(xmlUpdated.toPath());
       if (USE_R5_IG_FORMAT) {
         org.hl7.fhir.r5.model.ImplementationGuide ig5 = (org.hl7.fhir.r5.model.ImplementationGuide) VersionConvertorFactory_50_N.convertResource(ig, new BaseAdvisor_50_N(true, true));
         try (FileOutputStream f = new FileOutputStream(sfn+"xml")) {
