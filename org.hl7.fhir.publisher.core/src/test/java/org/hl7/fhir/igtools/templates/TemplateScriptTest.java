@@ -12,6 +12,7 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
@@ -21,6 +22,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 class TemplateScriptTest {
 
@@ -47,16 +50,17 @@ class TemplateScriptTest {
   /**
    * Linux doesn't block deleting an open file, so look for the open handles in /proc/self/fd instead.
    */
-  @Test
+  @ParameterizedTest
+  @ValueSource(strings = {"xml", "json"})
   @EnabledOnOs(OS.LINUX)
-  void onLoadScriptLeavesNoFilesOpen() throws Exception {
+  void onLoadScriptLeavesNoFilesOpen(String format) throws Exception {
     Path probe = Files.writeString(dir.resolve("probe.txt"), "probe");
     try (FileInputStream in = new FileInputStream(probe.toFile())) {
       assertEquals(List.of("probe.txt"), filesOpenUnder(dir));
     }
     assertEquals(List.of(), filesOpenUnder(dir));
 
-    runOnLoad("xml");
+    runOnLoad(format);
 
     assertEquals(List.of(), filesOpenUnder(dir));
   }
@@ -69,28 +73,51 @@ class TemplateScriptTest {
     assertTrue(Files.notExists(dir.resolve("template/onLoad-ig-updated.xml")));
   }
 
-  /**
-   * Runs a template whose onLoad target hands back the IG it was given, written in the given format.
-   */
+  @Test
+  void onGenerateScriptCanWriteOnlyJson() throws Exception {
+    Template template = template("onGenerate",
+        "<property name=\"onGenerate.files\" value=\"\"/>\n"
+        + "<copy file=\"${onGenerate.ig.source}json\" tofile=\"${onGenerate.ig.dest}json\">\n"
+        + "  <filterchain><tokenfilter><replacestring from=\"Original\" to=\"Changed\"/></tokenfilter></filterchain>\n"
+        + "</copy>");
+    ImplementationGuide ig = ig();
+    ig.getDefinition().addGrouping().setName("Original");
+
+    template.beforeGenerateEvent(null, ig, Files.createDirectory(dir.resolve("temp")).toString(), new HashSet<>(), new ArrayList<>(), List.of());
+
+    assertEquals("Changed", ig.getDefinition().getGroupingFirstRep().getName());
+    assertTrue(Files.notExists(dir.resolve("template/onGenerate-ig-updated.xml")));
+  }
+
   private ImplementationGuide runOnLoad(String format) throws Exception {
-    Path templateDir = Files.createDirectory(dir.resolve("template"));
-    Files.writeString(templateDir.resolve("config.json"), "{\"script\": \"scripts/ant.xml\", \"targets\": {\"onLoad\": \"onLoad\"}}");
+    Template template = template("onLoad", "<copy file=\"${onLoad.ig.source}" + format + "\" tofile=\"${onLoad.ig.dest}" + format + "\"/>");
+    ImplementationGuide updated = template.onLoadEvent(ig(), new HashMap<>());
+    assertNotNull(updated);
+    return updated;
+  }
+
+  /**
+   * A template whose script has a single target, named after the event it runs on.
+   */
+  private Template template(String event, String tasks) throws IOException {
+    Path templateDir = Files.createDirectories(dir.resolve("template"));
+    Files.writeString(templateDir.resolve("config.json"), "{\"script\": \"scripts/ant.xml\", \"targets\": {\"" + event + "\": \"" + event + "\"}}");
     Files.createDirectory(templateDir.resolve("scripts"));
     Files.writeString(templateDir.resolve("scripts/ant.xml"),
         "<project name=\"test\">\n"
-        + "  <target name=\"onLoad\">\n"
-        + "    <copy file=\"${onLoad.ig.source}" + format + "\" tofile=\"${onLoad.ig.dest}" + format + "\"/>\n"
+        + "  <target name=\"" + event + "\">\n"
+        + tasks + "\n"
         + "  </target>\n"
         + "</project>\n");
-    Template template = new Template(dir.toString(), true, null, null, false, false, false);
+    return new Template(dir.toString(), true, null, null, false, false, false);
+  }
 
+  private static ImplementationGuide ig() {
     ImplementationGuide ig = new ImplementationGuide();
     ig.setId("test");
     ig.setUrl("http://example.org/ImplementationGuide/test");
     ig.setName("Test");
-    ImplementationGuide updated = template.onLoadEvent(ig, new HashMap<>());
-    assertNotNull(updated);
-    return updated;
+    return ig;
   }
 
   private List<Path> scriptFiles() throws IOException {
