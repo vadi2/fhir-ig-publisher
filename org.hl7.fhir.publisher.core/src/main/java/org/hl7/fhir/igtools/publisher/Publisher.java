@@ -911,6 +911,13 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       loader.clearTempFolder();
       return;
     }
+    if (pf.template.isDevMode()) {
+      // the temp folder has already been cleared for a template in development (see PublisherIGLoader), so a
+      // differential build would leave out the pages of the files that haven't changed
+      log("Rapido Mode: Complete Build (template in development mode)");
+      pf.changeList.addAll(pf.fileList);
+      return;
+    }
     buildTracker.setBooleanProperty("status", "complete", false, null);
     buildTracker.setBooleanProperty("status", "started", true, null);
 
