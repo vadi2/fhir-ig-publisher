@@ -30,9 +30,11 @@ public class DependencyElementVisitor implements ElementVisitor.IElementVisitor 
     } else if (element.isPrimitive() ) {
       if ("canonical".equals(element.fhirType())) {
         String canonical = element.primitiveValue();
-        String url = canonical.contains("|") ? canonical.substring(0, canonical.indexOf("|")) : canonical;
-        String version = canonical.contains("|") ? canonical.substring(canonical.indexOf("|") + 1) : null;
-        checkDependencies(url, version);
+        if (canonical != null) { // a canonical can have only extensions
+          String url = canonical.contains("|") ? canonical.substring(0, canonical.indexOf("|")) : canonical;
+          String version = canonical.contains("|") ? canonical.substring(canonical.indexOf("|") + 1) : null;
+          checkDependencies(url, version);
+        }
       } else {
         String s = element.primitiveValue();
         checkDependencies(s);
