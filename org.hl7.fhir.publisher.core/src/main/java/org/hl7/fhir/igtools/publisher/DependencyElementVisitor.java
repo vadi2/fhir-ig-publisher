@@ -48,7 +48,7 @@ public class DependencyElementVisitor implements ElementVisitor.IElementVisitor 
   private void checkDependencies(String url, String version) {
     if (version == null) {
       checkDependencies(url);
-    } else if (url == null) {
+    } else if (url != null) {
       for (FetchedFile f : fileList) {
         if (f != focus) {
           boolean dep = false;
