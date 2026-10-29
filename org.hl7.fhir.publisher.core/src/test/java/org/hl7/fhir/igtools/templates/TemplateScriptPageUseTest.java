@@ -364,6 +364,19 @@ class TemplateScriptPageUseTest {
         + "<target name=\"onCheck\"/></project>");
     t = new Template(dir.toString(), true, null, null, false, false, false);
     assertEquals("the template's script scripts/ant.xml reads ${dir.input}", t.pageOnlyRebuildBlocker());
+    // with the properties from a property file it loads there
+    write("template/scripts/ant.xml", "<project name=\"t\"><property file=\"${ig.scripts}/t.properties\"/>"
+        + "<loadfile property=\"m\" srcfile=\"${pages}/x.md\" failonerror=\"false\"/><target name=\"onCheck\"/></project>");
+    write("template/scripts/t.properties", "pages=${dir.input}/pagecontent");
+    t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertNull(t.pageOnlyRebuildBlocker());
+    assertEquals(Set.of("pagecontent"), t.pageFolderBlockers().keySet());
+    Files.delete(dir.resolve("template/scripts/t.properties"));
+    // a target in a comment is not one
+    write("template/scripts/ant.xml", "<project name=\"t\"><!-- <target name=\"old\"> --><pathconvert property=\"p\">"
+        + "<fileset dir=\"${dir.input}\" erroronmissingdir=\"false\"/></pathconvert><target name=\"onCheck\"/></project>");
+    t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertEquals("the template's script scripts/ant.xml reads ${dir.input}", t.pageOnlyRebuildBlocker());
     // and those it doesn't run: nothing
     write("template/scripts/ant.xml", "<project name=\"t\"><target name=\"onCheck\"><fileset dir=\"${dir.input}\"/></target><target name=\"x\"/></project>");
     t = new Template(dir.toString(), true, null, null, false, false, false);
