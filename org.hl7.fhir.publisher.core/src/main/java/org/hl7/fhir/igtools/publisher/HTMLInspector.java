@@ -32,6 +32,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -640,7 +641,7 @@ public class HTMLInspector {
     this.lastRecords = last;
     this.fresh = fresh;
     this.rewriter = rewriter;
-    this.records = new HtmlCheckRecords(null);
+    this.records = new HtmlCheckRecords((String) null);
   }
 
   /** What the check found, for the next check (see recordChecks()), or null if it can't be used again */
@@ -658,19 +659,34 @@ public class HTMLInspector {
    * back. The resources and the specifications aren't compared, just whether they're the same objects (they are in a
    * page rebuild)
    */
-  private String recordSignature() {
-    StringBuilder b = new StringBuilder();
-    b.append(rootFolder).append('|').append(strict).append('|').append(statusMessageDef).append('|')
-        .append(statusMessagesLang == null ? null : new TreeMap<>(statusMessagesLang)).append('|').append(exemptHtmlPatterns).append('|')
-        .append(pageHeadingLevel).append('|').append(accessibilityChecks).append('|').append(accessibilityPanel).append('|')
-        .append(manual).append('|').append(new TreeSet<>(exceptions)).append('|').append(new TreeSet<>(comparisonFiles)).append('|')
-        .append(canonical).append('|').append(packageId).append('|').append(version).append('|').append(isCIBuild).append('|')
-        .append(noCIBuildIssues).append('|').append(forHL7).append('|').append(requirePublishBox).append('|')
-        .append(HierarchicalTableGenerator.uuid).append('|').append(langList).append('|');
-    for (Object o : new Object[] {context, specs, linkSpecs, sources, module, relatedIGs, fragmentUses, trackedFragments, ig}) {
-      b.append(System.identityHashCode(o)).append('|');
+  private Map<String, String> recordSignature() {
+    Map<String, String> b = new LinkedHashMap<>();
+    b.put("rootFolder", rootFolder);
+    b.put("strict", String.valueOf(strict));
+    b.put("statusMessage", statusMessageDef);
+    b.put("statusMessages", String.valueOf(statusMessagesLang == null ? null : new TreeMap<>(statusMessagesLang)));
+    b.put("exemptHtmlPatterns", String.valueOf(exemptHtmlPatterns));
+    b.put("pageHeadingLevel", String.valueOf(pageHeadingLevel));
+    b.put("accessibilityChecks", String.valueOf(accessibilityChecks));
+    b.put("accessibilityPanel", String.valueOf(accessibilityPanel));
+    b.put("manual", String.valueOf(manual));
+    b.put("exceptions", String.valueOf(new TreeSet<>(exceptions)));
+    b.put("comparisonFiles", String.valueOf(new TreeSet<>(comparisonFiles)));
+    b.put("canonical", canonical);
+    b.put("packageId", packageId);
+    b.put("version", version);
+    b.put("isCIBuild", String.valueOf(isCIBuild));
+    b.put("noCIBuildIssues", String.valueOf(noCIBuildIssues));
+    b.put("forHL7", String.valueOf(forHL7));
+    b.put("requirePublishBox", String.valueOf(requirePublishBox));
+    b.put("tableUuid", HierarchicalTableGenerator.uuid);
+    b.put("langList", String.valueOf(langList));
+    String[] names = {"context", "specs", "linkSpecs", "sources", "module", "relatedIGs", "fragmentUses", "trackedFragments", "ig"};
+    Object[] objects = {context, specs, linkSpecs, sources, module, relatedIGs, fragmentUses, trackedFragments, ig};
+    for (int i = 0; i < names.length; i++) {
+      b.put(names[i], String.valueOf(System.identityHashCode(objects[i])));
     }
-    return b.toString();
+    return b;
   }
 
   /**
@@ -693,9 +709,20 @@ public class HTMLInspector {
     List<String> mayRewrite = new ArrayList<>();
     List<String> mustRewrite = new ArrayList<>();
     List<String> toLoad = new ArrayList<>();
+    // why the others aren't reused (for the log)
+    int unrecorded = 0;
+    int written = 0;
+    int changedSince = 0;
+    int notReplayable = 0;
+    String whyNotReplayable = null;
     for (String s : loadList) {
       HtmlCheckRecords.FileRecord r = last == null || fresh == null ? null : last.files.get(s);
       if (r == null || fresh.contains(s)) {
+        if (r == null) {
+          unrecorded++;
+        } else {
+          written++;
+        }
         toLoad.add(s);
       } else if (!replayable) {
         if (!r.sameStamp()) {
@@ -706,9 +733,14 @@ public class HTMLInspector {
         toLoad.add(s);
       } else if (!r.sameStamp()) {
         // changed since the check, but not by Jekyll
+        changedSince++;
         mayRewrite.add(s);
         toLoad.add(s);
       } else if (r.notReplayable != null) {
+        notReplayable++;
+        if (whyNotReplayable == null) {
+          whyNotReplayable = r.notReplayable;
+        }
         if (r.modified) {
           mustRewrite.add(s);
         }
@@ -739,13 +771,20 @@ public class HTMLInspector {
       // what other checks find
       Map<String, Boolean> existsNow = new HashMap<>();
       boolean sameTree = last.sameTree(tree, links[0]);
+      int lookedAt = 0;
+      String whatChanged = null;
       while (true) {
         List<String> again = new ArrayList<>();
-        for (Map.Entry<String, HtmlCheckRecords.FileRecord> e : candidates.entrySet()) {
-          if (lookedAtChanges(e.getValue(), sameTree, existsNow)) {
-            again.add(e.getKey());
+        for (String k : sorted(candidates.keySet())) {
+          String changed = lookedAtChanges(candidates.get(k), sameTree, existsNow);
+          if (changed != null) {
+            if (whatChanged == null) {
+              whatChanged = relative(k) + " " + changed;
+            }
+            again.add(k);
           }
         }
+        lookedAt += again.size();
         if (again.isEmpty()) {
           break;
         }
@@ -761,7 +800,29 @@ public class HTMLInspector {
           loadRecord(s, loaded);
         }
       }
-      log.logMessage("Rapido Mode: the html checks of " + candidates.size() + " of " + loadList.size() + " files are reused");
+      List<String> why = new ArrayList<>();
+      if (fresh == null) {
+        why.add("Jekyll wrote all the files again");
+      } else if (!replayable) {
+        why.add("the check is set up differently (" + HtmlCheckRecords.differences(last.getSignatureParts(), records.getSignatureParts()) + ")");
+      }
+      if (written > 0) {
+        why.add(written + " written again");
+      }
+      if (unrecorded > 0 && fresh != null) {
+        why.add(unrecorded + " new");
+      }
+      if (changedSince > 0) {
+        why.add(changedSince + " changed since they were checked");
+      }
+      if (notReplayable > 0) {
+        why.add(notReplayable + " can't be put back (" + whyNotReplayable + ")");
+      }
+      if (lookedAt > 0) {
+        why.add(lookedAt + " looked at something that changed (" + whatChanged + ")");
+      }
+      log.logMessage("Rapido Mode: the html checks of " + candidates.size() + " of " + loadList.size() + " files are reused"
+          + (why.isEmpty() ? "" : "; not the others: " + String.join(", ", why)));
     }
     records.setTree(tree, links[0]);
 
@@ -803,12 +864,13 @@ public class HTMLInspector {
     }
   }
 
-  /** Whether something the check of a file looked at (see HtmlCheckRecords) is different now */
-  private boolean lookedAtChanges(HtmlCheckRecords.FileRecord r, boolean sameTree, Map<String, Boolean> existsNow) throws IOException {
+  /** What the check of a file looked at (see HtmlCheckRecords) that is different now, if anything (else null) */
+  private String lookedAtChanges(HtmlCheckRecords.FileRecord r, boolean sameTree, Map<String, Boolean> existsNow) throws IOException {
     if (r.lookups != null) {
       for (Map.Entry<String, LoadedFile> e : r.lookups.entrySet()) {
-        if (!HtmlCheckRecords.sameLookup(e.getValue(), cache.get(e.getKey()))) {
-          return true;
+        LoadedFile now = cache.get(e.getKey());
+        if (!HtmlCheckRecords.sameLookup(e.getValue(), now)) {
+          return "looked up " + relative(e.getKey()) + ", which " + HtmlCheckRecords.lookupDifference(e.getValue(), now);
         }
       }
     }
@@ -825,11 +887,16 @@ public class HTMLInspector {
           existsNow.put(path, now);
         }
         if (now.booleanValue() != e.getValue().booleanValue()) {
-          return true;
+          return "asked whether " + relative(path) + " exists, which " + (now ? "it does now" : "it no longer does");
         }
       }
     }
-    return false;
+    return null;
+  }
+
+  /** A path in the output, relative to it (for the log) */
+  private String relative(String path) {
+    return path.startsWith(rootFolder + File.separator) ? path.substring(rootFolder.length() + 1) : path;
   }
 
   /** Checks a file, recording what it finds */

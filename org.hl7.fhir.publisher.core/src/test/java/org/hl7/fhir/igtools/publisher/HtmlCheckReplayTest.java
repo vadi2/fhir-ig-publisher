@@ -136,7 +136,8 @@ class HtmlCheckReplayTest {
     fresh.add(abs("a.html"));
     third.recordChecks(records, fresh, rewriter);
     List<String> replayed = check(third);
-    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 3 files are reused"), log.toString());
+    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 3 files are reused; not the others: 2 written again, "
+        + "1 looked at something that changed (en/b.html looked up en/a.html, which has 1 more anchor (e.g. nowhere))"), log.toString());
     HTMLInspector everything = inspector();
     assertEquals(check(everything), replayed);
     assertTrue(replayed.stream().noneMatch(s -> s.contains("missing.html") || s.contains("nowhere")), replayed.toString());
@@ -171,6 +172,7 @@ class HtmlCheckReplayTest {
     });
     check(other);
     assertEquals(Collections.singleton(abs("a.html")), rewritten);
-    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 2 files are reused"), log.toString());
+    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 2 files are reused; not the others: the check is set up "
+        + "differently (version)"), log.toString());
   }
 }
