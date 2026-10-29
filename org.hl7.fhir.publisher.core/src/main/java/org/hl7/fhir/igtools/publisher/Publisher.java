@@ -326,7 +326,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * PageRebuild), copies them to the temp folder again and does what comes after (Jekyll, the html checks, qa) without
    * doing the rest of the build again. Returns false if it can't, or if it fails: then a complete build is needed
    */
-  private boolean rebuildPages(WatchSession session) throws IOException {
+  boolean rebuildPages(WatchSession session) throws IOException {
     PageRebuild state = pageRebuild;
     pageRebuild = null;
     generator.setPageRebuild(null);
@@ -334,7 +334,14 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       return false;
     }
     List<String> reason = new ArrayList<>();
-    List<FetchedFile> pages = state.pagesFor(session.changesSincePreviousBuild(), reason);
+    List<FetchedFile> pages;
+    try {
+      pages = state.pagesFor(session.changesSincePreviousBuild(), reason);
+    } catch (Exception e) {
+      // then a complete build tells
+      pages = null;
+      reason.add(0, "the changes couldn't be checked: " + e);
+    }
     if (pages == null) {
       log("Rapido Mode: Not a Page Rebuild (" + reason.get(0) + ")");
       state.discard();
