@@ -162,10 +162,11 @@ class TemplateScriptPageUseTest {
     assertEquals("the template's script build/ant.xml runs common.xml, which isn't read", t.pageOnlyRebuildBlocker());
     // other builds, which aren't read either
     for (String run : new String[] {"<ant antfile=\"x.xml\"/>", "<ant dir=\"x\"/>", "<subant><fileset dir=\"x\"/></subant>",
-        "<import resource=\"x.xml\"/>"}) {
+        "<import resource=\"x.xml\"/>", "<exec executable=\"python\"><arg value=\"menu.py\"/></exec>", "<apply executable=\"x\"/>",
+        "<taskdef name=\"x\" classname=\"y\"/>"}) {
       write("template/build/ant.xml", "<project name=\"t\"><target name=\"onGenerate\">" + run + "</target></project>");
       t = new Template(dir.toString(), true, null, null, false, false, false);
-      assertTrue(t.pageOnlyRebuildBlocker().startsWith("the template's script build/ant.xml runs another build"), run);
+      assertTrue(t.pageOnlyRebuildBlocker().startsWith("the template's script build/ant.xml runs another build or a program"), run);
     }
   }
 
@@ -184,6 +185,31 @@ class TemplateScriptPageUseTest {
       Template t = new Template(dir.toString(), true, null, null, false, false, false);
       assertEquals(u[1] == null ? null : "the template's script scripts/ant.xml " + u[1] + ", which isn't read", t.pageOnlyRebuildBlocker(), u[0]);
     }
+  }
+
+  @Test
+  void aPathWithBackslashes() throws IOException {
+    write("template/config.json", "{\"script\": \"ant.xml\", \"targets\": {\"onLoad\": \"onLoad\"}}");
+    write("template/ant.xml", "<project name=\"t\"><target name=\"onLoad\"><copy file=\"input\\includes\\menu.xml\" todir=\"x\"/></target></project>");
+    Template t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertNull(t.pageOnlyRebuildBlocker());
+    assertEquals(Set.of("includes"), t.pageFolderBlockers().keySet());
+  }
+
+  @Test
+  void theIgFolderByAnotherName() {
+    // a property defined as the IG's folder
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"root\" value=\"${ig.root}\"/><fileset dir=\"${root}\" includes=\"**/*.md\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"root\" location=\".\"/><property name=\"r\" value=\"${root}/\"/>"
+        + "<fileset dir=\"${r}\"/>"));
+    String menu = "<property name=\"root\" value=\"${ig.root}\"/><copy file=\"${root}/input/includes/menu.xml\" todir=\"x\"/>";
+    assertNull(Template.scriptPageUse("onGenerate.xml", menu));
+    assertEquals(Set.of("includes"), folders(menu));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"root\" value=\"${ig.root}\"/><fileset dir=\"${root}/input\"/>"));
+    // the template's folder is in the IG's folder
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.template}/..\" includes=\"**/*.md\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<copy file=\"${ig.scripts}/../../input/includes/menu.xml\" todir=\"x\"/>"));
+    assertNull(Template.scriptPageUse("onGenerate.xml", "<copy file=\"${ig.scripts}/..x/menu.xml\" todir=\"x\"/>"));
   }
 
   @Test

@@ -358,12 +358,18 @@ public class Template {
   // what ends a folder name in a path (not a wildcard, or a property that names a folder: those may stand for any folder)
   private static final String FOLDER_END = "(?![^/\"'\\s<>;,)&])";
   // a reference to the input folder, and the folder in it, if one is named: ${folder.input}, ${ig.root}/input...
-  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir)\\}/input(?![\\w.-]))(/([^/\"'*&;,()\\s<>$?\\[{]+)" + FOLDER_END + ")?";
+  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir%s)\\}/input(?![\\w.-]))(/([^/\"'*&;,()\\s<>$?\\[{]+)" + FOLDER_END + ")?";
   private static final java.util.regex.Pattern PROPERTY = java.util.regex.Pattern.compile(
       "<property\\s[^>]*?name=\"([^\"]+)\"[^>]*>");
   // a file set or the like that starts from the IG's root folder
-  private static final java.util.regex.Pattern ROOT_DIR = java.util.regex.Pattern.compile(
-      "<(?!project[\\s>])([\\w.:-]+)\\s[^>]*?(?<=\\s)(?:base)?dir=\"(?:\\$\\{(?:ig\\.root|basedir)\\})?(?:/?\\.)?/?\"[^>]*>");
+  private static final String ROOT_DIR =
+      "<(?!project[\\s>])([\\w.:-]+)\\s[^>]*?(?<=\\s)(?:base)?dir=\"(?:\\$\\{(?:ig\\.root|basedir%s)\\})?(?:/?\\.)?/?\"[^>]*>";
+  // a property defined as the IG's folder (${ig.root}, ${basedir} or .), by group 1 the property it's defined from
+  private static final java.util.regex.Pattern ROOT_VALUE = java.util.regex.Pattern.compile(
+      "\\s(?:value|location)=\"(?:\\$\\{([^}]+)\\}|\\.)/?\"");
+  // a path that goes up out of the template's folder, which is in the IG's folder
+  private static final java.util.regex.Pattern OUT_OF_TEMPLATE = java.util.regex.Pattern.compile(
+      "\\$\\{ig\\.(?:template|scripts)\\}(?:/[^/\"'\\s<>]*)*?/\\.\\.(?![^/\"'\\s<>])");
   // a folder in the input folder named by its path from the IG's folder (input/pagecontent)
   private static final java.util.regex.Pattern INPUT_PATH = java.util.regex.Pattern.compile(
       "(?<![\\w.-])input/([^/\"'*&;,()\\s<>$?\\[{]+)" + FOLDER_END);
@@ -453,7 +459,8 @@ public class Template {
     }
     Map<String, String> res = new java.util.TreeMap<>();
     for (Map.Entry<java.nio.file.Path, String> e : files.entrySet()) {
-      res.put(scriptName(e.getKey()), e.getValue());
+      // ant takes \ as a separator too
+      res.put(scriptName(e.getKey()), e.getValue().replace('\\', '/'));
     }
     return res;
   }
@@ -494,9 +501,10 @@ public class Template {
   // an ant file that a script imports
   private static final java.util.regex.Pattern ANT_FILE = java.util.regex.Pattern.compile(
       "<(?:import|include)\\s[^>]*?(?<=\\s)file=\"([^\"]*)\"");
-  // another build that a script runs (ant, subant), or an ant file it imports from the class path: they aren't read
+  // another build or a program that a script runs (ant, subant, exec, apply, or a task it defines), or an ant file it
+  // imports from the class path: they aren't read
   private static final java.util.regex.Pattern SUB_BUILD = java.util.regex.Pattern.compile(
-      "<(?:ant|subant)[\\s/>]|<(?:import|include)\\s[^>]*?(?<=\\s)resource=\"");
+      "<(?:ant|subant|exec|apply|taskdef|typedef)[\\s/>]|<(?:import|include)\\s[^>]*?(?<=\\s)resource=\"");
   // a style sheet or script that an ant file uses: it must be one of the template's scripts, which are read
   private static final java.util.regex.Pattern USED_FILE = java.util.regex.Pattern.compile(
       "<(?:xslt|style)\\s[^>]*?(?<=\\s)style=\"([^\"]*)\"|<script\\s[^>]*?(?<=\\s)src=\"([^\"]*)\"");
@@ -516,7 +524,7 @@ public class Template {
       }
       java.util.regex.Matcher b = SUB_BUILD.matcher(e.getValue());
       if (b.find()) {
-        return "the template's script " + scriptName(e.getKey()) + " runs another build (" + b.group().trim() + "), which isn't read";
+        return "the template's script " + scriptName(e.getKey()) + " runs another build or a program (" + b.group().trim() + "), which isn't read";
       }
       if (e.getKey().getFileName().toString().endsWith(".xml")) {
         java.util.regex.Matcher u = USED_FILE.matcher(e.getValue());
@@ -616,7 +624,11 @@ public class Template {
         return "the template's script " + name + " reads " + src.substring(w.start(), end);
       }
     }
-    java.util.regex.Matcher r = ROOT_DIR.matcher(src);
+    java.util.regex.Matcher o = OUT_OF_TEMPLATE.matcher(src);
+    if (o.find()) {
+      return "the template's script " + name + " reads " + o.group() + ", which is in the IG's folder";
+    }
+    java.util.regex.Matcher r = java.util.regex.Pattern.compile(String.format(ROOT_DIR, alternatives(rootAliases(all)))).matcher(src);
     while (r.find()) {
       // what it selects: the includes attribute, or what's in the element
       String selection = r.group();
@@ -645,11 +657,12 @@ public class Template {
    * folder (e.g. &lt;property name="in" value="${folder.input}"/&gt; makes ${in} one)
    */
   private static java.util.regex.Pattern inputRef(String src) {
+    Set<String> roots = rootAliases(src);
     Set<String> aliases = new HashSet<>();
     boolean more = true;
     while (more) {
       more = false;
-      java.util.regex.Pattern ref = inputRef(aliases);
+      java.util.regex.Pattern ref = inputRef(aliases, roots);
       java.util.regex.Matcher p = PROPERTY.matcher(src);
       while (p.find()) {
         java.util.regex.Matcher m = ref.matcher(p.group());
@@ -659,15 +672,37 @@ public class Template {
         }
       }
     }
-    return inputRef(aliases);
+    return inputRef(aliases, roots);
   }
 
-  private static java.util.regex.Pattern inputRef(Set<String> aliases) {
+  private static java.util.regex.Pattern inputRef(Set<String> aliases, Set<String> roots) {
+    return java.util.regex.Pattern.compile(String.format(INPUT_REF, alternatives(aliases), alternatives(roots)));
+  }
+
+  /** The properties src defines as the IG's folder (e.g. &lt;property name="root" value="${ig.root}"/&gt;) */
+  private static Set<String> rootAliases(String src) {
+    Set<String> aliases = new HashSet<>();
+    boolean more = true;
+    while (more) {
+      more = false;
+      java.util.regex.Matcher p = PROPERTY.matcher(src);
+      while (p.find()) {
+        java.util.regex.Matcher v = ROOT_VALUE.matcher(p.group());
+        if (v.find() && (v.group(1) == null || v.group(1).equals("ig.root") || v.group(1).equals("basedir") || aliases.contains(v.group(1)))
+            && aliases.add(p.group(1))) {
+          more = true;
+        }
+      }
+    }
+    return aliases;
+  }
+
+  private static String alternatives(Set<String> names) {
     StringBuilder alt = new StringBuilder();
-    for (String a : aliases) {
+    for (String a : names) {
       alt.append('|').append(java.util.regex.Pattern.quote(a));
     }
-    return java.util.regex.Pattern.compile(String.format(INPUT_REF, alt));
+    return alt.toString();
   }
 
   /** Whether the template runs a script while the IG is generated, before Jekyll */
