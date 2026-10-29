@@ -159,7 +159,37 @@ class TemplateScriptPageUseTest {
     write("template/build/ant.xml", "<project name=\"t\"><import file=\"common.xml\"/><target name=\"onGenerate\"/></project>");
     write("template/build/common.xml", "<project name=\"c\"/>");
     t = new Template(dir.toString(), true, null, null, false, false, false);
-    assertEquals("the template's script ant.xml runs common.xml, which isn't read", t.pageOnlyRebuildBlocker());
+    assertEquals("the template's script build/ant.xml runs common.xml, which isn't read", t.pageOnlyRebuildBlocker());
+    // other builds, which aren't read either
+    for (String run : new String[] {"<ant antfile=\"x.xml\"/>", "<ant dir=\"x\"/>", "<subant><fileset dir=\"x\"/></subant>",
+        "<import resource=\"x.xml\"/>"}) {
+      write("template/build/ant.xml", "<project name=\"t\"><target name=\"onGenerate\">" + run + "</target></project>");
+      t = new Template(dir.toString(), true, null, null, false, false, false);
+      assertTrue(t.pageOnlyRebuildBlocker().startsWith("the template's script build/ant.xml runs another build"), run);
+    }
+  }
+
+  @Test
+  void twoScriptsWithTheSameFileName() throws IOException {
+    write("template/config.json", "{\"script\": \"ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
+    write("template/ant.xml", "<project name=\"t\"><target name=\"onGenerate\"><copy file=\"${dir.input}/includes/menu.xml\" todir=\"x\"/></target></project>");
+    write("template/scripts/ant.xml", "<project name=\"x\"/>");
+    Template t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertEquals(Map.of("includes", "the template's script ant.xml reads (${dir.input}/includes)"), t.pageFolderBlockers());
+  }
+
+  @Test
+  void aPropertyDefinedInAnotherScript() throws IOException {
+    write("template/config.json", "{\"script\": \"scripts/ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
+    write("template/scripts/ant.xml", "<project name=\"t\"><property name=\"in\" value=\"${folder.input}\"/><import file=\"x.xml\"/>"
+        + "<target name=\"onGenerate\"/></project>");
+    write("template/scripts/x.xml", "<project name=\"x\"><target name=\"x\"><copy file=\"${in}/includes/menu.xml\" todir=\"x\"/></target></project>");
+    Template t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertNull(t.pageOnlyRebuildBlocker());
+    assertEquals(Map.of("includes", "the template's script scripts/x.xml reads (${in}/includes)"), t.pageFolderBlockers());
+    write("template/scripts/x.xml", "<project name=\"x\"><target name=\"x\"><fileset dir=\"${in}\"/></target></project>");
+    t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertEquals("the template's script scripts/x.xml reads ${in}", t.pageOnlyRebuildBlocker());
   }
 
   @Test
@@ -175,11 +205,11 @@ class TemplateScriptPageUseTest {
   void theFoldersTheTemplatesScriptsRead() throws IOException {
     Template t = template("\"onGenerate\": \"onGenerate\"");
     assertNull(t.pageOnlyRebuildBlocker());
-    assertEquals(Map.of("includes", "the template's script ant.xml reads (${dir.input}/includes)"), t.pageFolderBlockers());
+    assertEquals(Map.of("includes", "the template's script scripts/ant.xml reads (${dir.input}/includes)"), t.pageFolderBlockers());
     // onLoad runs before Jekyll too
     t = template("\"onLoad\": \"onGenerate\"");
     assertNull(t.pageOnlyRebuildBlocker());
-    assertEquals(Map.of("includes", "the template's script ant.xml reads (${dir.input}/includes)"), t.pageFolderBlockers());
+    assertEquals(Map.of("includes", "the template's script scripts/ant.xml reads (${dir.input}/includes)"), t.pageFolderBlockers());
     // nothing runs before Jekyll
     t = template("\"onCheck\": \"onGenerate\"");
     assertNull(t.pageOnlyRebuildBlocker());
@@ -207,6 +237,17 @@ class TemplateScriptPageUseTest {
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${basedir}\"><include name=\"**/*.md\"/></fileset>"));
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<copy todir=\"x\"><fileset dir=\"${ig.root}\"/></copy>"));
     assertNull(Template.scriptPageUse("onGenerate.xml", "<copy file=\"x\" todir=\"${ig.root}\"/>"));
+    // a wildcard first folder may be the input folder
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.root}\"><include name=\"*/includes/menu.xml\"/></fileset>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.root}\" includes=\"a.xml, in?ut/includes/menu.xml\"/>"));
+    assertNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.root}\"><include name=\"${dir.temp.includes}/*.svg\"/></fileset>"));
+    // an xslt task's basedir is a folder it reads
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<xslt basedir=\"${ig.root}\" destdir=\"x\" style=\"s.xslt\"/>"));
+    String menu = "<xslt basedir=\"${ig.root}\" destdir=\"x\" style=\"s.xslt\"><include name=\"input/includes/menu.xml\"/></xslt>";
+    assertNull(Template.scriptPageUse("onGenerate.xml", menu));
+    assertEquals(Set.of("includes"), folders(menu));
+    // but not the project's
+    assertNull(Template.scriptPageUse("onGenerate.xml", "<project name=\"t\" basedir=\".\"><target name=\"x\"/></project>"));
     // the scripts run in the IG's folder
     for (String d : new String[] {".", "./", "", "${ig.root}/.", "${basedir}/./"}) {
       assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"" + d + "\" includes=\"**/*.md\"/>"), d);
