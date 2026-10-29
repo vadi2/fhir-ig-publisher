@@ -13,9 +13,14 @@ import java.nio.file.Paths;
 
 import org.apache.tools.ant.BuildEvent;
 import org.apache.tools.ant.BuildListener;
+import org.apache.tools.ant.ComponentHelper;
+import org.apache.tools.ant.Evaluable;
+import org.apache.tools.ant.Project;
 import org.apache.tools.ant.PropertyHelper;
+import org.apache.tools.ant.RuntimeConfigurable;
 import org.apache.tools.ant.Target;
 import org.apache.tools.ant.Task;
+import org.apache.tools.ant.UnknownElement;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -65,6 +70,16 @@ class TemplateOnCheckOutputTest {
   }
 
   @Test
+  void aCheckThatRanBefore() throws IOException {
+    // watch mode asks after the check has run (in the build before)
+    assertNull(why(BASE_ON_CHECK));
+    Template t = new Template(dir.toString(), true, null, null, false, false, false);
+    t.onCheckEvent(null, null);
+    t.onCheckEvent(null, null);
+    assertNull(t.whyOnCheckMaySeeOutput(dir.resolve("output").toString()));
+  }
+
+  @Test
   void noCheckDoesNot() throws IOException {
     write("template/config.json", "{}");
     assertNull(new Template(dir.toString(), true, null, null, false, false, false).whyOnCheckMaySeeOutput(dir.resolve("output").toString()));
@@ -95,6 +110,20 @@ class TemplateOnCheckOutputTest {
     new Template(dir.toString(), true, null, null, false, false, false).onCheckEvent(null, null);
     assertFalse(Files.exists(dir.resolve("copied.html")));
     assertTrue(Files.exists(dir.resolve("template/onCheck-validation.json")));
+    // defined by a target that ran before, with an Ant task as what adapts it (made, though it can't be adapted)
+    why("<target name=\"defs\"><typedef name=\"echo\" classname=\"" + Sneaky.class.getName()
+        + "\" adapter=\"org.apache.tools.ant.taskdefs.Echo\" onerror=\"ignore\"/></target>" + BASE_ON_CHECK);
+    Template t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertNull(t.whyOnCheckMaySeeOutput(dir.resolve("output").toString()));
+    try {
+      java.lang.reflect.Field f = Template.class.getDeclaredField("antProject");
+      f.setAccessible(true);
+      ((Project) f.get(t)).executeTarget("defs");
+    } catch (ReflectiveOperationException e) {
+      throw new AssertionError(e);
+    }
+    String adapted = t.whyOnCheckMaySeeOutput(dir.resolve("output").toString());
+    assertTrue(adapted != null && adapted.contains("runs echo"), adapted);
     // defined by the check
     String why = why("<target name=\"defs\">" + macro + "</target>" + BASE_ON_CHECK.replace("depends=\"onCheck.extend\"", "depends=\"defs,onCheck.extend\""));
     assertTrue(why != null && why.contains("macrodef"), why);
@@ -174,8 +203,51 @@ class TemplateOnCheckOutputTest {
     // a target that does something else than its tasks
     why = why(def + "<hook what=\"target\"/>" + BASE_ON_CHECK);
     assertTrue(why != null && why.contains("Sneaky"), why);
+    // a condition of its own on a target
+    why = why(def + "<hook what=\"condition\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("condition"), why);
+    // something to run in a target that isn't a task
+    why = why(def + "<hook what=\"child\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("runs"), why);
+    // a task already made
+    why = why(def + "<hook what=\"made\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("of its own kind"), why);
+    // a value that isn't text
+    why = why(def + "<hook what=\"value\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("message> of its own kind"), why);
+    // a nested element set up from something else than what is looked at
+    why = why(def + "<hook what=\"wrapper\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("<fileset> of its own kind"), why);
+    // a target or an element of another project (with its own listeners, properties or tasks)
+    why = why(def + "<hook what=\"project\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("another project"), why);
+    why = why(def + "<hook what=\"elementProject\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("<fileset> of its own kind"), why);
+    // a condition that reads another target's
+    why = why(def + "<hook what=\"copy\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("condition of its own"), why);
+    // tasks made another way
+    why = why(def + "<hook what=\"components\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("its own way"), why);
+    why = why(def + "<hook what=\"helperProject\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("its own way"), why);
     // the definitions alone
     assertNull(why(def + BASE_ON_CHECK));
+  }
+
+  @Test
+  void aConditionThatIsEvaluated() throws IOException {
+    String out = "<fileset id=\"out\" dir=\"${ig.root}/output\"/>";
+    for (String c : new String[] {"if", "unless"}) {
+      String why = why(out + BASE_ON_CHECK.replace("<target name=\"onCheck\"", "<target name=\"onCheck\" " + c + "=\"${toString:out}\""));
+      assertTrue(why != null && why.contains(c + "="), why);
+      // the name is evaluated too, and what a property expands to
+      why = why(out + BASE_ON_CHECK.replace("<target name=\"onCheck\"", "<target name=\"onCheck\" " + c + "=\"toString:out\""));
+      assertTrue(why != null && why.contains(c + "="), why);
+      why = why(out + "<property name=\"a\" value=\"toString:out\"/>" + BASE_ON_CHECK.replace("<target name=\"onCheck\"", "<target name=\"onCheck\" " + c + "=\"${a}\""));
+      assertTrue(why != null && why.contains(c + "="), why);
+      assertNull(why(out + BASE_ON_CHECK.replace("<target name=\"onCheck\"", "<target name=\"onCheck\" " + c + "=\"ig.root\"")));
+    }
   }
 
   /** What a template's own code can do to the script's project before the check runs */
@@ -188,7 +260,41 @@ class TemplateOnCheckOutputTest {
 
     @Override
     public void execute() {
-      if ("listener".equals(what)) {
+      Target check = getProject().getTargets().get("onCheck");
+      if ("condition".equals(what)) {
+        check.setIf(() -> true);
+      } else if ("child".equals(what)) {
+        check.addDataType(new RuntimeConfigurable(new Object(), "thing"));
+      } else if ("made".equals(what)) {
+        ((UnknownElement) check.getTasks()[0]).setRealThing(new Task() { });
+      } else if ("value".equals(what)) {
+        ((UnknownElement) check.getTasks()[0]).getWrapper().setAttribute("message", (Evaluable<String>) () -> "x");
+      } else if ("wrapper".equals(what)) {
+        UnknownElement concat = (UnknownElement) check.getTasks()[1];
+        concat.getChildren().get(0).setRuntimeConfigurableWrapper(new RuntimeConfigurable(concat.getChildren().get(0), "fileset"));
+      } else if ("project".equals(what)) {
+        Project other = new Project();
+        other.init();
+        check.setProject(other);
+      } else if ("elementProject".equals(what)) {
+        Project other = new Project();
+        other.init();
+        ((UnknownElement) check.getTasks()[1]).getChildren().get(0).setProject(other);
+      } else if ("copy".equals(what)) {
+        check.setIf("ig.root");
+        Target copy = new Target(check);
+        check.setIf("toString:out");
+        getProject().addOrReplaceTarget("onCheck", copy);
+      } else if ("helperProject".equals(what)) {
+        Project other = new Project();
+        other.init();
+        ComponentHelper.getComponentHelper(getProject()).setProject(other);
+      } else if ("components".equals(what)) {
+        ComponentHelper ch = new ComponentHelper() { };
+        ch.setProject(getProject());
+        ch.initDefaultDefinitions();
+        getProject().addReference("ant.ComponentHelper", ch);
+      } else if ("listener".equals(what)) {
         getProject().addBuildListener(new BuildListener() {
           public void buildStarted(BuildEvent event) { }
           public void buildFinished(BuildEvent event) { }
