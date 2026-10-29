@@ -506,11 +506,13 @@ public class Template {
     String all = String.join("\n", res.values()).replace('\\', '/');
     java.nio.file.Path tdir = new File(templateDir).getCanonicalFile().toPath();
     java.util.regex.Matcher m = PROPERTY_FILE.matcher(all);
+    Set<java.nio.file.Path> loaded = new HashSet<>();
     while (m.find()) {
       java.nio.file.Path f = m.group(1).equalsIgnoreCase("file") || m.group(1).equalsIgnoreCase("srcfile") ? propertyFile(m.group(2), all) : null;
-      if (f != null && f.startsWith(tdir) && java.nio.file.Files.isRegularFile(f) && !res.containsKey(f)) {
+      if (f != null && f.startsWith(tdir) && java.nio.file.Files.isRegularFile(f) && loaded.add(f)) {
+        // (one in the scripts folder is read already, as text)
         String src = FileUtilities.fileToString(f.toFile());
-        StringBuilder b = new StringBuilder(src);
+        StringBuilder b = new StringBuilder(res.getOrDefault(f, src));
         for (String line : src.split("\\R")) {
           java.util.regex.Matcher kv = PROPERTY_LINE.matcher(line);
           if (kv.matches()) {
@@ -628,6 +630,7 @@ public class Template {
    */
   private String unreadAntFile(Map<java.nio.file.Path, String> files) throws IOException {
     String all = String.join("\n", files.values()).replace('\\', '/');
+    java.nio.file.Path main = script == null ? null : new File(Utilities.path(templateDir, script)).getCanonicalFile().toPath();
     for (Map.Entry<java.nio.file.Path, String> e : files.entrySet()) {
       java.util.regex.Matcher m = ANT_FILE.matcher(e.getValue());
       while (m.find()) {
@@ -654,7 +657,8 @@ public class Template {
       if (code != null) {
         return code;
       }
-      if (e.getKey().getFileName().toString().endsWith(".xml")) {
+      // an ant file (not a style sheet, which may write html with scripts in it)
+      if (e.getKey().getFileName().toString().endsWith(".xml") || e.getKey().equals(main)) {
         java.util.regex.Matcher c = INLINE_CODE.matcher(e.getValue());
         while (c.find()) {
           java.util.regex.Matcher l = LANGUAGE.matcher(c.group(2));
