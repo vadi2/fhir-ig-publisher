@@ -573,6 +573,55 @@ public class Template {
   private static final java.util.regex.Pattern USED_FILE = java.util.regex.Pattern.compile(
       "<(?:xslt|style)\\s[^>]*?(?<=\\s)style=\"([^\"]*)\"|<script(?:def)?\\s[^>]*?(?<=\\s)src=\"([^\"]*)\"");
 
+  // code in an ant file (by group 1 the task, group 2 its attributes, group 3 the code)
+  private static final java.util.regex.Pattern INLINE_CODE = java.util.regex.Pattern.compile(
+      "<(script|scriptdef|groovy|groovyc|jython|beanshell)\\b([^>]*?)(?<!/)>(.*?)</\\1>", java.util.regex.Pattern.DOTALL);
+  private static final java.util.regex.Pattern LANGUAGE = java.util.regex.Pattern.compile("(?<=\\s)language=\"([^\"]*)\"");
+  // a string in javascript
+  private static final java.util.regex.Pattern JS_STRING = java.util.regex.Pattern.compile("\"((?:[^\"\\\\\\n]|\\\\.)*)\"|'((?:[^'\\\\\\n]|\\\\.)*)'");
+  // what javascript needs to read files, or run what isn't read: without them it can only work with properties (as
+  // the base templates do) and run the targets in the scripts
+  private static final java.util.regex.Pattern JS_FILE_USE = java.util.regex.Pattern.compile(
+      "\\b(?:new|java|javax|Packages|importClass|importPackage|JavaImporter|load|loadWithNewGlobal|require|eval|Function|"
+      + "Java|getBaseDir|createTask|createDataType|getReference|getReferences|getClass|forName|Runtime|readFully|(?i:\\w*file\\w*|\\w*path\\w*|\\w*dir\\w*))\\b");
+
+  /**
+   * Why the template's code (in javascript, the language that ant runs it in, or another, for tasks other than
+   * script) can't be told not to read pages, if it can't: only javascript that uses no files, and doesn't name the
+   * input folder or the IG's, can be
+   */
+  static String scriptCode(String name, String language, String code, String all) {
+    String lang = language.toLowerCase();
+    if (!(lang.equals("javascript") || lang.equals("ecmascript") || lang.equals("js"))) {
+      return "the template's script " + name + " runs code (" + (language.isEmpty() ? "in a language it doesn't name" : language) + "), which isn't checked";
+    }
+    Set<String> roots = rootAliases(all);
+    java.util.regex.Pattern input = inputRef(all);
+    // the code as ant sees it (a scriptdef's attributes and elements aren't code)
+    String js = code.replace("<![CDATA[", " ").replace("]]>", " ").replaceAll("<(?:attribute|element)\\s[^>]*>|</element>", " ");
+    if (!code.contains("<![CDATA[")) {
+      js = js.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&");
+    }
+    StringBuilder rest = new StringBuilder();
+    java.util.regex.Matcher m = JS_STRING.matcher(js);
+    int last = 0;
+    while (m.find()) {
+      String str = m.group(1) != null ? m.group(1) : m.group(2);
+      java.util.regex.Matcher i = input.matcher("${" + str + "}");
+      if (str.equals("ig.root") || str.equals("basedir") || roots.contains(str) || (i.matches() && i.group(3) == null)) {
+        return "the template's script " + name + " runs code that uses the property " + str + ", which isn't checked";
+      }
+      rest.append(js, last, m.start()).append("\"\"");
+      last = m.end();
+    }
+    rest.append(js.substring(last));
+    java.util.regex.Matcher f = JS_FILE_USE.matcher(rest);
+    if (f.find()) {
+      return "the template's script " + name + " runs code that may read files (" + f.group() + "), which isn't checked";
+    }
+    return null;
+  }
+
   /**
    * An ant file that a script runs or imports, or a style sheet or script it uses, that isn't one of the template's
    * scripts, if there is one
@@ -601,7 +650,19 @@ public class Template {
       if (b.find()) {
         return "the template's script " + scriptName(e.getKey()) + " runs another build or a program (" + b.group().trim() + "), which isn't read";
       }
+      String code = e.getKey().getFileName().toString().endsWith(".js") ? scriptCode(scriptName(e.getKey()), "javascript", e.getValue(), all) : null;
+      if (code != null) {
+        return code;
+      }
       if (e.getKey().getFileName().toString().endsWith(".xml")) {
+        java.util.regex.Matcher c = INLINE_CODE.matcher(e.getValue());
+        while (c.find()) {
+          java.util.regex.Matcher l = LANGUAGE.matcher(c.group(2));
+          code = scriptCode(scriptName(e.getKey()), c.group(1).startsWith("script") ? (l.find() ? l.group(1) : "") : c.group(1), c.group(3), all);
+          if (code != null) {
+            return code;
+          }
+        }
         java.util.regex.Matcher u = USED_FILE.matcher(e.getValue());
         while (u.find()) {
           String f = u.group(1) != null ? u.group(1) : u.group(2);

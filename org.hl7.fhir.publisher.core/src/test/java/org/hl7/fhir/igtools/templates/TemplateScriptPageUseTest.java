@@ -216,6 +216,54 @@ class TemplateScriptPageUseTest {
   }
 
   @Test
+  void codeInTheScripts() {
+    // what the base templates run
+    String langs = "<![CDATA[\n  langstring = project.getProperty( \"langs\" );\n  langs = langstring.split(\";\");\n"
+        + "  for (i=0;i<langs.length;i++) {\n    if (langs[i]!=\"\") {\n      self.project.setProperty(\"lang\", langs[i]);\n"
+        + "      self.project.executeTarget(\"onGenerate.processIncludes.lang\");\n    }\n  }\n]]>";
+    assertNull(Template.scriptCode("ant.xml", "javascript", langs, ""));
+    assertNull(Template.scriptCode("ant.xml", "javascript", "<attribute name=\"files\"/>\n self.project.setProperty(\"onGenerate.files\", "
+        + "self.project.getProperty(\"onGenerate.files\").concat(\";\").concat(attributes.get(\"files\")));", ""));
+    // code that reads files, or names the input folder or the IG's
+    String[][] codes = {{"var f = new java.io.File(project.getProperty(\"x\"));", "may read files (new)"},
+        {"<![CDATA[ var s = Packages.java.nio.file.Files.readString(p); ]]>", "may read files (Packages)"},
+        {"var t = project.createTask(\"copy\");", "may read files (createTask)"},
+        {"var b = project.getBaseDir();", "may read files (getBaseDir)"},
+        {"var d = project.getProperty('dir.input');", "uses the property dir.input"},
+        {"var d = project.getProperty(\"ig.root\") + \"/x\";", "uses the property ig.root"},
+        {"self.project.setProperty(\"in\", self.project.getProperty(\"folder.input\"));", "uses the property folder.input"},
+        {"<classpath path=\"x.jar\"/>run();", "may read files (classpath)"},
+        {"var x = load(&quot;y.js&quot;);", "may read files (load)"}};
+    for (String[] c : codes) {
+      assertEquals("the template's script ant.xml runs code that " + c[1] + ", which isn't checked", Template.scriptCode("ant.xml", "javascript", c[0], ""), c[0]);
+    }
+    assertEquals("the template's script ant.xml runs code that uses the property here, which isn't checked",
+        Template.scriptCode("ant.xml", "javascript", "x = project.getProperty(\"here\");", "<property name=\"here\" value=\"${ig.root}\"/>"));
+    assertEquals("the template's script ant.xml runs code (groovy), which isn't checked", Template.scriptCode("ant.xml", "groovy", "println 1", ""));
+    assertEquals("the template's script ant.xml runs code (in a language it doesn't name), which isn't checked", Template.scriptCode("ant.xml", "", "x", ""));
+  }
+
+  @Test
+  void codeInATemplate() throws IOException {
+    write("template/config.json", "{\"script\": \"scripts/ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
+    String[][] runs = {{"<script language=\"javascript\">project.setProperty(\"a\", \"b\");</script>", null},
+        {"<script language=\"javascript\"><![CDATA[ var f = new java.io.File(\"input\"); ]]></script>", "runs code that may read files (new)"},
+        {"<scriptdef name=\"x\" language=\"beanshell\"><attribute name=\"a\"/>print(1);</scriptdef>", "runs code (beanshell)"},
+        {"<groovy>new File('input').eachFile { }</groovy>", "runs code (groovy)"},
+        {"<script language=\"javascript\" src=\"${ig.scripts}/x.js\"/>", "runs code that may read files (new)"}};
+    for (String[] r : runs) {
+      write("template/scripts/ant.xml", "<project name=\"t\"><target name=\"onGenerate\">" + r[0] + "</target></project>");
+      Files.deleteIfExists(dir.resolve("template/scripts/x.js"));
+      if (r[0].contains("x.js")) {
+        write("template/scripts/x.js", "var f = new java.io.File(\"input\");");
+      }
+      Template t = new Template(dir.toString(), true, null, null, false, false, false);
+      String blocker = t.pageOnlyRebuildBlocker();
+      assertEquals(r[1] == null ? null : "the template's script " + (r[0].contains("x.js") ? "scripts/x.js " : "scripts/ant.xml ") + r[1] + ", which isn't checked", blocker, r[0]);
+    }
+  }
+
+  @Test
   void aPathWithBackslashes() throws IOException {
     write("template/config.json", "{\"script\": \"ant.xml\", \"targets\": {\"onLoad\": \"onLoad\"}}");
     write("template/ant.xml", "<project name=\"t\"><target name=\"onLoad\"><copy file=\"input\\includes\\menu.xml\" todir=\"x\"/></target></project>");
