@@ -738,6 +738,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     // where they come from (for the log)
     StringBuilder freshFrom = null;
     try {
+      if (replay != null) {
+        replay.keepCheckedPackageOutputs();
+      }
       jekyllOk = runTool(replay);
       fresh = jekyllWritten == null ? null : new HashSet<>(jekyllWritten);
       freshFrom = fresh == null ? null : new StringBuilder(fresh.size() + " written by Jekyll");
@@ -752,12 +755,19 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         if (fresh != null) {
           fresh.addAll(replay.getPackageOutputs());
           freshFrom.append(", ").append(replay.getPackageOutputs().size()).append(" put back from the package step");
+          // those the last html check left as they were before Jekyll ran are as it left them, and so not new
+          List<String> checked = replay.putBackCheckedPackageOutputs();
+          fresh.removeAll(checked);
+          freshFrom.append(" (").append(checked.size()).append(" of them as the html check left them)");
         }
       } else if (!jekyllOk && pageRebuild != null) {
         pageRebuild.notReusable("Jekyll failed");
       }
     } finally {
       dropCheckedStash();
+      if (replay != null) {
+        replay.dropCheckedPackageOutputs();
+      }
     }
     if (jekyllOk && replay == null) {
       if (pageRebuild != null) {
