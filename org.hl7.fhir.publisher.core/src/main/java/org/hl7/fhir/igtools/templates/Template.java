@@ -1003,6 +1003,15 @@ public class Template {
     if (!onlyAntsPropertyEvaluation()) {
       return "its script expands properties its own way";
     }
+    // a property may hold what it refers to (value="${ant.refid:id}"), and what that is is evaluated when it's used
+    PropertyHelper ph = PropertyHelper.getPropertyHelper(antProject);
+    for (Map<String, Object> props : List.of(ph.getProperties(), ph.getUserProperties())) {
+      for (Map.Entry<String, Object> p : props.entrySet()) {
+        if (p.getValue() != null && p.getValue().getClass() != String.class) {
+          return "property '" + p.getKey() + "' holds a " + p.getValue().getClass().getName();
+        }
+      }
+    }
     List<Target> run;
     try {
       run = antProject.topoSort(targetOnCheck, antProject.getTargets(), false);
