@@ -65,9 +65,10 @@ class PageRebuildTest {
     write("temp/_includes/x.xml", "<x/>");
     write("output/index.html", "<html/>");
     pf = new PublisherFields();
+    pf.rootDir = dir.toString();
     pf.tempDir = dir.resolve("temp").toString();
     pf.outputDir = dir.resolve("output").toString();
-    page = new FetchedFile("input/pagecontent/index.md");
+    page = new FetchedFile("input/pagecontent/index.md", "pagecontent/index.md");
     page.setPath(dir.resolve("input/pagecontent/index.md").toFile().getCanonicalPath());
     page.setRelativePath("index.md");
     page.setProcessMode(FetchedFile.PROCESS_NONE);
@@ -390,6 +391,183 @@ class PageRebuildTest {
     state.restore();
     assertEquals(Collections.singletonList(ig), pf.errors);
     assertEquals(1, pf.suppressedMessages.list("test").get(0).getUseCount());
+  }
+
+  /** a translated IG: its pages are written in ru from input/translations/ru, if they are there */
+  private void translated() throws IOException {
+    pf.defaultTranslationLang = "en";
+    pf.translationLangs.add("ru");
+    pf.translationSources.add("input/translations/ru");
+    state.setPageLanguages(Collections.singletonList("ru"));
+    write("input/translations/ru/pagecontent/index.md", "# Главная");
+    write("input/translations/ru/StructureDefinition-a.po", "msgid \"\"");
+  }
+
+  /** a page that comes from a folder that the template pre-processes into _includes, as -intro and -notes do */
+  private FetchedFile prePage(String loadPath, String content) throws IOException {
+    write("input/" + loadPath, content);
+    FetchedFile f = new FetchedFile("input/" + loadPath, loadPath);
+    f.setPath(dir.resolve("input/" + loadPath).toFile().getCanonicalPath());
+    f.setRelativePath("_includes/" + new java.io.File(loadPath).getName());
+    f.setProcessMode(FetchedFile.PROCESS_NONE);
+    pf.altMap.put("pre-page/" + f.getPath(), f);
+    pf.fileList.add(f);
+    return f;
+  }
+
+  @Test
+  void anEditToATranslationIsAChangeToItsPage() throws IOException {
+    translated();
+    built();
+    List<String> reason = new ArrayList<>();
+    assertEquals(Collections.singletonList(page),
+        state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная страница")), reason), reason.toString());
+    // and with the page
+    assertEquals(Collections.singletonList(page), state.pagesFor(changes(() -> {
+      write("input/pagecontent/index.md", "# Home, edited");
+      write("input/translations/ru/pagecontent/index.md", "# Главная, edited");
+    }), reason), reason.toString());
+  }
+
+  @Test
+  void anEditToAnIntroOrItsTranslationIsAChangeToIt() throws IOException {
+    translated();
+    FetchedFile intro = prePage("pagecontent/StructureDefinition-a-intro.md", "Intro");
+    write("input/translations/ru/pagecontent/StructureDefinition-a-intro.md", "Введение");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertEquals(Collections.singletonList(intro),
+        state.pagesFor(changes(() -> write("input/pagecontent/StructureDefinition-a-intro.md", "Intro, edited")), reason), reason.toString());
+    assertEquals(Collections.singletonList(intro),
+        state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/StructureDefinition-a-intro.md", "Введение, edited")), reason),
+        reason.toString());
+  }
+
+  @Test
+  void anEditToAPageWithoutATranslationIsAChangeToIt() throws IOException {
+    translated();
+    FetchedFile other = prePage("pagecontent/other.md", "Other");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertEquals(Collections.singletonList(other),
+        state.pagesFor(changes(() -> write("input/pagecontent/other.md", "Other, edited")), reason), reason.toString());
+  }
+
+  @Test
+  void notForTheTranslationsOfTheResources() throws IOException {
+    translated();
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/StructureDefinition-a.po", "msgid \"a\"")), reason));
+    assertTrue(reason.get(0).endsWith("StructureDefinition-a.po is read as a translation of the resources"), reason.get(0));
+  }
+
+  @Test
+  void notForATranslationThatIsNotOfAPage() throws IOException {
+    translated();
+    write("input/translations/ru/pagecontent/gone.md", "# Удалено");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/gone.md", "# Удалено, edited")), reason));
+    assertTrue(reason.get(0).endsWith("gone.md is not the translation of a page"), reason.get(0));
+  }
+
+  @Test
+  void notForATranslationThatTheBuildDoesntRead() throws IOException {
+    // translations, but the template doesn't write the pages in each language
+    translated();
+    state.setPageLanguages(Collections.emptyList());
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная страница")), reason));
+    assertTrue(reason.get(0).endsWith("index.md is not a page"), reason.get(0));
+  }
+
+  @Test
+  void notWhenATranslationIsAddedOrRemoved() throws IOException {
+    // which pages are translated is in the page data (pages.json)
+    translated();
+    prePage("pagecontent/other.md", "Other");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/other.md", "Другое")), reason));
+    assertEquals("files were added or removed", reason.get(0));
+    assertNull(state.pagesFor(changes(() -> Files.delete(dir.resolve("input/translations/ru/pagecontent/index.md"))), reason));
+  }
+
+  @Test
+  void notForATranslationThatUsesTheResources() throws IOException {
+    translated();
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "{% sql SELECT 1 %}")), reason));
+    assertTrue(reason.get(0).endsWith("has content that depends on the resources"), reason.get(0));
+  }
+
+  @Test
+  void notForAPageInAFolderTheTemplateReads() throws IOException {
+    prePage("includes/menu.xml", "<ul/>");
+    Map<String, String> blockers = new HashMap<>();
+    blockers.put("includes", "the template's script ant.xml reads (${dir.input}/includes)");
+    state.setFolderBlockers(blockers);
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/includes/menu.xml", "<ul><li/></ul>")), reason));
+    assertTrue(reason.get(0).endsWith("menu.xml is in a folder that the template's script ant.xml reads (${dir.input}/includes)"), reason.get(0));
+    // the template doesn't read the other page folders
+    assertEquals(Collections.singletonList(page), state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# Home, edited")), reason));
+  }
+
+  @Test
+  void notForATranslationInAFolderTheTemplateReads() throws IOException {
+    translated();
+    prePage("includes/menu.xml", "<ul/>");
+    write("input/translations/ru/includes/menu.xml", "<ul><li>Меню</li></ul>");
+    Map<String, String> blockers = new HashMap<>();
+    blockers.put("includes", "the template's script ant.xml reads (${dir.input}/includes)");
+    blockers.put("intro-notes", "the template's script ant.xml names");
+    state.setFolderBlockers(blockers);
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/includes/menu.xml", "<ul><li>Меню 2</li></ul>")), reason));
+    assertTrue(reason.get(0).endsWith("menu.xml is in a folder that the template's script ant.xml reads (${dir.input}/includes)"), reason.get(0));
+    // a page folder that the template names
+    prePage("intro-notes/StructureDefinition-a-intro.md", "Intro");
+    write("input/translations/ru/intro-notes/StructureDefinition-a-intro.md", "Введение");
+    built();
+    reason.clear();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/intro-notes/StructureDefinition-a-intro.md", "Введение 2")), reason));
+    assertTrue(reason.get(0).endsWith("is in a folder that the template's script ant.xml names"), reason.get(0));
+    // and not the others
+    assertEquals(Collections.singletonList(page), state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная 2")), reason));
+  }
+
+  @Test
+  void notForAFileInTheInputFolderThatTheTemplateReads() throws IOException {
+    prePage("toc.md", "# Contents");
+    state.setFolderBlockers(Collections.singletonMap("toc.md", "the template's script ant.xml reads (${dir.input}/toc.md)"));
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/toc.md", "# Contents 2")), reason));
+    assertTrue(reason.get(0).endsWith("the template's script ant.xml reads (${dir.input}/toc.md)"), reason.get(0));
+  }
+
+  @Test
+  void notForAPageThatIsAlsoATranslation() throws IOException {
+    // a page in a translation source: the build writes the page from it, and the translation of the page with that name
+    translated();
+    pf.translationSources.set(0, "input/ru");
+    prePage("ru/pagecontent/index.md", "# Главная");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/ru/pagecontent/index.md", "# Главная страница")), reason));
+    assertTrue(reason.get(0).endsWith("is both a page and in the translations of the pages"), reason.get(0));
+  }
+
+  @Test
+  void aLangFragmentIsPlainContent() {
+    // it's an include of the fragment in the page's language, which is in the temp folder already
+    assertTrue(PageRebuild.isPlainContent("{% lang-fragment ip-statements.xhtml %}"));
   }
 
   @Test
