@@ -16,7 +16,14 @@ import org.hl7.fhir.utilities.xhtml.XhtmlToMarkdownConverter;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.IOException;
+import java.nio.ByteBuffer;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 /**
  * The AI generation code does this:
@@ -45,6 +52,8 @@ public class AIProcessor {
     private final Map<String, String[]> pages = new HashMap<>();
     // the markdown of a resource (they're from the package)
     private final Map<String, String> resourceMarkdown = new HashMap<>();
+    // the zips the runs wrote: what each holds (a digest), and the file's stamp when it was written (see AiZip)
+    private final Map<String, String[]> zips = new HashMap<>();
     private Set<String> fresh;
     private HTMLInspector.OutputRewriter rewriter;
     private final Set<String> written = new HashSet<>();
@@ -59,7 +68,10 @@ public class AIProcessor {
       written.clear();
     }
 
-    /** The files the last run wrote, or wrote again as Jekyll wrote them */
+    /**
+     * The files the last run wrote, or wrote again as Jekyll wrote them (the files it makes are only written if what
+     * they hold is different)
+     */
     public Set<String> getWritten() {
       return written;
     }
@@ -116,6 +128,110 @@ public class AIProcessor {
   }
 
   /**
+   * Writes a file the run makes; in watch mode only if what it holds is different, so that the steps after this only
+   * redo the files that changed
+   */
+  private void writeText(String content, String path) throws IOException {
+    if (cache != null) {
+      File f = new File(path);
+      byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
+      if (f.isFile() && f.length() == bytes.length && Arrays.equals(Files.readAllBytes(f.toPath()), bytes)) {
+        return;
+      }
+    }
+    FileUtilities.stringToFile(content, path);
+    written(path);
+  }
+
+  /**
+   * The ai.zip of a folder. In watch mode what goes in it is kept, and it's only written if that's different from
+   * what the last run wrote to it, or the file isn't as that run left it
+   */
+  private final class AiZip {
+    private final String path;
+    private final String target;
+    private final ZipGenerator zip;
+    private final List<Object[]> entries = new ArrayList<>();
+
+    /** The zip is written to path, and then renamed to target */
+    private AiZip(String path, String target) throws IOException {
+      this.path = path;
+      this.target = target;
+      this.zip = cache == null ? new ZipGenerator(path) : null;
+    }
+
+    private void addFileSource(String name, String content, boolean omitIfExists) throws IOException {
+      if (zip != null) {
+        zip.addFileSource(name, content, omitIfExists);
+      } else {
+        entries.add(new Object[] {name, content, omitIfExists});
+      }
+    }
+
+    private void close() throws IOException {
+      if (zip != null) {
+        zip.close();
+        rename();
+        return;
+      }
+      String digest = digest();
+      String[] last = cache.zips.remove(target);
+      if (last != null && last[0].equals(digest) && last[1].equals(stamp(target))) {
+        cache.zips.put(target, last);
+        return;
+      }
+      ZipGenerator z = new ZipGenerator(path);
+      for (Object[] e : entries) {
+        z.addFileSource((String) e[0], (String) e[1], (Boolean) e[2]);
+      }
+      z.close();
+      boolean renamed = rename();
+      written(target);
+      String stamp = renamed ? stamp(target) : null;
+      if (stamp != null) {
+        cache.zips.put(target, new String[] {digest, stamp});
+      }
+    }
+
+    /** Whether the zip is at target now */
+    private boolean rename() {
+      return path.equals(target) || new File(path).renameTo(new File(target));
+    }
+
+    private String digest() throws IOException {
+      try {
+        MessageDigest md = MessageDigest.getInstance("SHA-1");
+        for (Object[] e : entries) {
+          for (Object o : e) {
+            byte[] b = o.toString().getBytes(StandardCharsets.UTF_8);
+            md.update(ByteBuffer.allocate(4).putInt(b.length).array());
+            md.update(b);
+          }
+        }
+        return Base64.encodeBase64String(md.digest());
+      } catch (NoSuchAlgorithmException e) {
+        throw new IOException(e);
+      }
+    }
+  }
+
+  /** A file's size, times and inode, or null if it isn't there */
+  private static String stamp(String path) {
+    File f = new File(path);
+    if (!f.isFile()) {
+      return null;
+    }
+    String res = f.length() + ":" + f.lastModified();
+    try {
+      Map<String, Object> a = Files.readAttributes(f.toPath(), "unix:ino,ctime");
+      res = res + ":" + a.get("ino") + ":" + ((FileTime) a.get("ctime")).to(TimeUnit.NANOSECONDS);
+    } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
+      // the size and modification time
+    }
+    return res;
+  }
+
+  /**
    * Watch mode: makes sure that the pages the run reads that it can't take from the cache are as Jekyll wrote them
    */
   private void refreshPages(List<Page> pages, List<LoadedResource> resources) throws IOException {
@@ -128,8 +244,9 @@ public class AIProcessor {
         files.add(p.f);
       }
     }
+    Map<String, Page> byName = byName(pages);
     for (LoadedResource r : resources) {
-      Page p = getPageForResource(r, pages);
+      Page p = byName.get(r.filename);
       if (p != null && !cache.isFresh(p.f) && !files.contains(p.f) && !cache.resourceMarkdown.containsKey(resourceKey(r, p))) {
         files.add(p.f);
       }
@@ -163,8 +280,7 @@ public class AIProcessor {
     if (!langs.isEmpty()) {
       String llms = FileUtilities.fileToString(Utilities.path(rootDir, langs.get(0), "llms.txt"));
       llms = llms.replace("](", "](" + langs.get(0) + "/");
-      FileUtilities.stringToFile(llms, Utilities.path(rootDir, "llms.txt"));
-      written(Utilities.path(rootDir, "llms.txt"));
+      writeText(llms, Utilities.path(rootDir, "llms.txt"));
     }
   }
 
@@ -190,7 +306,7 @@ public class AIProcessor {
     long newSize = 0;
     refreshPages(pages, resources);
 
-    ZipGenerator zip = new ZipGenerator(Utilities.path(dir, "ai.zip"));
+    AiZip zip = new AiZip(Utilities.path(dir, "ai.zip"), Utilities.path(dir, "ai.zip"));
     StringBuilder llms = new StringBuilder();
     llms.append("# " + npm.vid() + ": " + npm.title() + "("+lang+")\r\n\r\n");
     llms.append("## Pages\r\n\r\n");
@@ -207,25 +323,28 @@ public class AIProcessor {
     llms.append("\r\n## Resources\r\n");
     resources.sort(new LoadedResourceSorter());
     String t = null;
+    Map<String, Page> byName = byName(pages);
     for (LoadedResource r : resources) {
-      Page p = getPageForResource(r, pages);
+      Page p = byName.get(r.filename);
       if (!r.type.equals(t)) {
         t = r.type;
         llms.append("\r\n### " + t.substring(1) + "\r\n\r\n");
       }
       String bn = r.filename;
       r.filename = r.filename.replace(".html", ".ai.html");
-      newSize += produceMDForResource(llms, r, p, dir, zip, true);
+      // in watch mode it's written where it ends up, if it's different
+      newSize += produceMDForResource(llms, r, p, dir, zip, true, cache == null ? null : file(dir, bn, ".md"));
       file(dir, r.filename).delete();
-      file(dir, r.filename, ".md").renameTo(file(dir, bn, ".md"));
-      written(Utilities.path(dir, FileUtilities.changeFileExt(bn, ".md")));
+      if (cache == null) {
+        file(dir, r.filename, ".md").renameTo(file(dir, bn, ".md"));
+      } else {
+        file(dir, r.filename, ".md").delete();
+      }
     }
     zip.addFileSource("llms.txt", llms.toString(), false);
     zip.addFileSource("llms.md", llms.toString(), false);
     zip.close();
-    written(Utilities.path(dir, "ai.zip"));
-    FileUtilities.stringToFile(llms.toString(), Utilities.path(dir, "llms.txt"));
-    written(Utilities.path(dir, "llms.txt"));
+    writeText(llms.toString(), Utilities.path(dir, "llms.txt"));
     newSize += llms.toString().length();
     String pct = oldSize == 0 ? "n/a" : "" + (100 - ((newSize * 100) / oldSize));
     System.out.println("AI format for " + dir.getAbsolutePath() + " - % reduction = " + pct);
@@ -250,7 +369,7 @@ public class AIProcessor {
     long newSize = 0;
     refreshPages(pages, resources);
 
-    ZipGenerator zip = new ZipGenerator(Utilities.path(dir, "ai-prep.zip"));
+    AiZip zip = new AiZip(Utilities.path(dir, "ai-prep.zip"), Utilities.path(dir, "ai.zip"));
     StringBuilder llms = new StringBuilder();
     llms.append("# " + npm.vid() + ": " + npm.title() + "\r\n\r\n");
     llms.append("## Pages\r\n\r\n");
@@ -267,34 +386,32 @@ public class AIProcessor {
     llms.append("\r\n## Resources\r\n");
     resources.sort(new LoadedResourceSorter());
     String t = null;
+    Map<String, Page> byName = byName(pages);
     for (LoadedResource r : resources) {
-      Page p = getPageForResource(r, pages);
+      Page p = byName.get(r.filename);
       if (!r.type.equals(t)) {
         t = r.type;
         llms.append("\r\n### " + t.substring(1) + "\r\n\r\n");
       }
-      newSize += produceMDForResource(llms, r, p, dir, zip, false);
+      newSize += produceMDForResource(llms, r, p, dir, zip, false, null);
     }
     zip.addFileSource("llms.txt", llms.toString(), false);
     zip.addFileSource("llms.md", llms.toString(), false);
     zip.close();
-    new File(Utilities.path(dir, "ai-prep.zip")).renameTo(new File(Utilities.path(dir, "ai.zip")));
-    written(Utilities.path(dir, "ai.zip"));
-    FileUtilities.stringToFile(llms.toString(), Utilities.path(dir, "llms.txt"));
-    written(Utilities.path(dir, "llms.txt"));
+    writeText(llms.toString(), Utilities.path(dir, "llms.txt"));
     newSize += llms.toString().length();
     String pct = oldSize == 0 ? "n/a" : "" + (100 - ((newSize * 100) / oldSize));
     System.out.println("Processed " + dir.getAbsolutePath() + " - % reduction = " + pct + " (" + oldSize + " ==> " + newSize + ")");
   }
 
 
-  private Page getPageForResource(LoadedResource r, List<Page> pages) {
+  /** The pages by their file names (the first one, if two have the same name): the page of a resource */
+  private Map<String, Page> byName(List<Page> pages) {
+    Map<String, Page> res = new HashMap<>();
     for (Page p : pages) {
-      if (p.f.getName().equals(r.filename)) {
-        return p;
-      }
+      res.putIfAbsent(p.f.getName(), p);
     }
-    return null;
+    return res;
   }
 
   private NpmPackage loadResources(File dir, List<LoadedResource> resources, NpmPackage npm, boolean newML) throws IOException {
@@ -384,7 +501,7 @@ public class AIProcessor {
     return rt.contains("/") ? rt.substring(rt.lastIndexOf('/') + 1) : rt;
   }
 
-  private int produceMDForPage(StringBuilder llms, Page p, ZipGenerator zip, NpmPackage npm) throws IOException {
+  private int produceMDForPage(StringBuilder llms, Page p, AiZip zip, NpmPackage npm) throws IOException {
 //    System.out.println("Processing "+p.f.getAbsolutePath());
     try {
       String[] tm = cache == null || cache.isFresh(p.f) ? null : cache.pages.get(p.f.getAbsolutePath());
@@ -420,8 +537,11 @@ public class AIProcessor {
         title = title.substring(0, title.length() - 1).trim();
       }
       llms.append("* [" + title + "](" + dest + ")\r\n");
-      FileUtilities.stringToFileIfDifferent(md, Utilities.path(FileUtilities.getDirectoryForFile(p.f), dest));
-      written(Utilities.path(FileUtilities.getDirectoryForFile(p.f), dest));
+      if (cache == null) {
+        FileUtilities.stringToFileIfDifferent(md, Utilities.path(FileUtilities.getDirectoryForFile(p.f), dest));
+      } else {
+        writeText(md, Utilities.path(FileUtilities.getDirectoryForFile(p.f), dest));
+      }
       zip.addFileSource(dest, md, false);
       return md.length();
     } catch (Exception e) {
@@ -429,7 +549,8 @@ public class AIProcessor {
     }
   }
 
-  private int produceMDForResource(StringBuilder llms, LoadedResource r, Page p, File dir, ZipGenerator zip, boolean newML) throws IOException {
+  /** target: where the markdown is written, if it isn't next to the resource's page */
+  private int produceMDForResource(StringBuilder llms, LoadedResource r, Page p, File dir, AiZip zip, boolean newML, File target) throws IOException {
 //    System.out.println("Processing "+p.f.getAbsolutePath());
     try {
       String key = cache == null ? null : resourceKey(r, p);
@@ -449,8 +570,7 @@ public class AIProcessor {
       } else {
         llms.append("* [" + r.name + "](" + dest + ")\r\n");
       }
-      FileUtilities.stringToFile(md, Utilities.path(dir, dest));
-      written(Utilities.path(dir, dest));
+      writeText(md, target == null ? Utilities.path(dir, dest) : target.getAbsolutePath());
       zip.addFileSource(dest, md, true);
       return md.length();
     } catch (Exception e) {
@@ -540,6 +660,15 @@ public class AIProcessor {
 
   private long loadPages(File dir, List<Page> pages, List<LoadedResource> resources) {
     long res = 0;
+    // the resources' file names, and the same in lower case without the extension
+    List<String> names = new ArrayList<>();
+    List<String> stems = new ArrayList<>();
+    for (LoadedResource lr : resources) {
+      if (lr.filename != null) {
+        names.add(lr.filename);
+        stems.add(FileUtilities.changeFileExt(lr.filename.toLowerCase(), ""));
+      }
+    }
     for (File f : dir.listFiles()) {
       if ((f.getName().endsWith(".html") || f.getName().endsWith(".json") || f.getName().endsWith(".xml")) && !f.getName().startsWith("qa")) {
         res += f.length();
@@ -548,15 +677,13 @@ public class AIProcessor {
               "toc.html", "searchform.html")) {
         boolean found = false;
         boolean found2 = false;
-        for (LoadedResource lr : resources) {
-          if (lr.filename != null) {
-            if (lr.filename.equalsIgnoreCase(f.getName())) {
-              found = true;
-            }
-            String n = FileUtilities.changeFileExt(f.getName().toLowerCase(), "");
-            if (n.startsWith(FileUtilities.changeFileExt(lr.filename.toLowerCase(), ""))) {
-              found2 = true;
-            }
+        String n = FileUtilities.changeFileExt(f.getName().toLowerCase(), "");
+        for (int i = 0; i < names.size() && !(found && found2); i++) {
+          if (names.get(i).equalsIgnoreCase(f.getName())) {
+            found = true;
+          }
+          if (n.startsWith(stems.get(i))) {
+            found2 = true;
           }
         }
         if (found) {
