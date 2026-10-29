@@ -154,6 +154,21 @@ class TemplateScriptPageUseTest {
     write("template/scripts/more/x.xml", "<project name=\"x\"><copy file=\"${dir.input}/images/logo.png\" todir=\"x\"/></project>");
     Template t = new Template(dir.toString(), true, null, null, false, false, false);
     assertEquals(Set.of("includes", "images"), t.pageFolderBlockers().keySet());
+    assertNull(t.pageOnlyRebuildBlocker());
+    // an ant file that isn't read
+    write("template/build/ant.xml", "<project name=\"t\"><import file=\"common.xml\"/><target name=\"onGenerate\"/></project>");
+    write("template/build/common.xml", "<project name=\"c\"/>");
+    t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertEquals("the template's script ant.xml runs common.xml, which isn't read", t.pageOnlyRebuildBlocker());
+  }
+
+  @Test
+  void theAntFileWithoutAFolderOfScripts() throws IOException {
+    write("template/config.json", "{\"script\": \"ant.xml\", \"targets\": {\"onLoad\": \"onLoad\"}}");
+    write("template/ant.xml", "<project name=\"t\"><target name=\"onLoad\"><copy file=\"${dir.input}/includes/menu.xml\" todir=\"x\"/></target></project>");
+    Template t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertNull(t.pageOnlyRebuildBlocker());
+    assertEquals(Map.of("includes", "the template's script ant.xml reads (${dir.input}/includes)"), t.pageFolderBlockers());
   }
 
   @Test
@@ -192,6 +207,10 @@ class TemplateScriptPageUseTest {
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${basedir}\"><include name=\"**/*.md\"/></fileset>"));
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<copy todir=\"x\"><fileset dir=\"${ig.root}\"/></copy>"));
     assertNull(Template.scriptPageUse("onGenerate.xml", "<copy file=\"x\" todir=\"${ig.root}\"/>"));
+    // the scripts run in the IG's folder
+    for (String d : new String[] {".", "./", "", "${ig.root}/.", "${basedir}/./"}) {
+      assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"" + d + "\" includes=\"**/*.md\"/>"), d);
+    }
     // the base template's spreadsheet search
     assertNull(Template.scriptPageUse("onLoad.xml",
         "<fileset id=\"s\" dir=\"${ig.root}\"><include name=\"${folder.input}/examples/*spreadsheet.xml\"/></fileset>"));

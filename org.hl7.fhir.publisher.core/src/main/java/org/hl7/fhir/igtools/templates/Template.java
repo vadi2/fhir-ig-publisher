@@ -363,7 +363,7 @@ public class Template {
       "<property\\s[^>]*?name=\"([^\"]+)\"[^>]*>");
   // a file set or the like that starts from the IG's root folder
   private static final java.util.regex.Pattern ROOT_DIR = java.util.regex.Pattern.compile(
-      "<([\\w.:-]+)\\s[^>]*?(?<=\\s)dir=\"\\$\\{(?:ig\\.root|basedir)\\}/?\"[^>]*>");
+      "<([\\w.:-]+)\\s[^>]*?(?<=\\s)dir=\"(?:\\$\\{(?:ig\\.root|basedir)\\})?(?:/?\\.)?/?\"[^>]*>");
   // a folder in the input folder named by its path from the IG's folder (input/pagecontent)
   private static final java.util.regex.Pattern INPUT_PATH = java.util.regex.Pattern.compile(
       "(?<![\\w.-])input/([^/\"'*&;,()\\s<>$?\\[{]+)" + FOLDER_END);
@@ -409,6 +409,10 @@ public class Template {
     if (scripts == null) {
       return "the template's scripts can't be read";
     }
+    String unread = unreadAntFile(scriptFiles());
+    if (unread != null) {
+      return unread;
+    }
     for (Map.Entry<String, String> e : scripts.entrySet()) {
       String blocker = scriptPageUse(e.getKey(), e.getValue());
       if (blocker != null) {
@@ -438,26 +442,63 @@ public class Template {
 
   /** The template's scripts (not the jars in the scripts folder) by name, or null if they can't be read */
   private Map<String, String> scripts() throws IOException {
-    java.nio.file.Path dir = new File(Utilities.path(templateDir, "scripts")).toPath();
-    if (!java.nio.file.Files.isDirectory(dir)) {
+    Map<java.nio.file.Path, String> files = scriptFiles();
+    if (files == null) {
       return null;
     }
+    java.nio.file.Path dir = new File(Utilities.path(templateDir, "scripts")).getCanonicalFile().toPath();
+    java.nio.file.Path tdir = new File(templateDir).getCanonicalFile().toPath();
     Map<String, String> res = new java.util.TreeMap<>();
-    try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(dir)) {
-      for (java.nio.file.Path f : (Iterable<java.nio.file.Path>) files::iterator) {
-        if (java.nio.file.Files.isRegularFile(f) && !f.getFileName().toString().endsWith(".jar")) {
-          res.put(dir.relativize(f).toString().replace(File.separatorChar, '/'), FileUtilities.fileToString(f.toFile()));
+    for (Map.Entry<java.nio.file.Path, String> e : files.entrySet()) {
+      java.nio.file.Path f = e.getKey();
+      res.put((f.startsWith(dir) ? dir : tdir).relativize(f).toString().replace(File.separatorChar, '/'), e.getValue());
+    }
+    return res;
+  }
+
+  /**
+   * The template's scripts (its folder of scripts, and the ant file it runs, wherever it is), by where they are, or null
+   * if there are none
+   */
+  private Map<java.nio.file.Path, String> scriptFiles() throws IOException {
+    java.nio.file.Path dir = new File(Utilities.path(templateDir, "scripts")).getCanonicalFile().toPath();
+    Map<java.nio.file.Path, String> res = new java.util.TreeMap<>();
+    if (java.nio.file.Files.isDirectory(dir)) {
+      try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(dir)) {
+        for (java.nio.file.Path f : (Iterable<java.nio.file.Path>) files::iterator) {
+          if (java.nio.file.Files.isRegularFile(f) && !f.getFileName().toString().endsWith(".jar")) {
+            res.put(f.toFile().getCanonicalFile().toPath(), FileUtilities.fileToString(f.toFile()));
+          }
+        }
+      } catch (java.io.UncheckedIOException e) {
+        throw e.getCause();
+      }
+    }
+    if (script != null) {
+      File f = new File(Utilities.path(templateDir, script)).getCanonicalFile();
+      if (f.isFile()) {
+        res.putIfAbsent(f.toPath(), FileUtilities.fileToString(f));
+      }
+    }
+    return res.isEmpty() ? null : res;
+  }
+
+  // an ant file that a script runs or imports
+  private static final java.util.regex.Pattern ANT_FILE = java.util.regex.Pattern.compile(
+      "<(?:import|include)\\s[^>]*?(?<=\\s)file=\"([^\"]*)\"|(?<=\\s)antfile=\"([^\"]*)\"");
+
+  /** An ant file that a script runs or imports and that isn't one of the template's scripts, if there is one */
+  private String unreadAntFile(Map<java.nio.file.Path, String> files) throws IOException {
+    for (Map.Entry<java.nio.file.Path, String> e : files.entrySet()) {
+      java.util.regex.Matcher m = ANT_FILE.matcher(e.getValue());
+      while (m.find()) {
+        String f = m.group(1) != null ? m.group(1) : m.group(2);
+        if (f.contains("$") || !files.containsKey(e.getKey().getParent().resolve(f).toFile().getCanonicalFile().toPath())) {
+          return "the template's script " + e.getKey().getFileName() + " runs " + f + ", which isn't read";
         }
       }
     }
-    // the ant file that the template runs, wherever it is
-    if (script != null) {
-      File f = new File(Utilities.path(templateDir, script));
-      if (!f.getCanonicalFile().toPath().startsWith(dir.toFile().getCanonicalFile().toPath())) {
-        res.put(script, FileUtilities.fileToString(f));
-      }
-    }
-    return res;
+    return null;
   }
 
   /**
