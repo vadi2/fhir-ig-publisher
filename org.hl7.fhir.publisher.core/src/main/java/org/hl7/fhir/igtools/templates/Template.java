@@ -482,7 +482,8 @@ public class Template {
    * if there are none
    */
   private Map<java.nio.file.Path, String> scriptFiles(boolean outsideTargets) throws IOException {
-    Map<java.nio.file.Path, String> res = scriptFiles();
+    Set<java.nio.file.Path> propertyFiles = new HashSet<>();
+    Map<java.nio.file.Path, String> res = scriptFiles(propertyFiles);
     if (res == null || !outsideTargets) {
       return res;
     }
@@ -491,16 +492,20 @@ public class Template {
     Map<java.nio.file.Path, String> top = new java.util.TreeMap<>();
     for (Map.Entry<java.nio.file.Path, String> e : res.entrySet()) {
       if (e.getKey().getFileName().toString().endsWith(".xml") || e.getKey().equals(main)) {
-        top.put(e.getKey(), TARGET.matcher(e.getValue()).replaceAll(" "));
+        top.put(e.getKey(), TARGET.matcher(COMMENT.matcher(e.getValue()).replaceAll(" ")).replaceAll(" "));
+      } else if (propertyFiles.contains(e.getKey())) {
+        // (the properties that the tasks may use)
+        top.put(e.getKey(), e.getValue());
       }
     }
     return top.isEmpty() ? null : top;
   }
 
+  private static final java.util.regex.Pattern COMMENT = java.util.regex.Pattern.compile("<!--.*?-->", java.util.regex.Pattern.DOTALL);
   private static final java.util.regex.Pattern TARGET = java.util.regex.Pattern.compile(
       "<target\\b[^>]*?/>|<target\\b.*?</target>", java.util.regex.Pattern.DOTALL);
 
-  private Map<java.nio.file.Path, String> scriptFiles() throws IOException {
+  private Map<java.nio.file.Path, String> scriptFiles(Set<java.nio.file.Path> propertyFiles) throws IOException {
     java.nio.file.Path dir = new File(Utilities.path(templateDir, "scripts")).getCanonicalFile().toPath();
     Map<java.nio.file.Path, String> res = new java.util.TreeMap<>();
     if (java.nio.file.Files.isDirectory(dir)) {
@@ -539,6 +544,7 @@ public class Template {
           }
         }
         res.put(f, b.toString());
+        propertyFiles.add(f);
       }
     }
     return res.isEmpty() ? null : res;
