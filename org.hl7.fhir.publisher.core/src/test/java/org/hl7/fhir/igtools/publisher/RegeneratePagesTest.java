@@ -230,7 +230,7 @@ class RegeneratePagesTest {
     Files.createDirectories(dir.resolve("temp/_includes/index.md"));
     write("input/pagecontent/index.md", "# Home, edited");
     IOException e = assertThrows(IOException.class, () -> gen.regeneratePages(Collections.singletonList(page)));
-    assertTrue(e.getMessage().contains("could not be written to " + temp("_includes/index.md")), e.getMessage());
+    assertTrue(e.getMessage().contains("could not be made into " + temp("_includes/index.md")), e.getMessage());
     assertTrue(log.get(0).startsWith("Exception generating page " + temp("_includes/index.md")), log.toString());
   }
 

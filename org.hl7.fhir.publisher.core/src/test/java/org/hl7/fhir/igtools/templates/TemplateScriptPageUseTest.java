@@ -352,6 +352,32 @@ class TemplateScriptPageUseTest {
   }
 
   @Test
+  void theTasksOutsideTheTargetsWhenNoneRunBeforeJekyll() throws IOException {
+    // ant runs them when it loads the template's ant file
+    write("template/config.json", "{\"script\": \"scripts/ant.xml\", \"targets\": {\"onCheck\": \"onCheck\"}}");
+    write("template/scripts/ant.xml", "<project name=\"t\"><loadfile property=\"m\" srcfile=\"${dir.input}/includes/menu.xml\" failonerror=\"false\"/>"
+        + "<target name=\"onCheck\"><copy file=\"${dir.input}/images/logo.png\" todir=\"x\"/></target></project>");
+    Template t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertNull(t.pageOnlyRebuildBlocker());
+    assertEquals(Set.of("includes"), t.pageFolderBlockers().keySet());
+    write("template/scripts/ant.xml", "<project name=\"t\"><pathconvert property=\"p\"><fileset dir=\"${dir.input}\" erroronmissingdir=\"false\"/></pathconvert>"
+        + "<target name=\"onCheck\"/></project>");
+    t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertEquals("the template's script scripts/ant.xml reads ${dir.input}", t.pageOnlyRebuildBlocker());
+    // and those it doesn't run: nothing
+    write("template/scripts/ant.xml", "<project name=\"t\"><target name=\"onCheck\"><fileset dir=\"${dir.input}\"/></target><target name=\"x\"/></project>");
+    t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertNull(t.pageOnlyRebuildBlocker());
+    assertTrue(t.pageFolderBlockers().isEmpty());
+  }
+
+  @Test
+  void aLongStringInCode() {
+    String code = "var s = \"" + "a\\\"".repeat(50000) + "\";";
+    assertNull(Template.scriptCode("x.js", "javascript", code, ""));
+  }
+
+  @Test
   void theFoldersTheTemplatesScriptsRead() throws IOException {
     Template t = template("\"onGenerate\": \"onGenerate\"");
     assertNull(t.pageOnlyRebuildBlocker());

@@ -414,14 +414,16 @@ public class Template {
     if (targetOnJekyll != null) {
       return "the template runs a script before Jekyll";
     }
-    if (targetOnGenerate == null && targetOnLoad == null) {
+    boolean targets = targetOnGenerate != null || targetOnLoad != null;
+    if (!targets && script == null) {
       return null;
     }
-    Map<String, String> scripts = scripts();
-    if (scripts == null) {
-      return "the template's scripts can't be read";
+    Map<java.nio.file.Path, String> files = scriptFiles(!targets);
+    if (files == null) {
+      return targets ? "the template's scripts can't be read" : null;
     }
-    String unread = unreadAntFile(scriptFiles());
+    Map<String, String> scripts = scripts(files);
+    String unread = unreadAntFile(files);
     if (unread != null) {
       return unread;
     }
@@ -442,7 +444,9 @@ public class Template {
    */
   public Map<String, String> pageFolderBlockers() throws IOException {
     Map<String, String> res = new HashMap<>();
-    Map<String, String> scripts = (targetOnGenerate == null && targetOnLoad == null) || targetOnJekyll != null ? null : scripts();
+    boolean targets = targetOnGenerate != null || targetOnLoad != null;
+    Map<java.nio.file.Path, String> files = (!targets && script == null) || targetOnJekyll != null ? null : scriptFiles(!targets);
+    Map<String, String> scripts = files == null ? null : scripts(files);
     if (scripts != null) {
       String all = String.join("\n", scripts.values());
       for (Map.Entry<String, String> e : scripts.entrySet()) {
@@ -458,11 +462,7 @@ public class Template {
    * The template's scripts (not the jars in the scripts folder) by their path from the template's folder
    * (scripts/ant.xml), or null if they can't be read
    */
-  private Map<String, String> scripts() throws IOException {
-    Map<java.nio.file.Path, String> files = scriptFiles();
-    if (files == null) {
-      return null;
-    }
+  private Map<String, String> scripts(Map<java.nio.file.Path, String> files) throws IOException {
     Map<String, String> res = new java.util.TreeMap<>();
     for (Map.Entry<java.nio.file.Path, String> e : files.entrySet()) {
       // ant takes \ as a separator too
@@ -481,6 +481,25 @@ public class Template {
    * The template's scripts (its folder of scripts, and the ant file it runs, wherever it is), by where they are, or null
    * if there are none
    */
+  private Map<java.nio.file.Path, String> scriptFiles(boolean outsideTargets) throws IOException {
+    Map<java.nio.file.Path, String> res = scriptFiles();
+    if (res == null || !outsideTargets) {
+      return res;
+    }
+    // the tasks outside the targets, which ant runs when it loads the ant files (with the template), in the ant files
+    java.nio.file.Path main = new File(Utilities.path(templateDir, script)).getCanonicalFile().toPath();
+    Map<java.nio.file.Path, String> top = new java.util.TreeMap<>();
+    for (Map.Entry<java.nio.file.Path, String> e : res.entrySet()) {
+      if (e.getKey().getFileName().toString().endsWith(".xml") || e.getKey().equals(main)) {
+        top.put(e.getKey(), TARGET.matcher(e.getValue()).replaceAll(" "));
+      }
+    }
+    return top.isEmpty() ? null : top;
+  }
+
+  private static final java.util.regex.Pattern TARGET = java.util.regex.Pattern.compile(
+      "<target\\b[^>]*?/>|<target\\b.*?</target>", java.util.regex.Pattern.DOTALL);
+
   private Map<java.nio.file.Path, String> scriptFiles() throws IOException {
     java.nio.file.Path dir = new File(Utilities.path(templateDir, "scripts")).getCanonicalFile().toPath();
     Map<java.nio.file.Path, String> res = new java.util.TreeMap<>();
@@ -580,7 +599,9 @@ public class Template {
       "<(script|scriptdef|groovy|groovyc|jython|beanshell)\\b([^>]*?)(?<!/)>(.*?)</\\1>", java.util.regex.Pattern.DOTALL);
   private static final java.util.regex.Pattern LANGUAGE = java.util.regex.Pattern.compile("(?<=\\s)language=\"([^\"]*)\"");
   // a string in javascript
-  private static final java.util.regex.Pattern JS_STRING = java.util.regex.Pattern.compile("\"((?:[^\"\\\\\\n]|\\\\.)*)\"|'((?:[^'\\\\\\n]|\\\\.)*)'");
+  // (written so that a long string doesn't take a long chain of calls to match)
+  private static final java.util.regex.Pattern JS_STRING = java.util.regex.Pattern.compile(
+      "\"([^\"\\\\\\n]*+(?:\\\\.[^\"\\\\\\n]*+)*+)\"|'([^'\\\\\\n]*+(?:\\\\.[^'\\\\\\n]*+)*+)'");
   // what javascript needs to read files, or run what isn't read: without them it can only work with properties (as
   // the base templates do) and run the targets in the scripts
   private static final java.util.regex.Pattern JS_FILE_USE = java.util.regex.Pattern.compile(
