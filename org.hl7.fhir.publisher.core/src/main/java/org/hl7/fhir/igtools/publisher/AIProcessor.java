@@ -189,7 +189,12 @@ public class AIProcessor {
     private void close() throws IOException {
       if (zip != null) {
         zip.close();
-        rename();
+        try {
+          rename();
+        } catch (IOException e) {
+          // as before: the zip there is left as it is
+          System.out.println("Unable to replace " + target + " with " + path + ": " + e.getMessage());
+        }
         return;
       }
       String digest = digest();

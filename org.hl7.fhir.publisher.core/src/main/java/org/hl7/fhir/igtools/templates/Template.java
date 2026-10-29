@@ -27,6 +27,7 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.lang.reflect.Field;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
@@ -34,6 +35,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -964,8 +966,9 @@ public class Template {
    * depends on (extensionOf), whatever file they're in - is tasks that only read and write files in the template
    * folder (see BLIND_TASKS), the template folder has no links (a link could lead to the output), and nothing the
    * script ran before is left to run with it (another listener on the script's project, another way to expand
-   * properties, a target of the script's own kind). Anything else, or anything that can't be told for sure, is a
-   * reason it may. (What isn't looked at: a thread that something the script ran before has left running.)
+   * properties, a target, task or condition of the script's own kind). Anything else, or anything that can't be told
+   * for sure, is a reason it may. (What isn't looked at: what code the script ran before hides on purpose, like a
+   * thread left running; and, where the file system doesn't tell how many names a file has, hard links.)
    */
   public String whyOnCheckMaySeeOutput(String outputDir) {
     if (targetOnCheck == null) {
@@ -976,12 +979,12 @@ public class Template {
     }
     try {
       return whyOnCheckMaySee(Paths.get(outputDir));
-    } catch (IOException | RuntimeException e) {
+    } catch (IOException | ReflectiveOperationException | RuntimeException e) {
       return "it can't be told (" + e + ")";
     }
   }
 
-  private String whyOnCheckMaySee(Path output) throws IOException {
+  private String whyOnCheckMaySee(Path output) throws IOException, ReflectiveOperationException {
     Path tmpl = Paths.get(templateDir).toAbsolutePath().normalize();
     if (output.toAbsolutePath().normalize().startsWith(tmpl)
         || (Files.exists(output) && output.toRealPath().startsWith(tmpl.toRealPath()))) {
@@ -1007,18 +1010,25 @@ public class Template {
       return "its targets can't be ordered (" + e.getMessage() + ")";
     }
     ComponentHelper components = ComponentHelper.getComponentHelper(antProject);
+    if (components.getClass() != ComponentHelper.class || components.getProject() != antProject) {
+      return "its script makes tasks its own way";
+    }
     for (Target t : run) {
       if (t.getClass() != Target.class && t.getClass() != ExtensionPoint.class) {
         return "target '" + t.getName() + "' is a " + t.getClass().getName();
       }
+      why = t.getProject() != antProject ? "belongs to another project" : whyTargetMaySee(t);
+      if (why != null) {
+        return "target '" + t.getName() + "' " + why;
+      }
       for (Task task : t.getTasks()) {
-        String tag = task instanceof UnknownElement ? ((UnknownElement) task).getTag() : task.getTaskName();
+        String tag = task.getClass() == UnknownElement.class ? ((UnknownElement) task).getTag() : task.getTaskName();
         Class<?> cls = BLIND_TASKS.get(tag);
         AntTypeDefinition def = cls == null ? null : components.getDefinition(tag);
         // Ant's own definition: a macro or preset of the template's own is a subclass, and a taskdef may load the
         // class from elsewhere
-        if (!(task instanceof UnknownElement) || def == null || def.getClass() != AntTypeDefinition.class
-            || def.getExposedClass(antProject) != cls) {
+        if (task.getClass() != UnknownElement.class || def == null || def.getClass() != AntTypeDefinition.class
+            || def.getExposedClass(antProject) != cls || def.getTypeClass(antProject) != cls) {
           return "target '" + t.getName() + "' runs " + tag;
         }
         why = whyElementMaySeeOutput((UnknownElement) task, tmpl);
@@ -1030,12 +1040,63 @@ public class Template {
     return null;
   }
 
-  /** Why what is in this folder may lead out of it: a symbolic link, or a file with another name (a hard link) */
+  /**
+   * Why a target may run more than its tasks (see whyElementMaySeeOutput()): a condition (if, unless) that may
+   * evaluate something, or one that isn't a property's, or something to run that isn't one of its tasks
+   */
+  private static String whyTargetMaySee(Target t) throws ReflectiveOperationException {
+    Target plain = new Target();
+    plain.setIf("x");
+    plain.setUnless("x");
+    for (String c : new String[] {"if", "unless"}) {
+      Object cond = field(Target.class, c + "Condition", t);
+      String prop = "if".equals(c) ? t.getIf() : t.getUnless();
+      if (cond != null && (cond.getClass() != field(Target.class, c + "Condition", plain).getClass() || capturedBy(cond) != t)) {
+        return "has a condition of its own (" + cond.getClass().getName() + ")";
+      }
+      // the condition is a property's name, and a name with ':' may be evaluated (toString:id), what it expands to too
+      if (prop != null && (prop.contains(":") || prop.contains("$"))) {
+        return c + "=\"" + prop + "\"";
+      }
+    }
+    List<?> children = (List<?>) field(Target.class, "children", t);
+    for (Object c : children) {
+      if (!(c instanceof Task)) {
+        return "runs " + c.getClass().getName();
+      }
+    }
+    return null;
+  }
+
+  /** The target a condition made by Target.setIf(String) reads its property's name from */
+  private static Object capturedBy(Object cond) throws ReflectiveOperationException {
+    Object res = null;
+    int n = 0;
+    for (Field f : cond.getClass().getDeclaredFields()) {
+      if (!java.lang.reflect.Modifier.isStatic(f.getModifiers())) {
+        f.setAccessible(true);
+        res = f.get(cond);
+        n++;
+      }
+    }
+    return n == 1 ? res : null;
+  }
+
+  private static Object field(Class<?> cls, String name, Object o) throws ReflectiveOperationException {
+    Field f = cls.getDeclaredField(name);
+    f.setAccessible(true);
+    return f.get(o);
+  }
+
+  /** Why what is in this folder may lead out of it: a symbolic link (or junction), or a file with another name (a hard link) */
   private static String whyFolderMayLeadOut(Path folder) throws IOException {
     boolean unix = folder.getFileSystem().supportedFileAttributeViews().contains("unix");
+    Path real = folder.toRealPath();
     try (Stream<Path> files = Files.walk(folder)) {
       for (Path p : (Iterable<Path>) files::iterator) {
-        if (Files.isSymbolicLink(p)) {
+        BasicFileAttributes a = Files.readAttributes(p, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+        // (on Windows, what isn't a file or a folder may be a junction, or only a file in the cloud)
+        if (a.isSymbolicLink() || (unix && a.isOther()) || ((a.isDirectory() || a.isOther()) && !p.toRealPath().startsWith(real))) {
           return "the template folder has a link, " + folder.relativize(p);
         }
         if (unix && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)
@@ -1048,43 +1109,40 @@ public class Template {
   }
 
   /** Whether the script's properties are expanded as Ant expands them by default (and nothing else runs when they are) */
-  private boolean onlyAntsPropertyEvaluation() {
+  private boolean onlyAntsPropertyEvaluation() throws ReflectiveOperationException {
     PropertyHelper ph = PropertyHelper.getPropertyHelper(antProject);
     if (ph.getClass() != PropertyHelper.class) {
       return false;
     }
     Project plain = new Project();
     plain.init();
-    try {
-      Set<Object> ants = new HashSet<>();
-      for (List<?> l : delegates(PropertyHelper.getPropertyHelper(plain)).values()) {
-        ants.addAll(l);
-      }
-      for (List<?> l : delegates(ph).values()) {
-        for (Object d : l) {
-          // Ant's own <local> properties: running a target sets them up
-          if (!ants.contains(d) && d.getClass() != LocalProperties.class) {
-            return false;
-          }
+    Set<Object> ants = new HashSet<>();
+    for (List<?> l : delegates(PropertyHelper.getPropertyHelper(plain)).values()) {
+      ants.addAll(l);
+    }
+    for (List<?> l : delegates(ph).values()) {
+      for (Object d : l) {
+        // Ant's own <local> properties: running a target sets them up
+        if (!ants.contains(d) && d.getClass() != LocalProperties.class) {
+          return false;
         }
       }
-      return true;
-    } catch (ReflectiveOperationException | RuntimeException e) {
-      return false;
     }
+    return true;
   }
 
+  @SuppressWarnings("unchecked")
   private static Map<?, List<?>> delegates(PropertyHelper ph) throws ReflectiveOperationException {
-    Field f = PropertyHelper.class.getDeclaredField("delegates");
-    f.setAccessible(true);
-    @SuppressWarnings("unchecked")
-    Map<?, List<?>> res = (Map<?, List<?>>) f.get(ph);
-    return res;
+    return (Map<?, List<?>>) field(PropertyHelper.class, "delegates", ph);
   }
 
   private String whyElementMaySeeOutput(UnknownElement e, Path tmpl) {
     Set<String> allowed = BLIND_ELEMENTS.get(e.getTag());
     RuntimeConfigurable w = e.getWrapper();
+    if (e.getClass() != UnknownElement.class || w == null || w.getClass() != RuntimeConfigurable.class || e.getRealThing() != null
+        || e.getProject() != antProject) {
+      return "<" + e.getQName() + "> of its own kind";
+    }
     if (allowed == null || !e.getNamespace().isEmpty() || w.getPolyType() != null) {
       return "<" + e.getQName() + (w.getPolyType() != null ? " ant-type=\"" + w.getPolyType() + "\"" : "") + ">";
     }
@@ -1092,6 +1150,10 @@ public class Template {
       return "<" + e.getTag() + ">" + w.getText();
     }
     for (Map.Entry<String, Object> a : w.getAttributeMap().entrySet()) {
+      // what else is there is evaluated when the task is set up
+      if (a.getValue() == null || a.getValue().getClass() != String.class) {
+        return "<" + e.getTag() + " " + a.getKey() + "> of its own kind";
+      }
       String n = a.getKey().toLowerCase();
       String raw = String.valueOf(a.getValue());
       if (!allowed.contains(n) || EVALUATED_PROPERTY.matcher(raw).find()) {
@@ -1113,12 +1175,20 @@ public class Template {
         }
       }
     }
-    if (e.getChildren() != null) {
-      for (UnknownElement c : e.getChildren()) {
-        String why = whyElementMaySeeOutput(c, tmpl);
-        if (why != null) {
-          return why;
-        }
+    // Ant sets up what is nested from the wrappers' own children
+    List<UnknownElement> children = e.getChildren() == null ? new ArrayList<>() : e.getChildren();
+    List<RuntimeConfigurable> wrappers = Collections.list(w.getChildren());
+    if (wrappers.size() != children.size()) {
+      return "<" + e.getTag() + "> of its own kind";
+    }
+    for (int i = 0; i < children.size(); i++) {
+      UnknownElement c = children.get(i);
+      if (c.getWrapper() != wrappers.get(i)) {
+        return "<" + c.getTag() + "> of its own kind";
+      }
+      String why = whyElementMaySeeOutput(c, tmpl);
+      if (why != null) {
+        return why;
       }
     }
     return null;
