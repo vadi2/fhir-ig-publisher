@@ -27,6 +27,8 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
@@ -39,9 +41,15 @@ import java.util.regex.Pattern;
 
 import lombok.Getter;
 import org.apache.commons.io.FileUtils;
+import org.apache.tools.ant.AntTypeDefinition;
+import org.apache.tools.ant.BuildException;
+import org.apache.tools.ant.ComponentHelper;
 import org.apache.tools.ant.DefaultLogger;
 import org.apache.tools.ant.Project;
 import org.apache.tools.ant.ProjectHelper;
+import org.apache.tools.ant.Target;
+import org.apache.tools.ant.Task;
+import org.apache.tools.ant.UnknownElement;
 import org.hl7.fhir.convertors.advisors.impl.BaseAdvisor_40_50;
 import org.hl7.fhir.convertors.advisors.impl.BaseAdvisor_40_N;
 import org.hl7.fhir.convertors.advisors.impl.BaseAdvisor_50_N;
@@ -911,6 +919,108 @@ public class Template {
   /** Whether the template has a script that runs on the output after Jekyll */
   public boolean hasOnCheck() {
     return targetOnCheck != null;
+  }
+
+  /**
+   * What the template's check may run and still be known not to look at the output: these Ant tasks, as Ant defines
+   * them (by class: a template can define its own under the same name), and these elements in them, each with the
+   * attributes it may have. Of those, the ones that name a file or folder (PATH_ATTRIBUTES) must be in the template
+   * folder, and the ones that are patterns (PATTERN_ATTRIBUTES) must stay in the folder they're in
+   */
+  private static final Map<String, Class<?>> BLIND_TASKS = Map.of(
+      "echo", org.apache.tools.ant.taskdefs.Echo.class,
+      "concat", org.apache.tools.ant.taskdefs.Concat.class,
+      "replaceregexp", org.apache.tools.ant.taskdefs.optional.ReplaceRegExp.class);
+  private static final Map<String, Set<String>> BLIND_ELEMENTS = Map.of(
+      "echo", Set.of("file", "message", "append", "encoding", "level"),
+      "concat", Set.of("destfile", "encoding", "outputencoding", "append", "fixlastline", "eol"),
+      "replaceregexp", Set.of("file", "match", "replace", "flags", "byline", "encoding"),
+      "fileset", Set.of("dir", "includes", "excludes", "defaultexcludes", "casesensitive"),
+      "filterchain", Set.of(),
+      "tailfilter", Set.of("lines", "skip"),
+      "headfilter", Set.of("lines", "skip"));
+  private static final Set<String> PATH_ATTRIBUTES = Set.of("file", "destfile", "dir");
+  private static final Set<String> PATTERN_ATTRIBUTES = Set.of("includes", "excludes");
+
+  /**
+   * Why the template's check (onCheck) may look at the output, in outputDir; null if it can't. It can't if all it
+   * runs - its target, and the targets that target depends on, including those that extend an extension point it
+   * depends on (extensionOf), whatever file they're in - is tasks that only read and write files in the template
+   * folder (see BLIND_TASKS); anything else, or anything that can't be told for sure, is a reason it may
+   */
+  public String whyOnCheckMaySeeOutput(String outputDir) {
+    if (targetOnCheck == null) {
+      return null;
+    }
+    if (antProject == null) {
+      return "it has no script";
+    }
+    Path tmpl = Paths.get(templateDir).toAbsolutePath().normalize();
+    if (Paths.get(outputDir).toAbsolutePath().normalize().startsWith(tmpl)) {
+      return "the output is in the template folder";
+    }
+    List<Target> run;
+    try {
+      run = antProject.topoSort(targetOnCheck, antProject.getTargets(), false);
+    } catch (BuildException e) {
+      return "its targets can't be ordered (" + e.getMessage() + ")";
+    }
+    ComponentHelper components = ComponentHelper.getComponentHelper(antProject);
+    for (Target t : run) {
+      for (Task task : t.getTasks()) {
+        String tag = task instanceof UnknownElement ? ((UnknownElement) task).getTag() : task.getTaskName();
+        Class<?> cls = BLIND_TASKS.get(tag);
+        AntTypeDefinition def = cls == null ? null : components.getDefinition(tag);
+        // Ant's own definition: a macro or preset of the template's own is a subclass, and a taskdef may load the
+        // class from elsewhere
+        if (!(task instanceof UnknownElement) || def == null || def.getClass() != AntTypeDefinition.class
+            || def.getExposedClass(antProject) != cls) {
+          return "target '" + t.getName() + "' runs " + tag;
+        }
+        String why = whyElementMaySeeOutput((UnknownElement) task, tmpl);
+        if (why != null) {
+          return "target '" + t.getName() + "': " + why;
+        }
+      }
+    }
+    return null;
+  }
+
+  private String whyElementMaySeeOutput(UnknownElement e, Path tmpl) {
+    Set<String> allowed = BLIND_ELEMENTS.get(e.getTag());
+    if (allowed == null || !e.getNamespace().isEmpty()) {
+      return "<" + e.getQName() + ">";
+    }
+    for (Map.Entry<String, Object> a : e.getWrapper().getAttributeMap().entrySet()) {
+      String n = a.getKey().toLowerCase();
+      if (!allowed.contains(n)) {
+        return "<" + e.getTag() + " " + a.getKey() + ">";
+      }
+      String v = antProject.replaceProperties(String.valueOf(a.getValue()));
+      if (PATH_ATTRIBUTES.contains(n) || PATTERN_ATTRIBUTES.contains(n)) {
+        // a property that isn't set yet may be by the time it runs
+        boolean inside = !v.contains("${");
+        if (inside && PATH_ATTRIBUTES.contains(n)) {
+          inside = antProject.resolveFile(v).toPath().toAbsolutePath().normalize().startsWith(tmpl);
+        } else if (inside) {
+          for (String pt : v.split("[,\\s]+")) {
+            inside = inside && !pt.startsWith("/") && !pt.startsWith("\\") && !pt.contains(":") && !pt.contains("..");
+          }
+        }
+        if (!inside) {
+          return "<" + e.getTag() + " " + a.getKey() + "=\"" + v + "\">";
+        }
+      }
+    }
+    if (e.getChildren() != null) {
+      for (UnknownElement c : e.getChildren()) {
+        String why = whyElementMaySeeOutput(c, tmpl);
+        if (why != null) {
+          return why;
+        }
+      }
+    }
+    return null;
   }
     
   public JsonArray getPreProcess() {
