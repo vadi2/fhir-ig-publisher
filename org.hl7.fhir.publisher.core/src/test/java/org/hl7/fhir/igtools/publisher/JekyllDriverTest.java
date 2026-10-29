@@ -210,6 +210,93 @@ class JekyllDriverTest {
     sameAsBuild(src, out);
   }
 
+  @Test
+  void siteInANameOrAStringIsNotTheSite() throws Exception {
+    assumeTrue(jekyllInstalled(), "jekyll is not installed");
+    Path src = Files.createDirectories(dir.resolve("src"));
+    Path out = dir.resolve("out");
+    write(src, "_includes/frag.html", "<p>{{ include.type }} {{ include.id }} {{ include.site }}</p>\n");
+    write(src, "a.html", "---\ntitle: A\n---\n{% include frag.html type='CodeSystem' id='body-site-cs' site=\"site\" %}\n");
+    write(src, "b.html", "---\ntitle: B\nsite: x\n---\n{{-page.site-}} {% assign my-site = page.title %}{{ my-site }} {{ site.data.d.v }}\n");
+    write(src, "_data/d.json", "{\"v\": 1}\n");
+
+    driver = JekyllDriver.forCommand("jekyll");
+    assertTrue(driver.build(src.toString(), out.toString(), TIMEOUT, log::add).isOk());
+    write(src, "_includes/frag.html", "<p>{{ include.id }}</p>\n");
+    JekyllDriver.Result r = update(src, out, "_includes/frag.html");
+    assertFalse(r.isFull(), r.getReason());
+    assertEquals(Arrays.asList("a.html"), r.getWritten());
+    sameAsBuild(src, out);
+
+    // the site variable itself, even with the hyphens that control whitespace
+    write(src, "b.html", "---\ntitle: B\n---\n{{-site.time-}}\n");
+    r = update(src, out, "b.html");
+    assertTrue(r.isFull());
+    write(src, "b.html", "---\ntitle: B\n---\n{{ page.title }}\n");
+    r = update(src, out, "b.html");
+    assertTrue(r.isFull());
+    r = update(src, out, "b.html");
+    assertFalse(r.isFull(), r.getReason());
+  }
+
+  @Test
+  void aFullRenderOnlyWritesWhatChanged() throws Exception {
+    assumeTrue(jekyllInstalled(), "jekyll is not installed");
+    Path src = Files.createDirectories(dir.resolve("src"));
+    Path out = dir.resolve("out");
+    // b reads the other pages, so every update renders the whole site
+    write(src, "a.html", "---\ntitle: A\n---\n<h1>{{ page.title }}</h1>\n");
+    write(src, "b.html", "---\ntitle: B\n---\n{% for p in site.pages %}{{ p.title }} {% endfor %}\n");
+    write(src, "c.html", "---\ntitle: C\n---\n<h1>{{ page.title }}</h1>\n");
+    write(src, "style.css", "body { }\n");
+    write(src, "logo.txt", "logo\n");
+
+    driver = JekyllDriver.forCommand("jekyll");
+    JekyllDriver.Result r = driver.build(src.toString(), out.toString(), TIMEOUT, log::add);
+    assertTrue(r.isOk(), r.getError());
+    assertTrue(r.isAllWritten());
+
+    // a page whose title the other pages show: it and the page that lists the titles
+    write(src, "a.html", "---\ntitle: A2\n---\n<h1>{{ page.title }}</h1>\n");
+    r = update(src, out, "a.html");
+    assertTrue(r.isFull());
+    assertFalse(r.isAllWritten());
+    assertEquals(Arrays.asList("a.html", "b.html"), r.getWritten());
+    sameAsBuild(src, out);
+
+    // what changed an output file after Jekyll wrote it (the html checks) is left, unless Jekyll writes something new
+    // there; a static file is copied when its source has been written to, even with the same content
+    write(out, "c.html", "checked");
+    write(out, "a.html", "checked");
+    write(src, "a.html", "---\ntitle: A3\n---\n<h1>{{ page.title }}</h1>\n");
+    write(src, "style.css", "body { color: red; }\n");
+    write(src, "logo.txt", "logo\n");
+    r = update(src, out, "a.html", "style.css", "logo.txt");
+    assertTrue(r.isFull());
+    assertEquals(Arrays.asList("a.html", "b.html", "logo.txt", "style.css"), r.getWritten());
+    assertEquals("checked", new String(Files.readAllBytes(out.resolve("c.html")), StandardCharsets.UTF_8));
+    assertFalse(driver.isAsWritten(out.toString(), "c.html"));
+    assertTrue(driver.isAsWritten(out.toString(), "a.html"));
+    assertEquals(Arrays.asList("c.html"), driver.changedSinceWritten(src.toString(), out.toString()));
+    r = driver.rewrite(src.toString(), out.toString(), Arrays.asList("c.html"), TIMEOUT, log::add);
+    assertTrue(r.isOk(), r.getError());
+    sameAsBuild(src, out);
+
+    // a file that's gone from the output is written again
+    Files.delete(out.resolve("c.html"));
+    r = update(src, out, "a.html");
+    assertEquals(Arrays.asList("c.html"), r.getWritten());
+    sameAsBuild(src, out);
+
+    // nothing is left as it was after a command failed
+    write(src, "a.html", "---\ntitle: A\n---\n{% include no-such-include.html %}\n");
+    assertFalse(driver.update(src.toString(), out.toString(), Arrays.asList("a.html"), TIMEOUT, log::add).isOk());
+    write(src, "a.html", "---\ntitle: A3\n---\n<h1>{{ page.title }}</h1>\n");
+    r = update(src, out, "a.html");
+    assertTrue(r.isAllWritten());
+    sameAsBuild(src, out);
+  }
+
   private JekyllDriver.Result update(Path src, Path out, String... changed) throws IOException {
     JekyllDriver.Result r = driver.update(src.toString(), out.toString(), Arrays.asList(changed), TIMEOUT, log::add);
     assertTrue(r.isOk(), r.getError() + " " + log);
