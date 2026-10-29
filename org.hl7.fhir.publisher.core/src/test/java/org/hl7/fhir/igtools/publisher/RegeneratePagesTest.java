@@ -295,7 +295,7 @@ class RegeneratePagesTest {
         write(edit, "<ul><li>2</li></ul>");
         List<String> reason = new ArrayList<>();
         assertEquals(null, state.pagesFor(SourceSnapshot.take(roots, before).changesSince(before), reason), edit);
-        assertTrue(reason.get(0).endsWith("the template's script ant.xml reads (${dir.input}/includes)"), reason.get(0));
+        assertTrue(reason.get(0).endsWith("the template's script scripts/ant.xml reads (${dir.input}/includes)"), reason.get(0));
       }
       SourceSnapshot before = SourceSnapshot.take(roots, null);
       write("input/translations/ru/pagecontent/index.md", "# Главная страница");
