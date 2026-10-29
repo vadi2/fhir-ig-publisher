@@ -472,6 +472,41 @@ class PageRebuildTest {
     assertTrue(reason.get(0).endsWith("gone.md is not the translation of a page"), reason.get(0));
   }
 
+  /** another page that reads its translation from where the index page does */
+  private FetchedFile anotherIndex(String statedPath) throws IOException {
+    write(statedPath, "# Other");
+    FetchedFile f = new FetchedFile(statedPath, "pagecontent/index.md");
+    f.setPath(dir.resolve(statedPath).toFile().getCanonicalPath());
+    f.setRelativePath("other-index.md");
+    f.setProcessMode(FetchedFile.PROCESS_NONE);
+    pf.altMap.put("page/" + f.getPath(), f);
+    pf.fileList.add(f);
+    return f;
+  }
+
+  @Test
+  void notForATranslationOfMoreThanOnePage() throws IOException {
+    translated();
+    anotherIndex("pages/pagecontent/index.md");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная страница")), reason));
+    assertTrue(reason.get(0).endsWith("index.md is the translation of 2 pages"), reason.get(0));
+  }
+
+  @Test
+  void notForATranslationOfATemplatePage() throws IOException {
+    // the build doesn't translate the template's pages
+    translated();
+    pf.fileList.remove(page);
+    pf.altMap.remove("page/" + page.getPath());
+    anotherIndex(dir.resolve("template/pagecontent/index.md").toString());
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная страница")), reason));
+    assertTrue(reason.get(0).endsWith("index.md is not the translation of a page"), reason.get(0));
+  }
+
   @Test
   void notForATranslationThatTheBuildDoesntRead() throws IOException {
     // translations, but the template doesn't write the pages in each language

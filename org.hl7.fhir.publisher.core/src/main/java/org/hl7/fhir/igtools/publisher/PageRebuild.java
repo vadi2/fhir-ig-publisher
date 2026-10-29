@@ -19,6 +19,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -325,7 +326,7 @@ public class PageRebuild {
     for (Path p : changes.getModified()) {
       String path = new File(p.toString()).getCanonicalPath();
       if (isResourceTranslation(path)) {
-        reason.add(p + " is read as a translation of the resources" + (translatedPage(path) != null ? ", and of a page" : ""));
+        reason.add(p + " is read as a translation of the resources" + (!translatedPages(path).isEmpty() ? ", and of a page" : ""));
         return null;
       }
       FetchedFile f = pf.altMap.get("page/" + path);
@@ -338,7 +339,13 @@ public class PageRebuild {
         return null;
       }
       if (f == null) {
-        f = translatedPage(path);
+        List<FetchedFile> pages = translatedPages(path);
+        if (pages.size() > 1) {
+          reason.add(p + " is the translation of " + pages.size() + " pages");
+          return null;
+        }
+        // (the build doesn't translate the template's pages)
+        f = pages.isEmpty() || isTemplatePage(pages.get(0)) ? null : pages.get(0);
         if (f == null && inPageTranslations(path)) {
           reason.add(p + " is not the translation of a page");
           return null;
@@ -412,22 +419,28 @@ public class PageRebuild {
   }
 
   /**
-   * The page that the file is the translation of, if it is one: the build writes each page in each language from where
+   * The pages that the file is the translation of, if it is one: the build writes each page in each language from where
    * it is in the language's translation sources, if it is there (see PublisherGenerator.loadTranslationSource())
    */
-  private FetchedFile translatedPage(String path) throws IOException {
+  private List<FetchedFile> translatedPages(String path) throws IOException {
     String name = new File(path).getName();
+    Set<FetchedFile> res = new LinkedHashSet<>();
     for (String l : pageLanguages) {
       for (String ts : pf.translationSourcesFor(l)) {
         for (FetchedFile f : pf.fileList) {
           if (f.getLoadPath() != null && name.equals(new File(f.getLoadPath()).getName()) && isPage(f)
               && new File(Utilities.path(pf.rootDir, ts, f.getLoadPath())).getCanonicalPath().equals(path)) {
-            return f;
+            // (pages from outside the input folder are found by their name alone: more than one may have it)
+            res.add(f);
           }
         }
       }
     }
-    return null;
+    return new ArrayList<>(res);
+  }
+
+  private static boolean isTemplatePage(FetchedFile f) {
+    return f.getStatedPath() != null && f.getStatedPath().contains(File.separator + "template" + File.separator);
   }
 
   private boolean isPage(FetchedFile f) {
