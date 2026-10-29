@@ -27,6 +27,7 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
+import org.hl7.fhir.utilities.Utilities;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 
 /**
@@ -56,7 +57,7 @@ public class PageRebuild {
    * pages are checked against, or depend on, the resources, so a change to one is not a page-only change
    */
   private static final String[] CUSTOM_CONTENT_MARKERS = {"{% sql", "{% fragment", "{% json", "{% class-diagram", "{% uml",
-      "{% multi-map", "{% lang-fragment", "{% dataset", "{%!", "[[[", "validationRule"};
+      "{% multi-map", "{% dataset", "{%!", "[[[", "validationRule"};
 
   private static class Stamp {
     private final long size;
@@ -103,6 +104,10 @@ public class PageRebuild {
   private final List<Path> stashed = new ArrayList<>();
   private boolean captured;
   private boolean complete;
+  /** the languages that the pages are also written in, from their translations if they have one */
+  private List<String> pageLanguages = Collections.emptyList();
+  /** the folders in the input folder that the template reads before Jekyll, and how */
+  private Map<String, String> folderBlockers = Collections.emptyMap();
 
   /** The fields of the build that this keeps the state of */
   public void setPf(PublisherFields pf) {
@@ -111,6 +116,22 @@ public class PageRebuild {
 
   public PublisherFields getPf() {
     return pf;
+  }
+
+  /**
+   * The languages, other than the default one, that the build writes each page in (from the page's translation in the
+   * translation sources for the language, if there is one): an edit to a translation is then a change to the page
+   */
+  public void setPageLanguages(List<String> pageLanguages) {
+    this.pageLanguages = new ArrayList<>(pageLanguages);
+  }
+
+  /**
+   * The folders in the input folder that the template's scripts read before Jekyll (see
+   * Template.pageFolderBlockers()): a change to a file in one of them isn't a page-only change
+   */
+  public void setFolderBlockers(Map<String, String> folderBlockers) {
+    this.folderBlockers = new HashMap<>(folderBlockers);
   }
 
   /** Why the build's state can't be reused for a page-only rebuild, if it can't */
@@ -288,12 +309,28 @@ public class PageRebuild {
     List<FetchedFile> res = new ArrayList<>();
     for (Path p : changes.getModified()) {
       String path = new File(p.toString()).getCanonicalPath();
+      if (isResourceTranslation(path)) {
+        reason.add(p + " is read as a translation of the resources");
+        return null;
+      }
       FetchedFile f = pf.altMap.get("page/" + path);
       if (f == null) {
         f = pf.altMap.get("pre-page/" + path);
       }
+      if (f == null) {
+        f = translatedPage(path);
+        if (f == null && inPageTranslations(path)) {
+          reason.add(p + " is not the translation of a page");
+          return null;
+        }
+      }
       if (f == null || f.isFolder() || !pf.fileList.contains(f)) {
         reason.add(p + " is not a page");
+        return null;
+      }
+      String blocker = folderBlocker(path);
+      if (blocker != null) {
+        reason.add(p + " is in a folder that " + blocker);
         return null;
       }
       for (FetchedFile.Output o : f.getOutputs()) {
@@ -320,6 +357,69 @@ public class PageRebuild {
       }
     }
     return res;
+  }
+
+  /**
+   * Whether the file is directly in a translation source: the build reads those as translations of the resources (see
+   * PublisherIGLoader.findTranslations() and loadTranslationSupplements())
+   */
+  private boolean isResourceTranslation(String path) throws IOException {
+    String parent = new File(path).getParent();
+    for (String ts : pf.translationSources) {
+      if (new File(Utilities.path(pf.rootDir, ts)).getCanonicalPath().equals(parent)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether the file is in a translation source that the pages are translated from */
+  private boolean inPageTranslations(String path) throws IOException {
+    for (String l : pageLanguages) {
+      for (String ts : pf.translationSourcesFor(l)) {
+        if (isInFolder(path, Collections.singletonList(Utilities.path(pf.rootDir, ts)))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The page that the file is the translation of, if it is one: the build writes each page in each language from where
+   * it is in the language's translation sources, if it is there (see PublisherGenerator.loadTranslationSource())
+   */
+  private FetchedFile translatedPage(String path) throws IOException {
+    String name = new File(path).getName();
+    for (String l : pageLanguages) {
+      for (String ts : pf.translationSourcesFor(l)) {
+        for (FetchedFile f : pf.fileList) {
+          if (f.getLoadPath() != null && name.equals(new File(f.getLoadPath()).getName()) && isPage(f)
+              && new File(Utilities.path(pf.rootDir, ts, f.getLoadPath())).getCanonicalPath().equals(path)) {
+            return f;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  private boolean isPage(FetchedFile f) {
+    return pf.altMap.get("page/" + f.getPath()) == f || pf.altMap.get("pre-page/" + f.getPath()) == f;
+  }
+
+  /** How the template reads the folder in the input folder that the file is in, if it does */
+  private String folderBlocker(String path) throws IOException {
+    if (folderBlockers.isEmpty()) {
+      return null;
+    }
+    String input = new File(Utilities.path(pf.rootDir, "input")).getCanonicalPath() + File.separator;
+    if (!path.startsWith(input)) {
+      return null;
+    }
+    String rest = path.substring(input.length());
+    int i = rest.indexOf(File.separatorChar);
+    return i < 0 ? null : folderBlockers.get(rest.substring(0, i));
   }
 
   private static boolean isInFolder(String path, Collection<String> folders) throws IOException {
