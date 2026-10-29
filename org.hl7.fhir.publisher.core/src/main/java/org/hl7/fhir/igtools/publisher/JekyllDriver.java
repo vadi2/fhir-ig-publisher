@@ -95,9 +95,17 @@ public class JekyllDriver {
       return ok;
     }
 
-    /** Whether the whole site was built (so every output file is new) */
+    /** Whether the whole site was built (see isAllWritten() for whether every output file is new) */
     public boolean isFull() {
       return full;
+    }
+
+    /**
+     * Whether every output file is to be taken as new: the whole site was built, and Jekyll can't tell which files it
+     * wrote (otherwise getWritten() lists them, and the others are as they were)
+     */
+    public boolean isAllWritten() {
+      return full && written == null;
     }
 
     /** Why an update built the whole site, if it did */
@@ -109,7 +117,7 @@ public class JekyllDriver {
       return error;
     }
 
-    /** The output files written (relative to the output folder), when not the whole site */
+    /** The output files written (relative to the output folder), unless isAllWritten() */
     public List<String> getWritten() {
       return written == null ? Collections.emptyList() : written;
     }
@@ -215,7 +223,9 @@ public class JekyllDriver {
 
   /**
    * Brings the output up to date after the files changed (relative to source) changed: either by rendering what
-   * depends on them, or (as the result says) by building the whole site
+   * depends on them, or (as the result says) by building the whole site. When what Jekyll last wrote is known (see
+   * isAsWritten()), an output file that would get the same content again is left as it is, so it isn't among the
+   * files written, even when the whole site is built
    */
   public Result update(String source, String destination, Collection<String> changed, long timeout, Consumer<String> log) throws IOException {
     JsonObject cmd = new JsonObject();
@@ -225,7 +235,15 @@ public class JekyllDriver {
       a.add(s);
     }
     cmd.add("changed", a);
-    return stamped(destination, send(source, destination, JsonParser.compose(cmd, false), timeout, log));
+    // the stamps tell what has changed an output file since Jekyll wrote it, so it can be left as it is
+    boolean keep = stamps != null && isRunningFor(source, destination);
+    cmd.add("keep", keep);
+    Result r = send(source, destination, JsonParser.compose(cmd, false), timeout, log);
+    if (!keep && r.isOk() && r.isFull() && r.written != null) {
+      // Jekyll can only have left files as they were when asked to: take them all as new
+      r = r.withWritten(null);
+    }
+    return stamped(destination, r);
   }
 
   /** Writes these output files (relative to destination) again as the last build or update wrote them */
@@ -269,7 +287,7 @@ public class JekyllDriver {
   private Result stamped(String destination, Result r) throws IOException {
     if (!r.isOk()) {
       stamps = null;
-    } else if (r.isFull()) {
+    } else if (r.isAllWritten()) {
       stamps = stampTree(destination);
     } else if (stamps != null) {
       for (String f : r.getWritten()) {

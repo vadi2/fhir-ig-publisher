@@ -4289,7 +4289,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         log("Run jekyll: render the pages that depend on " + changed.size() + " changed " + (changed.size() == 1 ? "file" : "files")
             + " (Jekyll kept running, in folder " + pf.tempDir + ")");
         res = jekyllDriver.update(temp, out, changed, pf.jekyllTimeout, filter::line);
-        List<String> restored = restore && res.isOk() && !res.isFull() ? jekyllDriver.changedSinceWritten(temp, out) : null;
+        List<String> restored = restore && res.isOk() && !res.isAllWritten() ? jekyllDriver.changedSinceWritten(temp, out) : null;
         if (restored != null && !restored.isEmpty()) {
           stashChecked(replay.getHtmlRecords(), out, restored);
           JekyllDriver.Result again = jekyllDriver.rewrite(temp, out, restored, pf.jekyllTimeout, filter::line);
@@ -4327,9 +4327,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       return String.valueOf(res.getError());
     }
     if (update && res.isFull()) {
-      log("Jekyll: rendered the whole site again (" + res.getReason() + ")");
+      log("Jekyll: rendered the whole site again (" + res.getReason() + ")"
+          + (res.isAllWritten() ? "" : "; " + res.getWritten().size() + " output files changed"));
     }
-    if (!res.isFull()) {
+    if (!res.isAllWritten()) {
       jekyllWritten = new HashSet<>();
       for (String f : res.getWritten()) {
         jekyllWritten.add(Paths.get(out, f).toString());
