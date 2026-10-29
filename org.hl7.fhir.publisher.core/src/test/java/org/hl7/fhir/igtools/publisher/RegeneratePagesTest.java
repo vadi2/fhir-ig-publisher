@@ -164,6 +164,23 @@ class RegeneratePagesTest {
   }
 
   @Test
+  void thePagesThePageIsWrappedIn() throws Exception {
+    // the build wraps the page in a page in each language (see applyPageTemplate()), and notes them as the page's
+    for (String s : Arrays.asList("index.html", "en/index.html", "ru/index.html", "uz/index.html")) {
+      write("temp/" + s, "{% include template-page-md.html %}");
+      page.getOutputNames().add(temp(s));
+    }
+    write("input/pagecontent/index.md", "# Home, edited");
+    assertEquals(Arrays.asList(temp("_includes/en/index.md"), temp("_includes/uz/index.md"), temp("_includes/index.md")),
+        gen.regeneratePages(Collections.singletonList(page)));
+    assertEquals("{% include template-page-md.html %}", read("temp/ru/index.html"));
+    // anything else it was written to is not known
+    page.getOutputNames().add(temp("other.html"));
+    IOException e = assertThrows(IOException.class, () -> gen.regeneratePages(Collections.singletonList(page)));
+    assertTrue(e.getMessage().endsWith("was also written to [" + temp("other.html") + "]"), e.getMessage());
+  }
+
+  @Test
   void aPageThatIsntAnInclude() throws Exception {
     // written to the language's folder (as the pages of a path-pages folder are)
     page.setRelativePath("index.md");

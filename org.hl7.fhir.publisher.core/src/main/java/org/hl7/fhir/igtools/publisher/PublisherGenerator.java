@@ -505,6 +505,26 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   /**
+   * The pages that the build wraps the page in, if it is one that has a page template (see applyPageTemplate()): what
+   * they say doesn't depend on the page's content
+   */
+  private Set<String> wrapperPaths(FetchedFile f) throws IOException {
+    Set<String> res = new HashSet<>();
+    String rp = f.getRelativePath();
+    String inc = "_includes" + File.separator;
+    if (rp != null && rp.startsWith(inc) && (rp.endsWith(".md") || rp.endsWith(".xml"))) {
+      String p = rp.substring(inc.length(), rp.lastIndexOf('.')) + ".html";
+      res.add(Utilities.path(pf.tempDir, p));
+      if (isNewML()) {
+        for (String l : allLangs()) {
+          res.add(Utilities.path(pf.tempDir, l, p));
+        }
+      }
+    }
+    return res;
+  }
+
+  /**
    * Watch mode: copies the pages to the temp folder again after only their content (or that of their translations)
    * changed (see PageRebuild); returns the files whose content changed
    */
@@ -517,8 +537,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         f.setSource(FileUtilities.fileToBytes(src));
         f.setTime(src.lastModified());
         List<String> dsts = pageOutputPaths(f);
-        if (!new HashSet<>(dsts).equals(f.getOutputNames())) {
+        // what the build wrote for the page: these, and the pages it wraps the page in
+        Set<String> others = new HashSet<>(f.getOutputNames());
+        if (!others.containsAll(dsts)) {
           throw new IOException("The page " + f.getPath() + " was written to " + f.getOutputNames() + ", not " + dsts);
+        }
+        others.removeAll(dsts);
+        others.removeAll(wrapperPaths(f));
+        if (!others.isEmpty()) {
+          throw new IOException("The page " + f.getPath() + " was also written to " + others);
         }
         List<byte[]> before = new ArrayList<>();
         for (String dst : dsts) {

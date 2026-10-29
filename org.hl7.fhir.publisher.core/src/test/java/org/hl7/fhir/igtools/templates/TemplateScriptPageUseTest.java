@@ -88,6 +88,17 @@ class TemplateScriptPageUseTest {
       assertNotNull(Template.scriptPageUse("onGenerate.xml", src), src);
     }
     assertTrue(folders("<fileset dir=\"${dir.input}/.\"/>").isEmpty());
+    // through a property defined as a folder in the input folder
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"inc\" value=\"${dir.input}/includes\"/><fileset dir=\"${inc}/..\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"inc\" location=\"input/includes\"/><copy file=\"${inc}/../pagecontent/a.md\" todir=\"x\"/>"));
+    assertNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"inc\" value=\"${dir.input}/includes\"/><fileset dir=\"${inc}/menus\"/>"));
+  }
+
+  @Test
+  void theFolderEndsAtAQuoteOrABracket() {
+    // the base template's onLoad transform names the folders it adds to the IG
+    assertEquals(Set.of("images"), folders("<xsl:with-param name=\"value\" select=\"'input/images'\"/>"));
+    assertEquals(Set.of("data"), folders("<available file=\"${basedir}/input/data\" type=\"dir\"/>(input/data)"));
   }
 
   @Test
@@ -133,6 +144,16 @@ class TemplateScriptPageUseTest {
     Path p = dir.resolve(path);
     Files.createDirectories(p.getParent());
     Files.write(p, content.getBytes(StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void theScriptsInFoldersAndTheAntFileWhereverItIs() throws IOException {
+    write("template/config.json", "{\"script\": \"build/ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
+    write("template/build/ant.xml", "<project name=\"t\"><target name=\"onGenerate\"><import file=\"../scripts/more/x.xml\"/>"
+        + "<copy file=\"${dir.input}/includes/menu.xml\" todir=\"x\"/></target></project>");
+    write("template/scripts/more/x.xml", "<project name=\"x\"><copy file=\"${dir.input}/images/logo.png\" todir=\"x\"/></project>");
+    Template t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertEquals(Set.of("includes", "images"), t.pageFolderBlockers().keySet());
   }
 
   @Test

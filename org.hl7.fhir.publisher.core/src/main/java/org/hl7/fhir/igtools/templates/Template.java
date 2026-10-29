@@ -358,7 +358,7 @@ public class Template {
   // what ends a folder name in a path (not a wildcard, or a property that names a folder: those may stand for any folder)
   private static final String FOLDER_END = "(?![^/\"'\\s<>;,)&])";
   // a reference to the input folder, and the folder in it, if one is named: ${folder.input}, ${ig.root}/input...
-  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir)\\}/input(?![\\w.-]))(/([^/\"*&;\\s<>$?\\[{]+)" + FOLDER_END + ")?";
+  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir)\\}/input(?![\\w.-]))(/([^/\"'*&;,()\\s<>$?\\[{]+)" + FOLDER_END + ")?";
   private static final java.util.regex.Pattern PROPERTY = java.util.regex.Pattern.compile(
       "<property\\s[^>]*?name=\"([^\"]+)\"[^>]*>");
   // a file set or the like that starts from the IG's root folder
@@ -366,7 +366,7 @@ public class Template {
       "<([\\w.:-]+)\\s[^>]*?(?<=\\s)dir=\"\\$\\{(?:ig\\.root|basedir)\\}/?\"[^>]*>");
   // a folder in the input folder named by its path from the IG's folder (input/pagecontent)
   private static final java.util.regex.Pattern INPUT_PATH = java.util.regex.Pattern.compile(
-      "(?<![\\w.-])input/([^/\"*&;\\s<>$?\\[{]+)" + FOLDER_END);
+      "(?<![\\w.-])input/([^/\"'*&;,()\\s<>$?\\[{]+)" + FOLDER_END);
   // the input folder by its path from the IG's folder, followed by something that isn't a folder name ("input",
   // input/** or input/${x})
   private static final java.util.regex.Pattern INPUT_WHOLE = java.util.regex.Pattern.compile(
@@ -438,14 +438,23 @@ public class Template {
 
   /** The template's scripts (not the jars in the scripts folder) by name, or null if they can't be read */
   private Map<String, String> scripts() throws IOException {
-    File[] files = new File(Utilities.path(templateDir, "scripts")).listFiles();
-    if (files == null) {
+    java.nio.file.Path dir = new File(Utilities.path(templateDir, "scripts")).toPath();
+    if (!java.nio.file.Files.isDirectory(dir)) {
       return null;
     }
     Map<String, String> res = new java.util.TreeMap<>();
-    for (File f : files) {
-      if (f.isFile() && !f.getName().endsWith(".jar")) {
-        res.put(f.getName(), FileUtilities.fileToString(f));
+    try (java.util.stream.Stream<java.nio.file.Path> files = java.nio.file.Files.walk(dir)) {
+      for (java.nio.file.Path f : (Iterable<java.nio.file.Path>) files::iterator) {
+        if (java.nio.file.Files.isRegularFile(f) && !f.getFileName().toString().endsWith(".jar")) {
+          res.put(dir.relativize(f).toString().replace(File.separatorChar, '/'), FileUtilities.fileToString(f.toFile()));
+        }
+      }
+    }
+    // the ant file that the template runs, wherever it is
+    if (script != null) {
+      File f = new File(Utilities.path(templateDir, script));
+      if (!f.getCanonicalFile().toPath().startsWith(dir.toFile().getCanonicalFile().toPath())) {
+        res.put(script, FileUtilities.fileToString(f));
       }
     }
     return res;
@@ -491,6 +500,18 @@ public class Template {
       }
       if (m.group(3) == null && !inPropertyDefinition(src, m.start())) {
         return "the template's script " + name + " reads " + m.group();
+      }
+    }
+    // a property defined as a folder in the input folder, and a path through it that goes up out of the folder
+    java.util.regex.Matcher d = PROPERTY.matcher(src);
+    while (d.find()) {
+      if (inputRef.matcher(d.group()).find() || INPUT_PATH.matcher(d.group()).find()) {
+        java.util.regex.Matcher u = java.util.regex.Pattern.compile("\\$\\{" + java.util.regex.Pattern.quote(d.group(1)) + "\\}").matcher(src);
+        while (u.find()) {
+          if (dotsAfter(src, u.end())) {
+            return "the template's script " + name + " reads " + u.group() + " (" + d.group() + ") and goes out of the folder";
+          }
+        }
       }
     }
     java.util.regex.Matcher w = INPUT_WHOLE.matcher(src);
