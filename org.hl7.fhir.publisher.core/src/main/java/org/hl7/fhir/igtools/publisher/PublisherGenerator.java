@@ -478,7 +478,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         // only watch mode needs it: the build goes on
         pageRebuild.notReusable("it couldn't be told if a page rebuild can follow this build (" + e + ")");
         log("Couldn't tell if a page rebuild can follow this build: " + e);
-        if (settings.isDebug()) {
+        if (settings.isDebug() || !(e instanceof IOException)) {
           e.printStackTrace();
         }
       }
