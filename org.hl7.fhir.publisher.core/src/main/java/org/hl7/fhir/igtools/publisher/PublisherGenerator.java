@@ -474,7 +474,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (pageRebuild != null) {
       try {
         checkPageRebuild();
-      } catch (Exception e) {
+      } catch (Exception | StackOverflowError e) {
+        // (a template script that the patterns can't take is one that can't be told about)
         // only watch mode needs it: the build goes on
         pageRebuild.notReusable("it couldn't be told if a page rebuild can follow this build (" + e + ")");
         log("Couldn't tell if a page rebuild can follow this build: " + e);
@@ -1111,7 +1112,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         log("Exception generating page "+dst+" for "+o.getRelativePath()+" in "+ this.pf.tempDir +": "+e.getMessage());
         if (regeneratingPages) {
           // a page rebuild can't leave the page as it was: it falls back to a build
-          throw new IOException("The page " + f.getPath() + " could not be written to " + dst + ": " + e.getMessage(), e);
+          // (in another language, dst is where its translation goes: that may be what couldn't be read)
+          throw new IOException("The page " + f.getPath() + " could not be made into " + dst + ": " + e.getMessage(), e);
         }
       }
     } else if (o.getProcessMode() == FetchedFile.PROCESS_XSLT) {
@@ -1134,7 +1136,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       } catch (Exception e) {
         log("Exception generating xslt page "+dst+" for "+o.getRelativePath()+" in "+ this.pf.tempDir +": "+e.getMessage());
         if (regeneratingPages) {
-          throw new IOException("The page " + f.getPath() + " could not be written to " + dst + ": " + e.getMessage(), e);
+          throw new IOException("The page " + f.getPath() + " could not be made into " + dst + ": " + e.getMessage(), e);
         }
       }
     }
