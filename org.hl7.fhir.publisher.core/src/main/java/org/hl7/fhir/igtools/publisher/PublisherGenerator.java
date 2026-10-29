@@ -4434,9 +4434,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   /**
    * Watch mode: runs Jekyll in the Jekyll that stays running between builds (see JekyllDriver). In a page rebuild, if
    * it's still running for this site and the html checks after it can tell which files the last check changed, it
-   * renders just what depends on the pages written again (and, if the template has a check script, which may look at
-   * the output, writes again the files changed since Jekyll wrote them, keeping their html-checked versions aside: see
-   * stashChecked()). Returns null if it did; else Jekyll is to be run as usual, and the result is "" if the driver
+   * renders just what depends on the pages written again (and, if the template has a check script that may look at
+   * the output - see Template.whyOnCheckMaySeeOutput() - writes again the files changed since Jekyll wrote them,
+   * keeping their html-checked versions aside: see stashChecked()). Returns null if it did; else Jekyll is to be run
+   * as usual, and the result is "" if the driver
    * can't be used, or how it failed
    */
   private String runJekyllDriver(PageRebuild replay) {
@@ -4446,7 +4447,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     boolean update = replay != null && changedTempFiles != null && jekyllDriver.isRunningFor(temp, out)
         && (settings.isGenerationOff() || replay.getHtmlRecords() != null);
     // the template's check script runs next, and may look at the output: it must see what `jekyll build` would leave
-    boolean restore = update && pf.template != null && pf.template.hasOnCheck();
+    String seesOutput = update && pf.template != null ? pf.template.whyOnCheckMaySeeOutput(out) : null;
+    boolean restore = seesOutput != null;
     MyFilterHandler filter = new MyFilterHandler();
     JekyllDriver.Result res;
     try {
@@ -4468,7 +4470,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
             // not the site's: Jekyll leaves them as they are
             unstash(out, again.getUnknown());
             if (!again.getWritten().isEmpty()) {
-              log("Jekyll: wrote " + again.getWritten().size() + " output files again that had changed since it wrote them, for the template's check");
+              log("Jekyll: wrote " + again.getWritten().size() + " output files again that had changed since it wrote them, for the template's check (it may look at the output: " + seesOutput + ")");
               List<String> all = new ArrayList<>(res.getWritten());
               all.addAll(again.getWritten());
               res = res.withWritten(all);
