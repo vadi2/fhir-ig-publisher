@@ -9,7 +9,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 
+import org.apache.tools.ant.BuildEvent;
+import org.apache.tools.ant.BuildListener;
+import org.apache.tools.ant.PropertyHelper;
+import org.apache.tools.ant.Target;
+import org.apache.tools.ant.Task;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -116,5 +122,98 @@ class TemplateOnCheckOutputTest {
   @Test
   void aCheckThatCantBeOrdered() throws IOException {
     assertNotNull(why("<target name=\"onCheck\" depends=\"missing\"/>"));
+  }
+
+  @Test
+  void aNestedElementOfAnotherType() throws IOException {
+    String why = why("<target name=\"onCheck\"><concat destfile=\"${ig.template}/x.json\"><fileset ant-type=\"fileset\" dir=\"${ig.template}\"/></concat></target>");
+    assertTrue(why != null && why.contains("ant-type"), why);
+  }
+
+  @Test
+  void aPropertyThatIsEvaluated() throws IOException {
+    // ${toString:id} lists what a fileset finds, when it's expanded
+    String out = "<fileset id=\"out\" dir=\"${ig.root}/output\"/>";
+    assertNotNull(why(out + "<target name=\"onCheck\"><echo file=\"${ig.template}/x.txt\" message=\"${toString:out}\"/></target>"));
+    assertNotNull(why(out + "<target name=\"onCheck\"><echo file=\"${ig.template}/x.txt\">${toString:out}</echo></target>"));
+    assertNotNull(why(out + "<target name=\"onCheck\"><replaceregexp file=\"${ig.template}/x.txt\" match=\"a\" replace=\"${ant.refid:out}\"/></target>"));
+    assertNull(why(out + "<target name=\"onCheck\"><echo file=\"${ig.template}/x.txt\">${ig.root}: done</echo></target>"));
+  }
+
+  @Test
+  void aLinkInTheTemplateFolder() throws IOException {
+    Files.createDirectories(dir.resolve("output"));
+    write("output/index.html", "x");
+    assertNull(why(BASE_ON_CHECK));
+    Path link = dir.resolve("template/o");
+    try {
+      Files.createSymbolicLink(link, Paths.get("../output"));
+    } catch (UnsupportedOperationException | IOException e) {
+      return; // no links here
+    }
+    String why = why(BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("link"), why);
+    Files.delete(link);
+    assertNull(why(BASE_ON_CHECK));
+    if (dir.getFileSystem().supportedFileAttributeViews().contains("unix")) {
+      Files.createLink(dir.resolve("template/a.oncheck-validation.json"), dir.resolve("output/index.html"));
+      why = why(BASE_ON_CHECK);
+      assertTrue(why != null && why.contains("another name"), why);
+    }
+  }
+
+  @Test
+  void whatTheScriptLeftInItsProject() throws IOException {
+    String def = "<taskdef name=\"hook\" classname=\"" + Hook.class.getName() + "\"/><typedef name=\"evaluator\" classname=\"" + Evaluator.class.getName() + "\"/>";
+    // a listener that runs with the check
+    String why = why(def + "<hook what=\"listener\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("listeners"), why);
+    // a way to expand properties
+    why = why(def + "<propertyhelper><evaluator/></propertyhelper>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("properties"), why);
+    // a target that does something else than its tasks
+    why = why(def + "<hook what=\"target\"/>" + BASE_ON_CHECK);
+    assertTrue(why != null && why.contains("Sneaky"), why);
+    // the definitions alone
+    assertNull(why(def + BASE_ON_CHECK));
+  }
+
+  /** What a template's own code can do to the script's project before the check runs */
+  public static class Hook extends Task {
+    private String what;
+
+    public void setWhat(String what) {
+      this.what = what;
+    }
+
+    @Override
+    public void execute() {
+      if ("listener".equals(what)) {
+        getProject().addBuildListener(new BuildListener() {
+          public void buildStarted(BuildEvent event) { }
+          public void buildFinished(BuildEvent event) { }
+          public void targetStarted(BuildEvent event) { }
+          public void targetFinished(BuildEvent event) { }
+          public void taskStarted(BuildEvent event) { }
+          public void taskFinished(BuildEvent event) { }
+          public void messageLogged(BuildEvent event) { }
+        });
+      } else {
+        Target t = new Sneaky();
+        t.setName("onCheck.extend");
+        t.setProject(getProject());
+        getProject().addOrReplaceTarget(t);
+      }
+    }
+  }
+
+  public static class Sneaky extends Target {
+  }
+
+  public static class Evaluator implements PropertyHelper.PropertyEvaluator {
+    @Override
+    public Object evaluate(String property, PropertyHelper propertyHelper) {
+      return null;
+    }
   }
 }

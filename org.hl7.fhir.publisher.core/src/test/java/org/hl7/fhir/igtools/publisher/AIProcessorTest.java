@@ -89,26 +89,78 @@ class AIProcessorTest {
     assertSameAsFullRun(out);
   }
 
+  @Test
+  void anOldTemplateToo() throws IOException {
+    // the pages are in the output folder itself, and the zip is written as ai-prep.zip and then renamed
+    Path out = dir.resolve("old");
+    site(out);
+    try (Stream<Path> s = Files.list(out.resolve("en"))) {
+      for (Path p : (Iterable<Path>) s::iterator) {
+        Files.move(p, out.resolve(p.getFileName()));
+      }
+    }
+    Files.delete(out.resolve("en"));
+    AIProcessor.Cache cache = new AIProcessor.Cache();
+    run(out, cache, null, true);
+    assertSameAsFullRun(out, true);
+    assertTrue(cache.getWritten().containsAll(set(out, "page1.md", "ai.zip", "llms.txt")), cache.getWritten().toString());
+
+    run(out, cache, new HashSet<>(), true);
+    assertEquals(Collections.emptySet(), cache.getWritten());
+    assertSameAsFullRun(out, true);
+
+    write(out, "page1.html", page("Page One", "changed text"));
+    run(out, cache, set(out, "page1.html"), true);
+    assertEquals(set(out, "page1.md", "ai.zip"), cache.getWritten());
+    assertSameAsFullRun(out, true);
+
+    write(out, "page1.html", page("Page Uno", "changed text"));
+    run(out, cache, set(out, "page1.html"), true);
+    assertEquals(set(out, "page1.md", "ai.zip", "llms.txt"), cache.getWritten());
+    assertSameAsFullRun(out, true);
+
+    write(out, "ai.zip", "not a zip");
+    run(out, cache, new HashSet<>(), true);
+    assertEquals(set(out, "ai.zip"), cache.getWritten());
+    assertSameAsFullRun(out, true);
+  }
+
   // --- helpers -------------------------------------------------------------------------------------------------
 
   private void run(Path out, AIProcessor.Cache cache, Set<String> fresh) throws IOException {
+    run(out, cache, fresh, false);
+  }
+
+  private void run(Path out, AIProcessor.Cache cache, Set<String> fresh, boolean old) throws IOException {
     cache.prepare(fresh, files -> {
       throw new IOException("nothing should need to be written again by Jekyll: " + files);
     });
-    new AIProcessor(out.toString(), cache).processNewTemplates(List.of("en"));
+    process(new AIProcessor(out.toString(), cache), old);
+  }
+
+  private static void process(AIProcessor ai, boolean old) throws IOException {
+    if (old) {
+      ai.processOldTemplates();
+    } else {
+      ai.processNewTemplates(List.of("en"));
+    }
   }
 
   /** The output is what a run without a cache makes of the same pages */
   private void assertSameAsFullRun(Path out) throws IOException {
+    assertSameAsFullRun(out, false);
+  }
+
+  private void assertSameAsFullRun(Path out, boolean old) throws IOException {
     Path ref = dir.resolve("ref");
     if (Files.exists(ref)) {
       delete(ref);
     }
     copyPages(out, ref);
-    new AIProcessor(ref.toString()).processNewTemplates(List.of("en"));
+    process(new AIProcessor(ref.toString()), old);
     assertEquals(contents(ref), contents(out));
     for (String f : contents(out).keySet()) {
-      assertFalse(f.contains(".ai."), f);
+      assertFalse(f.contains(".ai.") || f.contains("ai-prep"), f);
     }
   }
 
@@ -177,9 +229,12 @@ class AIProcessorTest {
   /** What identifies each file's write: its size, time and inode */
   private static Map<String, String> stamps(Path root) throws IOException {
     Map<String, String> res = new TreeMap<>();
+    // a file written again gets a new inode change time (where there's none, the modification time is what tells)
+    boolean unix = root.getFileSystem().supportedFileAttributeViews().contains("unix");
     try (Stream<Path> s = Files.walk(root)) {
       for (Path p : (Iterable<Path>) s.filter(Files::isRegularFile)::iterator) {
-        res.put(root.relativize(p).toString(), Files.size(p) + ":" + Files.getAttribute(p, "unix:ino") + ":" + Files.getAttribute(p, "unix:ctime"));
+        res.put(root.relativize(p).toString(), Files.size(p) + ":" + (unix ? Files.getAttribute(p, "unix:ino") + ":" + Files.getAttribute(p, "unix:ctime")
+            : Files.getLastModifiedTime(p).toString()));
       }
     }
     return res;
