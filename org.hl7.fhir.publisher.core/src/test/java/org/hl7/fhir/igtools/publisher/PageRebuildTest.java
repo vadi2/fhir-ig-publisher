@@ -543,6 +543,16 @@ class PageRebuildTest {
   }
 
   @Test
+  void notForAFileInTheInputFolderThatTheTemplateReads() throws IOException {
+    prePage("toc.md", "# Contents");
+    state.setFolderBlockers(Collections.singletonMap("toc.md", "the template's script ant.xml reads (${dir.input}/toc.md)"));
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/toc.md", "# Contents 2")), reason));
+    assertTrue(reason.get(0).endsWith("the template's script ant.xml reads (${dir.input}/toc.md)"), reason.get(0));
+  }
+
+  @Test
   void notForAPageThatIsAlsoATranslation() throws IOException {
     // a page in a translation source: the build writes the page from it, and the translation of the page with that name
     translated();

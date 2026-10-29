@@ -382,17 +382,27 @@ public class Template {
     return folder.equals(".") || folder.equals("..");
   }
 
+  /** Whether the rest of the path from i in src goes through . or .. (input/includes/../images) */
+  private static boolean dotsAfter(String src, int i) {
+    int end = i;
+    while (end < src.length() && "\"'<> \t\r\n;,".indexOf(src.charAt(end)) < 0) {
+      end++;
+    }
+    String rest = src.substring(i, end) + "/";
+    return rest.contains("/./") || rest.contains("/../");
+  }
+
   /**
    * Why a watch mode rebuild can't skip running this template's scripts again after only the content of some pages
    * changed (see PageRebuild), or null if it can: it can if the template runs nothing just before Jekyll, and its
-   * onGenerate scripts don't read the whole input folder. (The folders in it that they read are in
+   * onLoad and onGenerate scripts don't read the whole input folder. (The folders in it that they read are in
    * pageFolderBlockers(). The check script runs again after Jekyll: see PageRebuild.checkOnCheckMessages())
    */
   public String pageOnlyRebuildBlocker() throws IOException {
     if (targetOnJekyll != null) {
       return "the template runs a script before Jekyll";
     }
-    if (targetOnGenerate == null) {
+    if (targetOnGenerate == null && targetOnLoad == null) {
       return null;
     }
     Map<String, String> scripts = scripts();
@@ -409,13 +419,13 @@ public class Template {
   }
 
   /**
-   * The folders in the input folder that the template's onGenerate scripts read (by name, e.g. "includes"), each with
+   * The folders in the input folder that the template's onLoad and onGenerate scripts read (by name, e.g. "includes"), each with
    * how ("the template's script ant.xml reads (${dir.input}/includes)"): a page-only rebuild can't take a change to a
    * file in one of them, because the scripts aren't run again
    */
   public Map<String, String> pageFolderBlockers() throws IOException {
     Map<String, String> res = new HashMap<>();
-    Map<String, String> scripts = targetOnGenerate == null || targetOnJekyll != null ? null : scripts();
+    Map<String, String> scripts = (targetOnGenerate == null && targetOnLoad == null) || targetOnJekyll != null ? null : scripts();
     if (scripts != null) {
       for (Map.Entry<String, String> e : scripts.entrySet()) {
         for (Map.Entry<String, String> u : scriptFolderUse(e.getKey(), e.getValue()).entrySet()) {
@@ -476,7 +486,7 @@ public class Template {
     java.util.regex.Pattern inputRef = inputRef(src);
     java.util.regex.Matcher m = inputRef.matcher(src);
     while (m.find()) {
-      if (m.group(3) != null && isDots(m.group(3))) {
+      if (m.group(3) != null && (isDots(m.group(3)) || dotsAfter(src, m.end()))) {
         return "the template's script " + name + " reads " + m.group();
       }
       if (m.group(3) == null && !inPropertyDefinition(src, m.start())) {
@@ -488,7 +498,7 @@ public class Template {
       java.util.regex.Matcher p = INPUT_PATH.matcher(src).region(w.start(), src.length());
       boolean named = w.group().endsWith("/") && p.lookingAt();
       // input/.. is the IG's folder, even as a property
-      boolean dots = named && isDots(p.group(1));
+      boolean dots = named && (isDots(p.group(1)) || dotsAfter(src, p.end()));
       if (dots || (!named && !inPropertyDefinition(src, w.start()))) {
         int end = w.end();
         while (end < src.length() && "\"'<> \t\r\n".indexOf(src.charAt(end)) < 0) {

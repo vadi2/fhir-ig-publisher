@@ -431,11 +431,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
   /**
    * Whether watch mode sees changes in the folder (see Publisher.execute()), or it has only what the build puts there
-   * (the template, and the pages that page factories make)
+   * (the template's folder, which the build makes from the template)
    */
   private boolean isWatched(String folder) throws IOException {
     java.nio.file.Path p = new File(folder).getCanonicalFile().toPath();
-    for (String w : new String[] {"input", "fsh", "fsh-generated", "template", "temp"}) {
+    for (String w : new String[] {"input", "fsh", "fsh-generated", "template"}) {
       if (p.startsWith(new File(Utilities.path(pf.rootDir, w)).getCanonicalFile().toPath())) {
         return true;
       }
@@ -465,7 +465,16 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         pageRebuild.notReusable("the translations in " + ts + " are outside the folders that are watched");
       }
     }
+    if (!pf.pageFactories.isEmpty()) {
+      // they are made again only in a build, from files that may be anywhere
+      pageRebuild.notReusable("the IG has page factories");
+    }
     for (String d : pf.pagesDirs) {
+      if (!isWatched(d)) {
+        pageRebuild.notReusable("the pages in " + d + " are outside the folders that are watched");
+      }
+    }
+    for (String d : pf.prePagesDirs) {
       if (!isWatched(d)) {
         pageRebuild.notReusable("the pages in " + d + " are outside the folders that are watched");
       }
@@ -970,6 +979,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
       } catch (Exception e) {
         log("Exception generating xslt page "+dst+" for "+o.getRelativePath()+" in "+ this.pf.tempDir +": "+e.getMessage());
+        if (regeneratingPages) {
+          throw new IOException("The page " + f.getPath() + " could not be written to " + dst + ": " + e.getMessage(), e);
+        }
       }
     }
   }

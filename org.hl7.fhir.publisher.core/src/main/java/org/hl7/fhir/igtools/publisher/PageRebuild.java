@@ -431,7 +431,8 @@ public class PageRebuild {
     String root = new File(pf.rootDir).getCanonicalPath() + File.separator;
     String rest = path.startsWith(root) ? path.substring(root.length()) : path;
     String[] parts = rest.split(java.util.regex.Pattern.quote(File.separator));
-    for (int i = 0; i < parts.length - 1; i++) {
+    // the folders the file is in, and the file itself (a script can name a file in the input folder)
+    for (int i = 0; i < parts.length; i++) {
       String blocker = folderBlockers.get(parts[i]);
       if (blocker != null) {
         return blocker;

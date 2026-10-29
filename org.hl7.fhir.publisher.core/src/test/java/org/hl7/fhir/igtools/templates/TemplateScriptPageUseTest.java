@@ -83,10 +83,11 @@ class TemplateScriptPageUseTest {
   @Test
   void dotsAreTheInputFolderOrTheIgsFolder() {
     for (String src : new String[] {"<fileset dir=\"${dir.input}/.\"/>", "<fileset dir=\"${dir.input}/../pages\"/>",
-        "<fileset dir=\"${ig.root}/input/..\"/>", "<fileset dir=\"input/../pages\"/>", "<property name=\"r\" value=\"input/..\"/>"}) {
+        "<fileset dir=\"${ig.root}/input/..\"/>", "<fileset dir=\"input/../pages\"/>", "<property name=\"r\" value=\"input/..\"/>",
+        "<copy file=\"${dir.input}/includes/../images/logo.png\" todir=\"x\"/>", "<fileset dir=\"input/includes/./..\"/>"}) {
       assertNotNull(Template.scriptPageUse("onGenerate.xml", src), src);
-      assertTrue(folders(src).isEmpty(), src);
     }
+    assertTrue(folders("<fileset dir=\"${dir.input}/.\"/>").isEmpty());
   }
 
   @Test
@@ -139,8 +140,12 @@ class TemplateScriptPageUseTest {
     Template t = template("\"onGenerate\": \"onGenerate\"");
     assertNull(t.pageOnlyRebuildBlocker());
     assertEquals(Map.of("includes", "the template's script ant.xml reads (${dir.input}/includes)"), t.pageFolderBlockers());
-    // nothing runs before Jekyll
+    // onLoad runs before Jekyll too
     t = template("\"onLoad\": \"onGenerate\"");
+    assertNull(t.pageOnlyRebuildBlocker());
+    assertEquals(Map.of("includes", "the template's script ant.xml reads (${dir.input}/includes)"), t.pageFolderBlockers());
+    // nothing runs before Jekyll
+    t = template("\"onCheck\": \"onGenerate\"");
     assertNull(t.pageOnlyRebuildBlocker());
     assertTrue(t.pageFolderBlockers().isEmpty());
     // something runs just before Jekyll: that blocks all

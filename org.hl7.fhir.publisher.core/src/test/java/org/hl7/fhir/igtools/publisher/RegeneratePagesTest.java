@@ -310,6 +310,15 @@ class RegeneratePagesTest {
     pf.pagesDirs.add(dir.resolve("pages").toString());
     pf.changeList.clear();
     assertEquals("the pages in " + dir.resolve("pages") + " are outside the folders that are watched", checked().getNotReusable());
+    pf.pagesDirs.remove(dir.resolve("pages").toString());
+    pf.prePagesDirs.add(dir.resolve("temp/pre").toString());
+    pf.changeList.clear();
+    assertEquals("the pages in " + dir.resolve("temp/pre") + " are outside the folders that are watched", checked().getNotReusable());
+    pf.prePagesDirs.clear();
+    write("input/factory.json", "{}");
+    pf.pageFactories.add(new PageFactory(dir.resolve("input/factory.json").toString(), dir.resolve("temp/factory-pages/factory0").toString()));
+    pf.changeList.clear();
+    assertEquals("the IG has page factories", checked().getNotReusable());
   }
 
   @Test
