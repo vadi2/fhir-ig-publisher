@@ -19,6 +19,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
@@ -132,6 +134,10 @@ public class AIProcessor {
    * redo the files that changed
    */
   private void writeText(String content, String path) throws IOException {
+    if (deferred != null) {
+      deferred.put(path, content);
+      return;
+    }
     if (cache != null) {
       File f = new File(path);
       byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
@@ -141,6 +147,18 @@ public class AIProcessor {
     }
     FileUtilities.stringToFile(content, path);
     written(path);
+  }
+
+  // watch mode, old templates: the files to write at the end (an old template's resource page is taken for a page
+  // too, so its .md is written twice, and only the second is what's left)
+  private Map<String, String> deferred;
+
+  private void writeDeferred() throws IOException {
+    Map<String, String> files = deferred;
+    deferred = null;
+    for (Map.Entry<String, String> e : files.entrySet()) {
+      writeText(e.getValue(), e.getKey());
+    }
   }
 
   /**
@@ -185,17 +203,19 @@ public class AIProcessor {
         z.addFileSource((String) e[0], (String) e[1], (Boolean) e[2]);
       }
       z.close();
-      boolean renamed = rename();
+      rename();
       written(target);
-      String stamp = renamed ? stamp(target) : null;
+      String stamp = stamp(target);
       if (stamp != null) {
         cache.zips.put(target, new String[] {digest, stamp});
       }
     }
 
-    /** Whether the zip is at target now */
-    private boolean rename() {
-      return path.equals(target) || new File(path).renameTo(new File(target));
+    /** Moves the zip to target (replacing what is there: File.renameTo doesn't on Windows) */
+    private void rename() throws IOException {
+      if (!path.equals(target)) {
+        Files.move(Paths.get(path), Paths.get(target), StandardCopyOption.REPLACE_EXISTING);
+      }
     }
 
     private String digest() throws IOException {
@@ -359,6 +379,7 @@ public class AIProcessor {
   }
 
   public void processFolderOld(File dir, NpmPackage npm) throws IOException {
+    deferred = cache == null ? null : new LinkedHashMap<>();
     List<LoadedResource> resources = new ArrayList<>();
     List<Page> pages = new ArrayList<>();
 
@@ -399,6 +420,9 @@ public class AIProcessor {
     zip.addFileSource("llms.md", llms.toString(), false);
     zip.close();
     writeText(llms.toString(), Utilities.path(dir, "llms.txt"));
+    if (deferred != null) {
+      writeDeferred();
+    }
     newSize += llms.toString().length();
     String pct = oldSize == 0 ? "n/a" : "" + (100 - ((newSize * 100) / oldSize));
     System.out.println("Processed " + dir.getAbsolutePath() + " - % reduction = " + pct + " (" + oldSize + " ==> " + newSize + ")");
