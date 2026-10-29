@@ -543,25 +543,6 @@ class PageRebuildTest {
   }
 
   @Test
-  void notForATranslationOutsideTheInputFolderWhenTheTemplateRunsScripts() throws IOException {
-    translated();
-    pf.translationSources.set(0, "translations/ru");
-    write("translations/ru/pagecontent/index.md", "# Главная");
-    state.setScriptsReadTheIg(true);
-    built();
-    List<Path> roots = Arrays.asList(dir.resolve("input"), dir.resolve("translations"));
-    SourceSnapshot before = SourceSnapshot.take(roots, null);
-    write("translations/ru/pagecontent/index.md", "# Главная страница");
-    List<String> reason = new ArrayList<>();
-    SourceSnapshot.Changes changes = SourceSnapshot.take(roots, before).changesSince(before);
-    assertNull(state.pagesFor(changes, reason));
-    assertTrue(reason.get(0).endsWith("is a translation outside the input folder, which the template's scripts may read"), reason.get(0));
-    // without scripts, it is a change to the page
-    state.setScriptsReadTheIg(false);
-    assertEquals(Collections.singletonList(page), state.pagesFor(changes, reason));
-  }
-
-  @Test
   void notForAPageThatIsAlsoATranslation() throws IOException {
     // a page in a translation source: the build writes the page from it, and the translation of the page with that name
     translated();

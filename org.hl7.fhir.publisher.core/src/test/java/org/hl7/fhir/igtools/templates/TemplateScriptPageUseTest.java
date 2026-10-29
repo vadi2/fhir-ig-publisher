@@ -81,6 +81,15 @@ class TemplateScriptPageUseTest {
   }
 
   @Test
+  void dotsAreTheInputFolderOrTheIgsFolder() {
+    for (String src : new String[] {"<fileset dir=\"${dir.input}/.\"/>", "<fileset dir=\"${dir.input}/../pages\"/>",
+        "<fileset dir=\"${ig.root}/input/..\"/>", "<fileset dir=\"input/../pages\"/>", "<property name=\"r\" value=\"input/..\"/>"}) {
+      assertNotNull(Template.scriptPageUse("onGenerate.xml", src), src);
+      assertTrue(folders(src).isEmpty(), src);
+    }
+  }
+
+  @Test
   void aFolderThatCantBeToldBlocksAll() {
     // a property or a wildcard could be any folder
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${dir.input}/${folder.pages}\"/>"));
@@ -130,7 +139,6 @@ class TemplateScriptPageUseTest {
     Template t = template("\"onGenerate\": \"onGenerate\"");
     assertNull(t.pageOnlyRebuildBlocker());
     assertEquals(Map.of("includes", "the template's script ant.xml reads (${dir.input}/includes)"), t.pageFolderBlockers());
-    assertTrue(t.hasOnGenerate());
     // nothing runs before Jekyll
     t = template("\"onLoad\": \"onGenerate\"");
     assertNull(t.pageOnlyRebuildBlocker());

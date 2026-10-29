@@ -13,6 +13,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import org.hl7.fhir.igtools.templates.Template;
 import org.hl7.fhir.utilities.logging.ILoggingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -125,7 +126,8 @@ class RegeneratePagesTest {
 
   @Test
   void aLangFragmentIsProcessedAsInTheBuild() throws Exception {
-    // the build processes it while it builds the database (and then with the language of the page, which is none)
+    // the build processes it while it builds the database, and then with the language of the page, which is none, so
+    // each language gets the English fragment: that is what the build does now, not what it should do
     write("input/pagecontent/index.md", "{% lang-fragment ip-statements.xhtml %}");
     regenerate();
     assertEquals("{% include ip-statements-en.xhtml %}", read("temp/_includes/uz/index.md"));
@@ -240,6 +242,74 @@ class RegeneratePagesTest {
     } finally {
       state.discard();
     }
+  }
+
+  /** a template whose onGenerate script reads the menu in the includes folder */
+  private Template template() throws IOException {
+    write("template/config.json", "{\"script\": \"scripts/ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
+    write("template/scripts/ant.xml", "<project name=\"t\"><target name=\"onGenerate\">"
+        + "<copy file=\"${dir.input}/includes/menu.xml\" todir=\"x\"/></target></project>");
+    return new Template(dir.toString(), true, null, null, false, false, false);
+  }
+
+  @Test
+  void theBuildTellsTheRebuildWhatTheTemplateReads() throws Exception {
+    pf.template = template();
+    FetchedFile menu = new FetchedFile("input/includes/menu.xml", "includes/menu.xml");
+    write("input/includes/menu.xml", "<ul/>");
+    write("input/translations/ru/includes/menu.xml", "<ul><li>Меню</li></ul>");
+    menu.setPath(dir.resolve("input/includes/menu.xml").toFile().getCanonicalPath());
+    menu.setRelativePath("_includes/menu.xml");
+    menu.setProcessMode(FetchedFile.PROCESS_NONE);
+    pf.altMap.put("pre-page/" + menu.getPath(), menu);
+    page.setPath(dir.resolve("input/pagecontent/index.md").toFile().getCanonicalPath());
+    pf.altMap.put("page/" + page.getPath(), page);
+    pf.fileList.addAll(Arrays.asList(page, menu));
+    PageRebuild state = checked();
+    try {
+      state.beforeJekyll();
+      state.afterJekyll();
+      state.afterPackage();
+      state.finished();
+      assertEquals(null, state.getNotReusable());
+      List<Path> roots = Collections.singletonList(dir.resolve("input"));
+      for (String edit : new String[] {"input/includes/menu.xml", "input/translations/ru/includes/menu.xml"}) {
+        SourceSnapshot before = SourceSnapshot.take(roots, null);
+        write(edit, "<ul><li>2</li></ul>");
+        List<String> reason = new ArrayList<>();
+        assertEquals(null, state.pagesFor(SourceSnapshot.take(roots, before).changesSince(before), reason), edit);
+        assertTrue(reason.get(0).endsWith("the template's script ant.xml reads (${dir.input}/includes)"), reason.get(0));
+      }
+      SourceSnapshot before = SourceSnapshot.take(roots, null);
+      write("input/translations/ru/pagecontent/index.md", "# Главная страница");
+      List<String> reason = new ArrayList<>();
+      assertEquals(Collections.singletonList(page), state.pagesFor(SourceSnapshot.take(roots, before).changesSince(before), reason), reason.toString());
+    } finally {
+      state.discard();
+    }
+  }
+
+  @Test
+  void notForTranslationsOrPagesThatArentWatched() throws Exception {
+    // the folders that the base template adds pages from: the template's (which the build makes), and the images
+    pf.pagesDirs.addAll(Arrays.asList(dir.resolve("template/config").toString(), dir.resolve("input/images").toString()));
+    PageRebuild state = checked();
+    try {
+      state.beforeJekyll();
+      state.afterJekyll();
+      state.afterPackage();
+      state.finished();
+      assertEquals(null, state.getNotReusable());
+    } finally {
+      state.discard();
+    }
+    pf.changeList.clear();
+    pf.translationSources.set(0, "translations/ru");
+    assertEquals("the translations in translations/ru are outside the folders that are watched", checked().getNotReusable());
+    pf.translationSources.set(0, "input/translations/ru");
+    pf.pagesDirs.add(dir.resolve("pages").toString());
+    pf.changeList.clear();
+    assertEquals("the pages in " + dir.resolve("pages") + " are outside the folders that are watched", checked().getNotReusable());
   }
 
   @Test

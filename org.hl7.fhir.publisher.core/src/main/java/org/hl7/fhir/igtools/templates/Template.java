@@ -377,6 +377,11 @@ public class Template {
   // the folders that only pages come from: a script that names one may read them
   private static final String[] PAGE_FOLDER_NAMES = {"pagecontent", "intro-notes"};
 
+  /** Whether a folder name in a path is . or .., which stand for the input folder, or the folder it is in */
+  private static boolean isDots(String folder) {
+    return folder.equals(".") || folder.equals("..");
+  }
+
   /**
    * Why a watch mode rebuild can't skip running this template's scripts again after only the content of some pages
    * changed (see PageRebuild), or null if it can: it can if the template runs nothing just before Jekyll, and its
@@ -444,13 +449,15 @@ public class Template {
     Map<String, String> res = new java.util.LinkedHashMap<>();
     java.util.regex.Matcher m = inputRef(src).matcher(src);
     while (m.find()) {
-      if (m.group(3) != null) {
+      if (m.group(3) != null && !isDots(m.group(3))) {
         res.putIfAbsent(m.group(3), "the template's script " + name + " reads (" + m.group() + ")");
       }
     }
     java.util.regex.Matcher r = INPUT_PATH.matcher(src);
     while (r.find()) {
-      res.putIfAbsent(r.group(1), "the template's script " + name + " reads (" + r.group() + ")");
+      if (!isDots(r.group(1))) {
+        res.putIfAbsent(r.group(1), "the template's script " + name + " reads (" + r.group() + ")");
+      }
     }
     for (String f : PAGE_FOLDER_NAMES) {
       if (src.contains(f)) {
@@ -469,14 +476,20 @@ public class Template {
     java.util.regex.Pattern inputRef = inputRef(src);
     java.util.regex.Matcher m = inputRef.matcher(src);
     while (m.find()) {
+      if (m.group(3) != null && isDots(m.group(3))) {
+        return "the template's script " + name + " reads " + m.group();
+      }
       if (m.group(3) == null && !inPropertyDefinition(src, m.start())) {
         return "the template's script " + name + " reads " + m.group();
       }
     }
     java.util.regex.Matcher w = INPUT_WHOLE.matcher(src);
     while (w.find()) {
-      boolean folder = w.group().endsWith("/") && INPUT_PATH.matcher(src).region(w.start(), src.length()).lookingAt();
-      if (!folder && !inPropertyDefinition(src, w.start())) {
+      java.util.regex.Matcher p = INPUT_PATH.matcher(src).region(w.start(), src.length());
+      boolean named = w.group().endsWith("/") && p.lookingAt();
+      // input/.. is the IG's folder, even as a property
+      boolean dots = named && isDots(p.group(1));
+      if (dots || (!named && !inPropertyDefinition(src, w.start()))) {
         int end = w.end();
         while (end < src.length() && "\"'<> \t\r\n".indexOf(src.charAt(end)) < 0) {
           end++;
@@ -535,10 +548,6 @@ public class Template {
   }
 
   /** Whether the template runs a script while the IG is generated, before Jekyll */
-  public boolean hasOnGenerate() {
-    return targetOnGenerate != null;
-  }
-
   public boolean hasPreProcess() {
     return preProcess != null;
   }
