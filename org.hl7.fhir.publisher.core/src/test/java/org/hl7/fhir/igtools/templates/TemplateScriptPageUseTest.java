@@ -188,6 +188,34 @@ class TemplateScriptPageUseTest {
   }
 
   @Test
+  void thePropertyFilesTheScriptsLoad() throws IOException {
+    write("template/config.json", "{\"script\": \"scripts/ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
+    write("template/build.properties", "# where the pages are\npages = ${dir.input}/pagecontent\n");
+    write("build.properties", "x=y");
+    String copy = "<copy todir=\"${ig.temp}/x\"><fileset dir=\"${pages}\"/></copy>";
+    String[][] loads = {
+        // one in the template is read, with its properties
+        {"<property file=\"${ig.template}/build.properties\"/>", null},
+        {"<property name=\"props\" value=\"${ig.template}/build.properties\"/><loadproperties srcFile=\"${props}\"/>", null},
+        // one the scripts write while the build runs (as the base templates do)
+        {"<loadproperties srcfile=\"${ig.template}/versions.txt\"/>", null},
+        {"<property file=\"build.properties\"/>", "loads properties from build.properties"},
+        {"<property file=\"${somewhere}/build.properties\"/>", "loads properties from ${somewhere}/build.properties"},
+        {"<property url=\"http://example.org/build.properties\"/>", "loads properties from http://example.org/build.properties"},
+        {"<loadproperties resource=\"build.properties\"/>", "loads properties from build.properties"},
+        {"<xmlproperty file=\"input/ig.xml\"/>", "loads properties from input/ig.xml"},
+        {"<scriptdef name=\"x\" language=\"javascript\" src=\"${ig.template}/x.js\"/>", "uses ${ig.template}/x.js"}};
+    for (String[] l : loads) {
+      write("template/scripts/ant.xml", "<project name=\"t\"><target name=\"onGenerate\">" + l[0] + (l[1] == null ? copy : "") + "</target></project>");
+      Template t = new Template(dir.toString(), true, null, null, false, false, false);
+      assertEquals(l[1] == null ? null : "the template's script scripts/ant.xml " + l[1] + ", which isn't read", t.pageOnlyRebuildBlocker(), l[0]);
+      if (l[1] == null && !l[0].contains("versions")) {
+        assertEquals(Set.of("pagecontent"), t.pageFolderBlockers().keySet(), l[0]);
+      }
+    }
+  }
+
+  @Test
   void aPathWithBackslashes() throws IOException {
     write("template/config.json", "{\"script\": \"ant.xml\", \"targets\": {\"onLoad\": \"onLoad\"}}");
     write("template/ant.xml", "<project name=\"t\"><target name=\"onLoad\"><copy file=\"input\\includes\\menu.xml\" todir=\"x\"/></target></project>");
@@ -308,6 +336,8 @@ class TemplateScriptPageUseTest {
     for (String d : new String[] {".", "./", "", "${ig.root}/.", "${basedir}/./"}) {
       assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"" + d + "\" includes=\"**/*.md\"/>"), d);
     }
+    // outside a target, paths start from the ant file's folder, so a folder above it may be the IG's folder
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"ig\" location=\"../..\"/><fileset dir=\"${ig}\" includes=\"**/*.md\"/>"));
     // the folder that holds the template may be the IG's folder
     assertNotNull(Template.scriptPageUse("onGenerate.xml",
         "<dirname property=\"up\" file=\"${ig.template}\"/><copy todir=\"${ig.temp}/md\"><fileset dir=\"${up}\" includes=\"**/*.md\"/></copy>"));
