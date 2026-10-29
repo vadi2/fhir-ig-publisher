@@ -424,7 +424,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     printMemUsage();
 
     if (pageRebuild != null) {
-      checkPageRebuild();
+      try {
+        checkPageRebuild();
+      } catch (Exception e) {
+        // only watch mode needs it: the build goes on
+        pageRebuild.notReusable("it couldn't be told if a page rebuild can follow this build (" + e.getMessage() + ")");
+      }
     }
     finishGenerate(null);
   }
