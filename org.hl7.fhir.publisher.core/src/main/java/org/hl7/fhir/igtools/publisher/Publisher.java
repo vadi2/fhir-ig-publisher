@@ -370,6 +370,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     } catch (Exception | Error e) {
       // (such as a page written twice: but running out of memory isn't something a complete build would help with)
       if (e instanceof VirtualMachineError && !(e instanceof StackOverflowError)) {
+        state.discard();
         throw (VirtualMachineError) e;
       }
       log("Rapido Mode: the page rebuild failed (" + e + "), so doing a complete build");
