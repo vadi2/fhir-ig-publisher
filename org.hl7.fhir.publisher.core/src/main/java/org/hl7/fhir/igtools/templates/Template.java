@@ -365,6 +365,9 @@ public class Template {
   // a file set or the like that starts from the IG's root folder
   private static final String ROOT_DIR =
       "<(?!project[\\s>])([\\w.:-]+)\\s[^>]*?(?<=\\s)(?:base)?dir=\"(?:\\$\\{(?:ig\\.root|basedir%s)\\})?(?:/?\\.)?/?\"[^>]*>";
+  // a property set to the folder that holds a file or folder
+  private static final java.util.regex.Pattern DIRNAME = java.util.regex.Pattern.compile(
+      "<dirname\\s[^>]*?(?<=\\s)property=\"([^\"]+)\"");
   // a property defined as the IG's folder (${ig.root}, ${basedir} or .), by group 1 the property it's defined from
   private static final java.util.regex.Pattern ROOT_VALUE = java.util.regex.Pattern.compile(
       "\\s(?:value|location)=\"(?:\\$\\{([^}]+)\\}|\\.)/?\"");
@@ -712,6 +715,11 @@ public class Template {
   /** The properties src defines as the IG's folder (e.g. &lt;property name="root" value="${ig.root}"/&gt;) */
   private static Set<String> rootAliases(String src) {
     Set<String> aliases = new HashSet<>();
+    // a folder that holds another may be the IG's folder
+    java.util.regex.Matcher d = DIRNAME.matcher(src);
+    while (d.find()) {
+      aliases.add(d.group(1));
+    }
     boolean more = true;
     while (more) {
       more = false;

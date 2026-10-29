@@ -18,6 +18,8 @@ import org.hl7.fhir.utilities.logging.ILoggingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 /**
  * What a page-only rebuild writes to the temp folder for a page in a translated IG: the page in each language, from
@@ -121,19 +123,27 @@ class RegeneratePagesTest {
     page.getOutputNames().clear();
     pf.allOutputs.clear();
     page.setSource(Files.readAllBytes(dir.resolve("input/pagecontent/index.md")));
-    gen.generateHtmlOutputs(page, false, null, null);
+    // with the database the build makes, if it makes one
+    org.hl7.fhir.igtools.renderers.DBBuilder db = pf.generatingDatabase
+        ? new org.hl7.fhir.igtools.renderers.DBBuilder(dir.resolve("package.db").toString(), null, null, null, pf.fileList) : null;
+    gen.generateHtmlOutputs(page, false, db, null);
+    if (db != null) {
+      db.closeUp();
+    }
   }
 
-  @Test
-  void theSameAsTheBuildForAPageWithTwoOutputs() throws Exception {
+  @ParameterizedTest
+  @ValueSource(booleans = {false, true})
+  void theSameAsTheBuildForAPageWithTwoOutputs(boolean database) throws Exception {
     // a page in a folder that is both a pre-process folder and a pages folder: one output under _includes, one in the
-    // root, each in every language
-    pf.generatingDatabase = false;
+    // root, each in every language; with or without the database, which changes how a lang-fragment is written
+    pf.generatingDatabase = database;
     page.addOutput("index.md", FetchedFile.PROCESS_NONE, null);
     build();
     assertEquals(8, tempTree().size(), tempTree().toString());
-    String[][] edits = {{"input/pagecontent/index.md", "# Home, edited"}, {"input/translations/ru/pagecontent/index.md", "# Главная страница"}};
-    int[] changes = {6, 2};
+    String[][] edits = {{"input/pagecontent/index.md", "# Home, edited"}, {"input/translations/ru/pagecontent/index.md", "# Главная страница"},
+        {"input/pagecontent/index.md", "# Home\n\n{% lang-fragment ip-statements.xhtml %}"}};
+    int[] changes = {6, 2, 6};
     for (int e = 0; e < edits.length; e++) {
       java.util.Map<String, String> before = tempTree();
       write(edits[e][0], edits[e][1]);
@@ -156,6 +166,7 @@ class RegeneratePagesTest {
       assertEquals(changed, said, edits[e][0]);
       assertEquals(changes[e], changed.size(), edits[e][0]);
     }
+    assertEquals(database ? "# Home\n\n{% include ip-statements-en.xhtml %}" : edits[2][1], read("temp/_includes/index.md"));
   }
 
   @Test
