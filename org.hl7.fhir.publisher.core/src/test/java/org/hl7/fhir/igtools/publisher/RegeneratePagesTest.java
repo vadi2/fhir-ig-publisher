@@ -98,6 +98,66 @@ class RegeneratePagesTest {
     return res;
   }
 
+  /** the temp folder: each file by its path, with its content */
+  private java.util.Map<String, String> tempTree() throws IOException {
+    java.util.Map<String, String> res = new java.util.TreeMap<>();
+    try (java.util.stream.Stream<Path> files = Files.walk(dir.resolve("temp"))) {
+      for (Path p : (Iterable<Path>) files::iterator) {
+        if (Files.isRegularFile(p)) {
+          res.put(dir.resolve("temp").relativize(p).toString(), new String(Files.readAllBytes(p), StandardCharsets.UTF_8));
+        }
+      }
+    }
+    return res;
+  }
+
+  /** writes the page to an empty temp folder as the build does, and records what it wrote as the build does */
+  private void build() throws Exception {
+    try (java.util.stream.Stream<Path> files = Files.walk(dir.resolve("temp"))) {
+      for (Path p : (Iterable<Path>) files.sorted(java.util.Comparator.reverseOrder())::iterator) {
+        Files.delete(p);
+      }
+    }
+    page.getOutputNames().clear();
+    pf.allOutputs.clear();
+    page.setSource(Files.readAllBytes(dir.resolve("input/pagecontent/index.md")));
+    gen.generateHtmlOutputs(page, false, null, null);
+  }
+
+  @Test
+  void theSameAsTheBuildForAPageWithTwoOutputs() throws Exception {
+    // a page in a folder that is both a pre-process folder and a pages folder: one output under _includes, one in the
+    // root, each in every language
+    pf.generatingDatabase = false;
+    page.addOutput("index.md", FetchedFile.PROCESS_NONE, null);
+    build();
+    assertEquals(8, tempTree().size(), tempTree().toString());
+    String[][] edits = {{"input/pagecontent/index.md", "# Home, edited"}, {"input/translations/ru/pagecontent/index.md", "# Главная страница"}};
+    int[] changes = {6, 2};
+    for (int e = 0; e < edits.length; e++) {
+      java.util.Map<String, String> before = tempTree();
+      write(edits[e][0], edits[e][1]);
+      List<String> said = new ArrayList<>();
+      for (String f : gen.regeneratePages(Collections.singletonList(page))) {
+        said.add(dir.resolve("temp").relativize(Path.of(f)).toString());
+      }
+      java.util.Map<String, String> rebuilt = tempTree();
+      build();
+      java.util.Map<String, String> built = tempTree();
+      assertEquals(built, rebuilt, edits[e][0]);
+      // and it says which files changed
+      List<String> changed = new ArrayList<>();
+      for (String f : built.keySet()) {
+        if (!built.get(f).equals(before.get(f))) {
+          changed.add(f);
+        }
+      }
+      Collections.sort(said);
+      assertEquals(changed, said, edits[e][0]);
+      assertEquals(changes[e], changed.size(), edits[e][0]);
+    }
+  }
+
   @Test
   void anEditToTheEnglishPage() throws Exception {
     write("input/pagecontent/index.md", "# Home, edited");
