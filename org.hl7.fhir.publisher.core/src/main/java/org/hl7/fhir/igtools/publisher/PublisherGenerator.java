@@ -720,9 +720,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     boolean jekyllOk;
     // the output files that are new since the last build or rebuild (null: all of them)
     Set<String> fresh;
+    // where they come from (for the log)
+    StringBuilder freshFrom = null;
     try {
       jekyllOk = runTool(replay);
       fresh = jekyllWritten == null ? null : new HashSet<>(jekyllWritten);
+      freshFrom = fresh == null ? null : new StringBuilder(fresh.size() + " written by Jekyll");
       if (jekyllOk && replay != null) {
         if (pf.template != null && !settings.isGenerationOff()) {
           // the template's check may look at the output: its findings are among the messages put back, so they must
@@ -733,6 +736,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         replay.restorePackageOutputs();
         if (fresh != null) {
           fresh.addAll(replay.getPackageOutputs());
+          freshFrom.append(", ").append(replay.getPackageOutputs().size()).append(" put back from the package step");
         }
       } else if (!jekyllOk && pageRebuild != null) {
         pageRebuild.notReusable("Jekyll failed");
@@ -864,6 +868,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       if (aiCache != null && fresh != null) {
         // the AI step's files are new, and so are the pages it had Jekyll write again
         fresh.addAll(aiCache.getWritten());
+        freshFrom.append(", ").append(aiCache.getWritten().size()).append(" by the AI step");
       }
     }
 
@@ -884,6 +889,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       pf.inspector.getComparisonFiles().add(pf.ipsComparator.getBaseFile());
     }
     if (kept != null && !settings.isGenerationOff()) {
+      if (replay != null && fresh != null) {
+        log("Rapido Mode: the output files new since the last html check: " + freshFrom);
+      }
       pf.inspector.recordChecks(replay != null ? replay.getHtmlRecords() : null, fresh, rewriter);
     }
     List<ValidationMessage> linkmsgs = settings.isGenerationOff() ? new ArrayList<ValidationMessage>() : pf.inspector.check(statusMessage, statusMessages);

@@ -639,7 +639,8 @@ public class HTMLInspector {
     b.put("strict", String.valueOf(strict));
     b.put("statusMessage", statusMessageDef);
     b.put("statusMessages", String.valueOf(statusMessagesLang == null ? null : new TreeMap<>(statusMessagesLang)));
-    b.put("exemptHtmlPatterns", String.valueOf(exemptHtmlPatterns));
+    // what matters is whether any matches
+    b.put("exemptHtmlPatterns", String.valueOf(exemptHtmlPatterns == null ? null : new TreeSet<>(exemptHtmlPatterns)));
     b.put("pageHeadingLevel", String.valueOf(pageHeadingLevel));
     b.put("accessibilityChecks", String.valueOf(accessibilityChecks));
     b.put("accessibilityPanel", String.valueOf(accessibilityPanel));
@@ -686,6 +687,7 @@ public class HTMLInspector {
     // why the others aren't reused (for the log)
     int unrecorded = 0;
     int written = 0;
+    String firstWritten = null;
     int changedSince = 0;
     int notReplayable = 0;
     String whyNotReplayable = null;
@@ -696,6 +698,9 @@ public class HTMLInspector {
           unrecorded++;
         } else {
           written++;
+          if (firstWritten == null || s.compareTo(firstWritten) < 0) {
+            firstWritten = s;
+          }
         }
         toLoad.add(s);
       } else if (!replayable) {
@@ -781,7 +786,7 @@ public class HTMLInspector {
         why.add("the check is set up differently (" + HtmlCheckRecords.differences(last.getSignatureParts(), records.getSignatureParts()) + ")");
       }
       if (written > 0) {
-        why.add(written + " written again");
+        why.add(written + " written again (e.g. " + relative(firstWritten) + ")");
       }
       if (unrecorded > 0 && fresh != null) {
         why.add(unrecorded + " new");
@@ -841,10 +846,10 @@ public class HTMLInspector {
   /** What the check of a file looked at (see HtmlCheckRecords) that is different now, if anything (else null) */
   private String lookedAtChanges(HtmlCheckRecords.FileRecord r, boolean sameTree, Map<String, Boolean> existsNow) throws IOException {
     if (r.lookups != null) {
-      for (Map.Entry<String, LoadedFile> e : r.lookups.entrySet()) {
-        LoadedFile now = cache.get(e.getKey());
-        if (!HtmlCheckRecords.sameLookup(e.getValue(), now)) {
-          return "looked up " + relative(e.getKey()) + ", which " + HtmlCheckRecords.lookupDifference(e.getValue(), now);
+      for (Map.Entry<String, HtmlCheckRecords.LookupUse> e : r.lookups.entrySet()) {
+        String difference = e.getValue().difference(cache.get(e.getKey()));
+        if (difference != null) {
+          return "looked up " + relative(e.getKey()) + ", which " + difference;
         }
       }
     }
@@ -2382,7 +2387,11 @@ public class HTMLInspector {
         if (f != null) {
           if (Utilities.noString(name))
             return true;
-          else if (f.isLangRedirect) {
+          HtmlCheckRecords.LookupUse use = current == null ? null : current.addLookup(page, f);
+          if (use != null) {
+            use.usedLangRedirect();
+          }
+          if (f.isLangRedirect) {
             String fn = filename.replace(rootFolder, rootFolder+"/"+csHandler.getPrimaryLang());
             return checkTarget(fn, ref, rref, tgtList, bh, x, parent);
           } else {
@@ -2392,7 +2401,11 @@ public class HTMLInspector {
                 tgtList.append(" - case is wrong ('"+s+"')");
               }
             }
-            return f.targets.contains(name);
+            boolean there = f.targets.contains(name);
+            if (use != null) {
+              use.usedAnchor(name, there);
+            }
+            return there;
           }
         }
       } else {
