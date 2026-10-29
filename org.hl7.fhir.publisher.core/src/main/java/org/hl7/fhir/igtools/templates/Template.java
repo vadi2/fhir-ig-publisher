@@ -27,6 +27,9 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.lang.reflect.Field;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
@@ -37,19 +40,26 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
 import java.util.regex.Pattern;
 
 import lombok.Getter;
 import org.apache.commons.io.FileUtils;
+import org.apache.tools.ant.AntClassLoader;
 import org.apache.tools.ant.AntTypeDefinition;
 import org.apache.tools.ant.BuildException;
+import org.apache.tools.ant.BuildListener;
 import org.apache.tools.ant.ComponentHelper;
 import org.apache.tools.ant.DefaultLogger;
+import org.apache.tools.ant.ExtensionPoint;
 import org.apache.tools.ant.Project;
 import org.apache.tools.ant.ProjectHelper;
+import org.apache.tools.ant.PropertyHelper;
+import org.apache.tools.ant.RuntimeConfigurable;
 import org.apache.tools.ant.Target;
 import org.apache.tools.ant.Task;
 import org.apache.tools.ant.UnknownElement;
+import org.apache.tools.ant.property.LocalProperties;
 import org.hl7.fhir.convertors.advisors.impl.BaseAdvisor_40_50;
 import org.hl7.fhir.convertors.advisors.impl.BaseAdvisor_40_N;
 import org.hl7.fhir.convertors.advisors.impl.BaseAdvisor_50_N;
@@ -110,6 +120,8 @@ public class Template {
   private String targetOnCheck;
   private String templateThatCantExecute;
   private Project antProject;
+  // the only listener the script's project is given (see whyOnCheckMaySeeOutput())
+  private BuildListener antLogger;
   private JsonObject defaults;
   private JsonArray extraTemplates;
   private JsonArray preProcess;
@@ -170,6 +182,7 @@ public class Template {
         consoleLogger.setMessageOutputLevel(Project.MSG_ERR);        
       }
       antProject.addBuildListener(consoleLogger);
+      antLogger = consoleLogger;
       antProject.setBasedir(root);
       antProject.setProperty("ig.root", root);
       antProject.setProperty("ig.template", templateDir);
@@ -942,11 +955,17 @@ public class Template {
   private static final Set<String> PATH_ATTRIBUTES = Set.of("file", "destfile", "dir");
   private static final Set<String> PATTERN_ATTRIBUTES = Set.of("includes", "excludes");
 
+  // a property expansion that evaluates something (${toString:id}, ${ant.refid:id}...) rather than reading a property
+  private static final Pattern EVALUATED_PROPERTY = Pattern.compile("\\$\\{[^}]*:");
+
   /**
    * Why the template's check (onCheck) may look at the output, in outputDir; null if it can't. It can't if all it
    * runs - its target, and the targets that target depends on, including those that extend an extension point it
    * depends on (extensionOf), whatever file they're in - is tasks that only read and write files in the template
-   * folder (see BLIND_TASKS); anything else, or anything that can't be told for sure, is a reason it may
+   * folder (see BLIND_TASKS), the template folder has no links (a link could lead to the output), and nothing the
+   * script ran before is left to run with it (another listener on the script's project, another way to expand
+   * properties, a target of the script's own kind). Anything else, or anything that can't be told for sure, is a
+   * reason it may. (What isn't looked at: a thread that something the script ran before has left running.)
    */
   public String whyOnCheckMaySeeOutput(String outputDir) {
     if (targetOnCheck == null) {
@@ -955,9 +974,31 @@ public class Template {
     if (antProject == null) {
       return "it has no script";
     }
+    try {
+      return whyOnCheckMaySee(Paths.get(outputDir));
+    } catch (IOException | RuntimeException e) {
+      return "it can't be told (" + e + ")";
+    }
+  }
+
+  private String whyOnCheckMaySee(Path output) throws IOException {
     Path tmpl = Paths.get(templateDir).toAbsolutePath().normalize();
-    if (Paths.get(outputDir).toAbsolutePath().normalize().startsWith(tmpl)) {
+    if (output.toAbsolutePath().normalize().startsWith(tmpl)
+        || (Files.exists(output) && output.toRealPath().startsWith(tmpl.toRealPath()))) {
       return "the output is in the template folder";
+    }
+    String why = whyFolderMayLeadOut(tmpl);
+    if (why != null) {
+      return why;
+    }
+    for (BuildListener l : antProject.getBuildListeners()) {
+      // Ant's own class loaders listen, for when the build is over
+      if (l != antLogger && l.getClass() != AntClassLoader.class) {
+        return "its script's project has other listeners (" + l.getClass().getName() + ")";
+      }
+    }
+    if (!onlyAntsPropertyEvaluation()) {
+      return "its script expands properties its own way";
     }
     List<Target> run;
     try {
@@ -967,6 +1008,9 @@ public class Template {
     }
     ComponentHelper components = ComponentHelper.getComponentHelper(antProject);
     for (Target t : run) {
+      if (t.getClass() != Target.class && t.getClass() != ExtensionPoint.class) {
+        return "target '" + t.getName() + "' is a " + t.getClass().getName();
+      }
       for (Task task : t.getTasks()) {
         String tag = task instanceof UnknownElement ? ((UnknownElement) task).getTag() : task.getTaskName();
         Class<?> cls = BLIND_TASKS.get(tag);
@@ -977,7 +1021,7 @@ public class Template {
             || def.getExposedClass(antProject) != cls) {
           return "target '" + t.getName() + "' runs " + tag;
         }
-        String why = whyElementMaySeeOutput((UnknownElement) task, tmpl);
+        why = whyElementMaySeeOutput((UnknownElement) task, tmpl);
         if (why != null) {
           return "target '" + t.getName() + "': " + why;
         }
@@ -986,17 +1030,74 @@ public class Template {
     return null;
   }
 
+  /** Why what is in this folder may lead out of it: a symbolic link, or a file with another name (a hard link) */
+  private static String whyFolderMayLeadOut(Path folder) throws IOException {
+    boolean unix = folder.getFileSystem().supportedFileAttributeViews().contains("unix");
+    try (Stream<Path> files = Files.walk(folder)) {
+      for (Path p : (Iterable<Path>) files::iterator) {
+        if (Files.isSymbolicLink(p)) {
+          return "the template folder has a link, " + folder.relativize(p);
+        }
+        if (unix && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)
+            && ((Number) Files.getAttribute(p, "unix:nlink", LinkOption.NOFOLLOW_LINKS)).intValue() > 1) {
+          return "the template folder has a file with another name too, " + folder.relativize(p);
+        }
+      }
+    }
+    return null;
+  }
+
+  /** Whether the script's properties are expanded as Ant expands them by default (and nothing else runs when they are) */
+  private boolean onlyAntsPropertyEvaluation() {
+    PropertyHelper ph = PropertyHelper.getPropertyHelper(antProject);
+    if (ph.getClass() != PropertyHelper.class) {
+      return false;
+    }
+    Project plain = new Project();
+    plain.init();
+    try {
+      Set<Object> ants = new HashSet<>();
+      for (List<?> l : delegates(PropertyHelper.getPropertyHelper(plain)).values()) {
+        ants.addAll(l);
+      }
+      for (List<?> l : delegates(ph).values()) {
+        for (Object d : l) {
+          // Ant's own <local> properties: running a target sets them up
+          if (!ants.contains(d) && d.getClass() != LocalProperties.class) {
+            return false;
+          }
+        }
+      }
+      return true;
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      return false;
+    }
+  }
+
+  private static Map<?, List<?>> delegates(PropertyHelper ph) throws ReflectiveOperationException {
+    Field f = PropertyHelper.class.getDeclaredField("delegates");
+    f.setAccessible(true);
+    @SuppressWarnings("unchecked")
+    Map<?, List<?>> res = (Map<?, List<?>>) f.get(ph);
+    return res;
+  }
+
   private String whyElementMaySeeOutput(UnknownElement e, Path tmpl) {
     Set<String> allowed = BLIND_ELEMENTS.get(e.getTag());
-    if (allowed == null || !e.getNamespace().isEmpty()) {
-      return "<" + e.getQName() + ">";
+    RuntimeConfigurable w = e.getWrapper();
+    if (allowed == null || !e.getNamespace().isEmpty() || w.getPolyType() != null) {
+      return "<" + e.getQName() + (w.getPolyType() != null ? " ant-type=\"" + w.getPolyType() + "\"" : "") + ">";
     }
-    for (Map.Entry<String, Object> a : e.getWrapper().getAttributeMap().entrySet()) {
+    if (w.getText() != null && EVALUATED_PROPERTY.matcher(w.getText()).find()) {
+      return "<" + e.getTag() + ">" + w.getText();
+    }
+    for (Map.Entry<String, Object> a : w.getAttributeMap().entrySet()) {
       String n = a.getKey().toLowerCase();
-      if (!allowed.contains(n)) {
-        return "<" + e.getTag() + " " + a.getKey() + ">";
+      String raw = String.valueOf(a.getValue());
+      if (!allowed.contains(n) || EVALUATED_PROPERTY.matcher(raw).find()) {
+        return "<" + e.getTag() + " " + a.getKey() + "=\"" + raw + "\">";
       }
-      String v = antProject.replaceProperties(String.valueOf(a.getValue()));
+      String v = antProject.replaceProperties(raw);
       if (PATH_ATTRIBUTES.contains(n) || PATTERN_ATTRIBUTES.contains(n)) {
         // a property that isn't set yet may be by the time it runs
         boolean inside = !v.contains("${");
@@ -1022,6 +1123,7 @@ public class Template {
     }
     return null;
   }
+
     
   public JsonArray getPreProcess() {
     return preProcess;
