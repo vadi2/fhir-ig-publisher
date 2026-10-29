@@ -308,6 +308,10 @@ class TemplateScriptPageUseTest {
     for (String d : new String[] {".", "./", "", "${ig.root}/.", "${basedir}/./"}) {
       assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"" + d + "\" includes=\"**/*.md\"/>"), d);
     }
+    // the folder that holds the template may be the IG's folder
+    assertNotNull(Template.scriptPageUse("onGenerate.xml",
+        "<dirname property=\"up\" file=\"${ig.template}\"/><copy todir=\"${ig.temp}/md\"><fileset dir=\"${up}\" includes=\"**/*.md\"/></copy>"));
+    assertEquals(Set.of("includes"), folders("<dirname property=\"up\" file=\"${ig.template}\"/><copy file=\"${up}/input/includes/menu.xml\" todir=\"x\"/>"));
     // the base template's spreadsheet search
     assertNull(Template.scriptPageUse("onLoad.xml",
         "<fileset id=\"s\" dir=\"${ig.root}\"><include name=\"${folder.input}/examples/*spreadsheet.xml\"/></fileset>"));
