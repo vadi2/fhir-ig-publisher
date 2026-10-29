@@ -9,7 +9,10 @@
 #   {"cmd":"build"}                    a full build, the same as `jekyll build --destination <dest>`
 #   {"cmd":"update","changed":[...]}   the files changed since the last command (paths relative to the source): the
 #                                      output becomes what a full build would write. When it can't be sure of that
-#                                      for the change, it does a full build
+#                                      for the change, it does a full build. With "keep":true, an output file that
+#                                      would be written with what Jekyll last wrote there is left as it is (the
+#                                      caller knows what has changed it since), and "written" lists the files that
+#                                      were written, also for a full build when it can tell
 #   {"cmd":"rewrite","files":[...]}    writes these output files (paths relative to the destination) again as the
 #                                      last build wrote them; "unknown" lists the ones Jekyll doesn't write
 #
@@ -20,6 +23,7 @@ $stdout.sync = true
 $stderr.reopen($stdout)
 $stderr.sync = true
 
+require "digest"
 require "json"
 require "set"
 
@@ -42,9 +46,12 @@ end
 
 module IgJekyllDriver
   # Liquid markup that makes a page depend on more than its own source, the includes it renders, and _data: other
-  # pages (site.pages etc.), the time, or counters shared between pages
+  # pages (site.pages etc.), the time, or counters shared between pages. The site variable is a name of its own: not
+  # part of a longer name (body-site-cs, page.site; a hyphen after {{ or before }} controls whitespace), the name of an
+  # include's parameter (site=...), or part of a quoted string, which are taken out first (unless they may hold markup)
   LIQUID_MARKUP = %r{\{\{.*?\}\}|\{%.*?%\}}m.freeze
-  RISKY_MARKUP = %r{\bsite\b(?!\s*\.\s*data\b)|\A\{%-?\s*(?:increment|decrement)\b}.freeze
+  QUOTED = %r{"[^"{}%]*"|'[^'{}%]*'}.freeze
+  RISKY_MARKUP = %r{(?<![\w.])(?<!\w-)site(?!\w|-\w)(?!\s*\.\s*data(?!\w|-\w))(?!\s*=(?!=))|\A\{%-?\s*(?:increment|decrement)\b}.freeze
   QUICK_CHECK = %r{\bsite\b|increment|decrement}.freeze
 
   class << self
@@ -54,6 +61,12 @@ module IgJekyllDriver
     attr_accessor :current
     # templates with risky markup, as they were parsed
     attr_reader :risky
+    # output file => what Jekyll last wrote there: a digest of a page's output, the stat of a static file's source
+    attr_reader :wrote
+    # the output files written by the command that's running, or nil when they can't all be known
+    attr_reader :written
+    # whether the command that's running leaves an output file that would get what Jekyll last wrote there as it is
+    attr_reader :keep
 
     def reset
       @deps = {}
@@ -61,19 +74,75 @@ module IgJekyllDriver
       @current = nil
     end
 
+    def risky?(markup)
+      RISKY_MARKUP.match?(markup.gsub(QUOTED, "''"))
+    end
+
     def scan(name, content)
       s = content.to_s
       return unless QUICK_CHECK.match?(s)
 
       s.scan(LIQUID_MARKUP) do |m|
-        if RISKY_MARKUP.match?(m)
+        if risky?(m)
           @risky << "#{name}: #{m[0, 80]}"
           return
         end
       end
     end
+
+    # Before each command
+    def start_command
+      @written = Set.new
+      @keep = false
+    end
+
+    # Whether the command may leave the output files that would get what Jekyll last wrote there as they are, from now
+    # on (only while it knows which files it writes)
+    def keep_unchanged(keep)
+      @keep = keep && !@written.nil?
+    end
+
+    # When a build is about to write the site: what's written can only be known (and left as it is) when it's all
+    # plain pages and static files, each written to a place of its own, and nothing hooks into their writing
+    def site_writes(site, hooked)
+      return if @written.nil?
+      return unless hooked || !site.docs_to_write.empty? || !site.pages.all? { |p| p.instance_of?(Jekyll::Page) } ||
+                    !site.static_files.all? { |f| f.instance_of?(Jekyll::StaticFile) } || Driver.shared_destination(site)
+
+      @written = nil
+      @keep = false
+    end
+
+    # Forgets what was written (when it may not have been written whole)
+    def forget_writes
+      @wrote = {}
+      @written = nil
+      @keep = false
+    end
+
+    # Writes an output file unless keeping it is allowed and what Jekyll last wrote there would be written again
+    def write(path, stamp)
+      if @keep && stamp && @wrote[path] == stamp && File.file?(path)
+        return false
+      end
+
+      @wrote.delete(path)
+      yield
+      @wrote[path] = stamp if stamp
+      @written&.add(path)
+      true
+    end
+
+    # What identifies a static file's source as it is now: if it's the same, so is its content (nil if unknown)
+    def source_stamp(path)
+      st = File.stat(path)
+      [st.size, st.mtime.to_r, st.ctime.to_r, st.ino, st.dev]
+    rescue SystemCallError
+      nil
+    end
   end
   reset
+  forget_writes
 
   module RendererHook
     def run
@@ -106,12 +175,39 @@ module IgJekyllDriver
       super
     end
   end
+
+  module SiteWriteHook
+    def write
+      IgJekyllDriver.site_writes(self, Driver.hooks?)
+      super
+    end
+  end
+
+  module PageWriteHook
+    def write(dest)
+      IgJekyllDriver.write(destination(dest), Digest::SHA1.digest(output.to_s)) { super }
+    end
+  end
+
+  # (always copies when it writes: Jekyll's own check of the source's time isn't what decides)
+  module StaticWriteHook
+    def write(dest)
+      target = destination(dest)
+      IgJekyllDriver.write(target, IgJekyllDriver.source_stamp(path)) do
+        FileUtils.rm_f(target)
+        super
+      end
+    end
+  end
 end
 
 Jekyll::Renderer.prepend(IgJekyllDriver::RendererHook)
 Jekyll::Inclusion.prepend(IgJekyllDriver::InclusionHook)
 Jekyll::Tags::IncludeTag.prepend(IgJekyllDriver::ReadFileHook)
 Jekyll::LiquidRenderer::File.prepend(IgJekyllDriver::ParseHook)
+Jekyll::Site.prepend(IgJekyllDriver::SiteWriteHook)
+Jekyll::Page.prepend(IgJekyllDriver::PageWriteHook)
+Jekyll::StaticFile.prepend(IgJekyllDriver::StaticWriteHook)
 
 # A change that only a full build can be sure to handle
 class NeedFull < StandardError; end
@@ -135,13 +231,15 @@ class Driver
       end
       break if command["cmd"] == "quit"
 
+      IgJekyllDriver.start_command
+
       if File.exist?("Gemfile")
         reply("ok" => false, "unavailable" => "the site has a Gemfile")
         next
       end
       case command["cmd"]
       when "build" then reply(full_build)
-      when "update" then reply(update(Array(command["changed"])))
+      when "update" then reply(update(Array(command["changed"]), command["keep"] == true))
       when "rewrite" then reply(rewrite(Array(command["files"])))
       else reply("ok" => false, "error" => "unknown command #{command["cmd"]}")
       end
@@ -164,6 +262,7 @@ class Driver
   # What `jekyll build` reports when the build fails (see Jekyll::Command)
   def failed(error)
     @site = nil
+    IgJekyllDriver.forget_writes
     if error.is_a?(Jekyll::Errors::FatalException)
       Jekyll.logger.error "ERROR:", "YOUR SITE COULD NOT BE BUILT:"
       Jekyll.logger.error "", "------------------------------------"
@@ -179,7 +278,9 @@ class Driver
     { "ok" => false, "error" => "#{error.class}: #{error.message}" }
   end
 
-  def full_build(reason = nil)
+  # A build of the whole site; with keep, the output files that would get what Jekyll last wrote there are left as
+  # they are, and the result lists the ones written (when that can be known)
+  def full_build(reason = nil, keep: false)
     @site = nil
     IgJekyllDriver.reset
     Jekyll::StaticFile.reset_cache
@@ -190,11 +291,15 @@ class Driver
     site = Jekyll::Site.new(Jekyll.configuration(options))
     @site_source = site.source
     log_start
+    IgJekyllDriver.keep_unchanged(keep)
     site.process
+    IgJekyllDriver.keep_unchanged(false)
     log_done(start)
     @site = site
     @full_only = full_only_reason(site)
-    { "ok" => true, "full" => true, "reason" => reason, "fullOnly" => @full_only }
+    res = { "ok" => true, "full" => true, "reason" => reason, "fullOnly" => @full_only }
+    res["written"] = IgJekyllDriver.written.map { |d| rel_dest(d) }.sort if keep && IgJekyllDriver.written
+    res
   rescue Exception => e # rubocop:disable Lint/RescueException
     failed(e)
   end
@@ -212,6 +317,7 @@ class Driver
 
     paths = site.pages.map(&:path)
     return "two pages have the same path" unless paths.uniq.size == paths.size
+    return "#{Driver.shared_destination(site)} is written by two pages or files" if Driver.shared_destination(site)
     return "a page's output depends on more than its own source: #{IgJekyllDriver.risky.first}" unless IgJekyllDriver.risky.empty?
 
     nil
@@ -220,7 +326,7 @@ class Driver
   # The hooks that jekyll-sass-converter always registers only tell its converters which page they convert
   BENIGN_HOOKS = %r{/jekyll-sass-converter-[^/]+/lib/jekyll/converters/scss\.rb\z}.freeze
 
-  def hooks?
+  def self.hooks?
     registry = Jekyll::Hooks.instance_variable_get(:@registry)
     return true unless registry.is_a?(Hash)
 
@@ -229,6 +335,21 @@ class Driver
         list.any? { |hook| !BENIGN_HOOKS.match?(hook.respond_to?(:source_location) ? hook.source_location&.first.to_s : "") }
       end
     end
+  end
+
+  def hooks?
+    Driver.hooks?
+  end
+
+  # An output file that more than one page, static file or document is written to, if there's one
+  def self.shared_destination(site)
+    seen = Set.new
+    items = site.pages + site.static_files.select(&:write?) + site.docs_to_write
+    items.each do |item|
+      dest = item.destination(site.dest)
+      return dest.delete_prefix(File.join(site.dest, "")) unless seen.add?(dest)
+    end
+    nil
   end
 
   def abs_source(rel)
@@ -243,9 +364,10 @@ class Driver
     @site.includes_load_paths.any? { |dir| abs.start_with?(File.join(File.expand_path(dir), "")) }
   end
 
-  def update(changed)
+  # keep: see full_build
+  def update(changed, keep)
     return full_build("there was no build to go on from") unless @site
-    return full_build(@full_only) if @full_only
+    return full_build(@full_only, keep: keep) if @full_only
 
     start = Time.now
     pages = {}
@@ -283,20 +405,17 @@ class Driver
     @site_source = @site.source
     log_start
     forget(paths)
-    written = render_pages(render.to_a.sort)
-    return full_build(@full_only) if (@full_only = full_only_reason(@site))
+    IgJekyllDriver.keep_unchanged(keep)
+    render_pages(render.to_a.sort)
+    return full_build(@full_only, keep: keep) if (@full_only = full_only_reason(@site))
 
-    changed_statics.each do |f|
-      dest = f.destination(@site.dest)
-      FileUtils.rm_f(dest)
-      f.write(@site.dest)
-      written << dest
-    end
+    changed_statics.each { |f| f.write(@site.dest) }
+    IgJekyllDriver.keep_unchanged(false)
     Jekyll::Cleaner.new(@site).cleanup!
     log_done(start)
-    { "ok" => true, "full" => false, "written" => written.map { |d| rel_dest(d) } }
+    { "ok" => true, "full" => false, "written" => IgJekyllDriver.written.map { |d| rel_dest(d) }.sort }
   rescue NeedFull => e
-    full_build(e.message)
+    full_build(e.message, keep: keep)
   rescue Exception => e # rubocop:disable Lint/RescueException
     failed(e)
   end
@@ -320,14 +439,9 @@ class Driver
         statics << what
       end
     end
-    written = render_pages(render.uniq.sort)
-    statics.uniq.each do |f|
-      dest = f.destination(@site.dest)
-      FileUtils.rm_f(dest)
-      f.write(@site.dest)
-      written << dest
-    end
-    { "ok" => true, "written" => written.map { |d| rel_dest(d) }, "unknown" => unknown }
+    render_pages(render.uniq.sort)
+    statics.uniq.each { |f| f.write(@site.dest) }
+    { "ok" => true, "written" => IgJekyllDriver.written.map { |d| rel_dest(d) }.sort, "unknown" => unknown }
   rescue NeedFull => e
     { "ok" => false, "error" => e.message }
   rescue Exception => e # rubocop:disable Lint/RescueException
@@ -344,9 +458,9 @@ class Driver
   end
 
   # Renders the pages at these indexes in site.pages again, from a fresh read of their source (rendering a page
-  # replaces its content), and then writes them (so nothing is written if one fails); returns the files written
+  # replaces its content), and then writes them (so nothing is written if one fails)
   def render_pages(indexes)
-    return [] if indexes.empty?
+    return if indexes.empty?
 
     payload = @site.site_payload
     cache = @site.liquid_renderer.cache
@@ -366,10 +480,7 @@ class Driver
       @site.pages[i] = page
       @site.send(:render_regenerated, page, payload)
     end
-    pages.map do |_, page|
-      page.write(@site.dest)
-      page.destination(@site.dest)
-    end
+    pages.each { |_, page| page.write(@site.dest) }
   end
 
   def rel_dest(path)
