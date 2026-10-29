@@ -108,6 +108,8 @@ public class PageRebuild {
   private List<String> pageLanguages = Collections.emptyList();
   /** the folders in the input folder that the template reads before Jekyll, and how */
   private Map<String, String> folderBlockers = Collections.emptyMap();
+  /** whether the template runs scripts before Jekyll (which can read any folder outside the input folder) */
+  private boolean scriptsReadTheIg;
 
   /** The fields of the build that this keeps the state of */
   public void setPf(PublisherFields pf) {
@@ -132,6 +134,14 @@ public class PageRebuild {
    */
   public void setFolderBlockers(Map<String, String> folderBlockers) {
     this.folderBlockers = new HashMap<>(folderBlockers);
+  }
+
+  /**
+   * Whether the template runs scripts before Jekyll: they're checked for what they read in the input folder, but not
+   * elsewhere, so an edit to a translation outside the input folder isn't a page-only change
+   */
+  public void setScriptsReadTheIg(boolean scriptsReadTheIg) {
+    this.scriptsReadTheIg = scriptsReadTheIg;
   }
 
   /** Why the build's state can't be reused for a page-only rebuild, if it can't */
@@ -310,17 +320,26 @@ public class PageRebuild {
     for (Path p : changes.getModified()) {
       String path = new File(p.toString()).getCanonicalPath();
       if (isResourceTranslation(path)) {
-        reason.add(p + " is read as a translation of the resources");
+        reason.add(p + " is read as a translation of the resources" + (translatedPage(path) != null ? ", and of a page" : ""));
         return null;
       }
       FetchedFile f = pf.altMap.get("page/" + path);
       if (f == null) {
         f = pf.altMap.get("pre-page/" + path);
       }
+      if (f != null && inPageTranslations(path)) {
+        // the build writes another page from it too
+        reason.add(p + " is both a page and in the translations of the pages");
+        return null;
+      }
       if (f == null) {
         f = translatedPage(path);
         if (f == null && inPageTranslations(path)) {
           reason.add(p + " is not the translation of a page");
+          return null;
+        }
+        if (f != null && scriptsReadTheIg && !isInFolder(path, Collections.singletonList(Utilities.path(pf.rootDir, "input")))) {
+          reason.add(p + " is a translation outside the input folder, which the template's scripts may read");
           return null;
         }
       }

@@ -358,7 +358,7 @@ public class Template {
   // what ends a folder name in a path (not a wildcard, or a property that names a folder: those may stand for any folder)
   private static final String FOLDER_END = "(?![^/\"'\\s<>;,)&])";
   // a reference to the input folder, and the folder in it, if one is named: ${folder.input}, ${ig.root}/input...
-  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir)\\}/input(?![\\w.-]))(/([^/\"*&;\\s<>$]+)" + FOLDER_END + ")?";
+  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir)\\}/input(?![\\w.-]))(/([^/\"*&;\\s<>$?\\[{]+)" + FOLDER_END + ")?";
   private static final java.util.regex.Pattern PROPERTY = java.util.regex.Pattern.compile(
       "<property\\s[^>]*?name=\"([^\"]+)\"[^>]*>");
   // a file set or the like that starts from the IG's root folder
@@ -366,10 +366,11 @@ public class Template {
       "<([\\w.:-]+)\\s[^>]*?(?<=\\s)dir=\"\\$\\{(?:ig\\.root|basedir)\\}/?\"[^>]*>");
   // a folder in the input folder named by its path from the IG's folder (input/pagecontent)
   private static final java.util.regex.Pattern INPUT_PATH = java.util.regex.Pattern.compile(
-      "(?<![\\w.-])input/([^/\"*&;\\s<>$]+)" + FOLDER_END);
-  // the whole input folder by its path from the IG's folder ("input", input/** or input/${x})
+      "(?<![\\w.-])input/([^/\"*&;\\s<>$?\\[{]+)" + FOLDER_END);
+  // the input folder by its path from the IG's folder, followed by something that isn't a folder name ("input",
+  // input/** or input/${x})
   private static final java.util.regex.Pattern INPUT_WHOLE = java.util.regex.Pattern.compile(
-      "(?<![\\w.-])input(?:/?[\"']|/\\*|/\\$)");
+      "(?<![\\w.-])input(?:/?[\"']|/)");
   // a property defined as the input folder by its path from the IG's folder
   private static final java.util.regex.Pattern INPUT_VALUE = java.util.regex.Pattern.compile(
       "\\s(?:value|location)=\"(?:\\./)?input/?\"");
@@ -474,8 +475,13 @@ public class Template {
     }
     java.util.regex.Matcher w = INPUT_WHOLE.matcher(src);
     while (w.find()) {
-      if (!inPropertyDefinition(src, w.start())) {
-        return "the template's script " + name + " reads " + w.group();
+      boolean folder = w.group().endsWith("/") && INPUT_PATH.matcher(src).region(w.start(), src.length()).lookingAt();
+      if (!folder && !inPropertyDefinition(src, w.start())) {
+        int end = w.end();
+        while (end < src.length() && "\"'<> \t\r\n".indexOf(src.charAt(end)) < 0) {
+          end++;
+        }
+        return "the template's script " + name + " reads " + src.substring(w.start(), end);
       }
     }
     java.util.regex.Matcher r = ROOT_DIR.matcher(src);
@@ -526,6 +532,11 @@ public class Template {
       alt.append('|').append(java.util.regex.Pattern.quote(a));
     }
     return java.util.regex.Pattern.compile(String.format(INPUT_REF, alt));
+  }
+
+  /** Whether the template runs a script while the IG is generated, before Jekyll */
+  public boolean hasOnGenerate() {
+    return targetOnGenerate != null;
   }
 
   public boolean hasPreProcess() {

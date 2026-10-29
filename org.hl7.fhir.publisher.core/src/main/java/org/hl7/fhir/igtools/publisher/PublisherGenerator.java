@@ -433,7 +433,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * Why a page-only rebuild (see PageRebuild) can't reuse what this build did, if it can't: these are the cases where
    * something before Jekyll could depend on the content of a page, or the output doesn't go where the rebuild expects it
    */
-  private void checkPageRebuild() throws IOException {
+  void checkPageRebuild() throws IOException {
+    if (!isNewML() && (pf.hasTranslations || !pf.translationLangs.isEmpty())) {
+      pageRebuild.notReusable("the IG is translated, but not in the multi-language template format");
+    }
     // the languages that each page is written in again from its translation (see generateFileOutput())
     List<String> langs = new ArrayList<>();
     for (String l : allLangs()) {
@@ -455,15 +458,16 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       pageRebuild.notReusable("the package wasn't built");
     }
     if (pf.template != null) {
-      String reason = pf.template.pageOnlyRebuildBlocker();
-      if (reason != null) {
-        pageRebuild.notReusable(reason);
-      }
       try {
+        String reason = pf.template.pageOnlyRebuildBlocker();
+        if (reason != null) {
+          pageRebuild.notReusable(reason);
+        }
         pageRebuild.setFolderBlockers(pf.template.pageFolderBlockers());
       } catch (IOException e) {
         pageRebuild.notReusable("the template's scripts can't be read (" + e.getMessage() + ")");
       }
+      pageRebuild.setScriptsReadTheIg(pf.template.hasOnGenerate());
     }
   }
 

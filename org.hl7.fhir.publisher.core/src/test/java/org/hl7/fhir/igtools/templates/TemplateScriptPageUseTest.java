@@ -5,16 +5,24 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Map;
 import java.util.Set;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 
 /**
  * Which template scripts stop a watch mode rebuild from treating a page edit as a page-only change: all of them, or
  * those in the folders the scripts read
  */
 class TemplateScriptPageUseTest {
+
+  @TempDir
+  Path dir;
 
   private static Set<String> folders(String src) {
     return Template.scriptFolderUse("onGenerate.xml", src).keySet();
@@ -80,6 +88,11 @@ class TemplateScriptPageUseTest {
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${dir.input}/inc*\"/>"));
     assertTrue(folders("<fileset dir=\"${dir.input}/inc*\"/>").isEmpty());
     assertNull(Template.scriptPageUse("onGenerate.xml", "<copy file=\"${dir.input}/data/x.json;${dir.input}/data/y.json\" todir=\"x\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${dir.input}/incl?des\"/>"));
+    assertTrue(folders("<fileset dir=\"${dir.input}/incl?des\"/>").isEmpty());
+    assertEquals("the template's script onGenerate.xml reads input/inc*", Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"input/inc*\"/>"));
+    assertTrue(folders("<fileset dir=\"input/inc*\"/>").isEmpty());
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"input/incl?des\"/>"));
   }
 
   @Test
@@ -97,6 +110,35 @@ class TemplateScriptPageUseTest {
     assertNull(Template.scriptPageUse("onGenerate.xml", in));
     assertEquals(Set.of("includes"), folders(in));
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"in\" value=\"input\"/><fileset dir=\"${in}\"/>"));
+  }
+
+  private Template template(String targets) throws IOException {
+    write("template/config.json", "{\"script\": \"scripts/ant.xml\", \"targets\": {" + targets + "}}");
+    write("template/scripts/ant.xml", "<project name=\"t\"><target name=\"onGenerate\"><copy file=\"${dir.input}/includes/menu.xml\" todir=\"x\"/></target>"
+        + "<target name=\"onJekyll\"/></project>");
+    return new Template(dir.toString(), true, null, null, false, false, false);
+  }
+
+  private void write(String path, String content) throws IOException {
+    Path p = dir.resolve(path);
+    Files.createDirectories(p.getParent());
+    Files.write(p, content.getBytes(StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void theFoldersTheTemplatesScriptsRead() throws IOException {
+    Template t = template("\"onGenerate\": \"onGenerate\"");
+    assertNull(t.pageOnlyRebuildBlocker());
+    assertEquals(Map.of("includes", "the template's script ant.xml reads (${dir.input}/includes)"), t.pageFolderBlockers());
+    assertTrue(t.hasOnGenerate());
+    // nothing runs before Jekyll
+    t = template("\"onLoad\": \"onGenerate\"");
+    assertNull(t.pageOnlyRebuildBlocker());
+    assertTrue(t.pageFolderBlockers().isEmpty());
+    // something runs just before Jekyll: that blocks all
+    t = template("\"onGenerate\": \"onGenerate\", \"onJekyll\": \"onJekyll\"");
+    assertNotNull(t.pageOnlyRebuildBlocker());
+    assertTrue(t.pageFolderBlockers().isEmpty());
   }
 
   @Test

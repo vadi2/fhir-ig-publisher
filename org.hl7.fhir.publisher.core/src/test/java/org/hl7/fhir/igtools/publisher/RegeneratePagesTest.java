@@ -210,6 +210,46 @@ class RegeneratePagesTest {
     }
   }
 
+  /** the rebuild state that the build sets up, from what it did */
+  private PageRebuild checked() throws IOException {
+    PageRebuild state = new PageRebuild();
+    state.setPf(pf);
+    gen.setPageRebuild(state);
+    pf.changeList.add(page);
+    gen.checkPageRebuild();
+    return state;
+  }
+
+  @Test
+  void theBuildTellsTheRebuildTheLanguagesOfThePages() throws Exception {
+    page.setPath(dir.resolve("input/pagecontent/index.md").toFile().getCanonicalPath());
+    pf.altMap.put("page/" + page.getPath(), page);
+    pf.fileList.add(page);
+    PageRebuild state = checked();
+    try {
+      state.beforeJekyll();
+      state.afterJekyll();
+      state.afterPackage();
+      state.finished();
+      assertEquals(null, state.getNotReusable());
+      List<Path> roots = Collections.singletonList(dir.resolve("input"));
+      SourceSnapshot before = SourceSnapshot.take(roots, null);
+      write("input/translations/ru/pagecontent/index.md", "# Главная страница");
+      List<String> reason = new ArrayList<>();
+      assertEquals(Collections.singletonList(page), state.pagesFor(SourceSnapshot.take(roots, before).changesSince(before), reason), reason.toString());
+    } finally {
+      state.discard();
+    }
+  }
+
+  @Test
+  void notForAnIgTranslatedTheOldWay() throws Exception {
+    gen = new PublisherGenerator(new PublisherSettings());
+    gen.setPf(pf);
+    pf.hasTranslations = true;
+    assertEquals("the IG is translated, but not in the multi-language template format", checked().getNotReusable());
+  }
+
   @Test
   void anIgThatIsntTranslated() throws Exception {
     PublisherSettings settings = new PublisherSettings();
