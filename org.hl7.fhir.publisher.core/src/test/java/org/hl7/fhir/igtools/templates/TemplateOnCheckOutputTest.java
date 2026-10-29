@@ -167,6 +167,9 @@ class TemplateOnCheckOutputTest {
     assertNotNull(why(out + "<target name=\"onCheck\"><echo file=\"${ig.template}/x.txt\">${toString:out}</echo></target>"));
     assertNotNull(why(out + "<target name=\"onCheck\"><replaceregexp file=\"${ig.template}/x.txt\" match=\"a\" replace=\"${ant.refid:out}\"/></target>"));
     assertNull(why(out + "<target name=\"onCheck\"><echo file=\"${ig.template}/x.txt\">${ig.root}: done</echo></target>"));
+    // a property that holds what it refers to (set when the script is read: what it refers to must be there then)
+    String held = why("<fileset id=\"here\" dir=\".\"/><property name=\"a\" value=\"${ant.refid:here}\"/><target name=\"onCheck\"><echo file=\"${ig.template}/x.txt\" message=\"${a}\"/></target>");
+    assertTrue(held != null && held.contains("property 'a'"), held);
   }
 
   @Test
