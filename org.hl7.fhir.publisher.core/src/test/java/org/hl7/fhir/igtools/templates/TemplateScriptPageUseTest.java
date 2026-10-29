@@ -244,6 +244,24 @@ class TemplateScriptPageUseTest {
   }
 
   @Test
+  void aPropertyFileInTheScriptsFolder() throws IOException {
+    write("template/config.json", "{\"script\": \"scripts/ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
+    write("template/scripts/x.properties", "root=${ig.root}\n");
+    write("template/scripts/ant.xml", "<project name=\"t\"><target name=\"onGenerate\"><property file=\"${ig.scripts}/x.properties\"/>"
+        + "<copy todir=\"${ig.temp}/md\"><fileset dir=\"${root}\" includes=\"**/*.md\"/></copy></target></project>");
+    Template t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertEquals("the template's script scripts/ant.xml reads everything under the IG's folder", t.pageOnlyRebuildBlocker());
+  }
+
+  @Test
+  void anAntFileByAnotherName() throws IOException {
+    write("template/config.json", "{\"script\": \"build.ant\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
+    write("template/build.ant", "<project name=\"t\"><target name=\"onGenerate\"><groovy>println 1</groovy></target></project>");
+    Template t = new Template(dir.toString(), true, null, null, false, false, false);
+    assertEquals("the template's script build.ant runs code (groovy), which isn't checked", t.pageOnlyRebuildBlocker());
+  }
+
+  @Test
   void codeInATemplate() throws IOException {
     write("template/config.json", "{\"script\": \"scripts/ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
     String[][] runs = {{"<script language=\"javascript\">project.setProperty(\"a\", \"b\");</script>", null},
