@@ -312,4 +312,29 @@ class TemplateScriptPageUseTest {
     assertNull(Template.scriptPageUse("onLoad.xml",
         "<fileset id=\"s\" dir=\"${ig.root}\"><include name=\"${folder.input}/examples/*spreadsheet.xml\"/></fileset>"));
   }
+
+  @Test
+  void aListOfFilesInAnotherFileUnderTheRootBlocksAll() {
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.root}\" includesfile=\"${ig.template}/pages.txt\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml",
+        "<fileset dir=\"${ig.root}\"><include name=\"a.xml\"/><includesfile name=\"${ig.template}/pages.txt\"/></fileset>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.root}\" excludes=\"temp/**\"/>"));
+  }
+
+  @Test
+  void aProgramGivenTheIgsFolder() {
+    String plantUml = "<java jar=\"${ig.scripts}/plantuml.jar\" fork=\"true\"><jvmarg line=\"-Dfile.encoding=UTF-8\"/>"
+        + "<arg line=\"-tsvg -o &quot;${basedir}/${dir.temp.includes}&quot; &quot;${basedir}/${folder.input}/images-source/**.plantuml&quot;\"/></java>";
+    assertNull(Template.scriptPageUse("onGenerate.xml", plantUml));
+    assertEquals(Set.of("images-source"), folders(plantUml));
+    for (String arg : new String[] {"<arg value=\"${ig.root}\"/>", "<arg value=\"${basedir}/\"/>", "<arg path=\".\"/>",
+        "<arg line=\"-i &quot;${ig.root}&quot; -o x\"/>", "<arg line=\"-i ${basedir} -o x\"/>", "<sysproperty key=\"d\" value=\"${ig.root}\"/>"}) {
+      assertEquals("the template's script onGenerate.xml gives the IG's folder to a program (<java>), which isn't read",
+          Template.scriptPageUse("onGenerate.xml", "<java jar=\"x.jar\">" + arg + "</java>"), arg);
+    }
+    assertNotNull(Template.scriptPageUse("onGenerate.xml",
+        "<property name=\"here\" location=\"${ig.root}\"/><java jar=\"x.jar\"><arg value=\"${here}\"/></java>"));
+    assertNull(Template.scriptPageUse("onGenerate.xml", "<java jar=\"x.jar\"><arg value=\"${ig.root}/temp/pages\"/></java>"));
+    assertNull(Template.scriptPageUse("onGenerate.xml", "<javac srcdir=\"x\"/><arg value=\"${ig.root}\"/>"));
+  }
 }

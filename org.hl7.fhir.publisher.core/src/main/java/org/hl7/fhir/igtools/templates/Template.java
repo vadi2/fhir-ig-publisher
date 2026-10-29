@@ -505,7 +505,8 @@ public class Template {
       "<(?:import|include)\\s[^>]*?(?<=\\s)file=\"([^\"]*)\"");
   // another build or a program that a script runs (ant, subant, exec, apply, or a task it defines), or an ant file it
   // imports from the class path: they aren't read. (Not java: the base templates run plantuml with it, on the folder
-  // their scripts name, so it would stop every page rebuild)
+  // their scripts name, so it would stop every page rebuild. One that is given the IG's folder itself is caught in
+  // scriptPageUse)
   private static final java.util.regex.Pattern SUB_BUILD = java.util.regex.Pattern.compile(
       "<(?:ant|subant|exec|apply|taskdef|typedef)[\\s/>]|<(?:import|include)\\s[^>]*?(?<=\\s)resource=\"");
   // a style sheet or script that an ant file uses: it must be one of the template's scripts, which are read
@@ -645,12 +646,32 @@ public class Template {
         int end = src.indexOf("</" + r.group(1) + ">", r.end());
         selection = end < 0 ? src.substring(r.start()) : src.substring(r.start(), end);
       }
-      if (!selection.contains("include") || selection.contains("**") || WILD_FIRST.matcher(selection).find()) {
+      if (!INCLUDES.matcher(selection).find() || INCLUDES_FILE.matcher(selection).find() || selection.contains("**")
+          || WILD_FIRST.matcher(selection).find()) {
         return "the template's script " + name + " reads everything under the IG's folder";
+      }
+    }
+    java.util.regex.Matcher j = JAVA.matcher(src);
+    while (j.find()) {
+      int end = j.group().endsWith("/>") ? j.end() : src.indexOf("</java>", j.end());
+      String task = end < 0 ? src.substring(j.start()) : src.substring(j.start(), end);
+      if (java.util.regex.Pattern.compile(String.format(ROOT_ARG, alternatives(roots))).matcher(task).find()) {
+        return "the template's script " + name + " gives the IG's folder to a program (<java>), which isn't read";
       }
     }
     return null;
   }
+
+  // what a selection under the IG's folder includes: an includes attribute or include element (a list in another file,
+  // includesfile, may name anything)
+  private static final java.util.regex.Pattern INCLUDES = java.util.regex.Pattern.compile(
+      "(?<=\\s)includes=\"|<include[\\s/>]");
+  private static final java.util.regex.Pattern INCLUDES_FILE = java.util.regex.Pattern.compile(
+      "(?<=\\s)includesfile=\"|<includesfile[\\s/>]");
+  // a program that a script runs with java, and the IG's folder itself (not a folder in it) given to it
+  private static final java.util.regex.Pattern JAVA = java.util.regex.Pattern.compile("<java[\\s/>][^>]*>");
+  private static final String ROOT_ARG =
+      "\\$\\{(?:ig\\.root|basedir%s)\\}/?(?![^\"'\\s&;<>])|(?<=\\s)\\w+=\"\\./?\"";
 
   // a pattern in an include whose first folder is a wildcard (*/includes/menu.xml), so it may be the input folder
   private static final java.util.regex.Pattern WILD_FIRST = java.util.regex.Pattern.compile(
