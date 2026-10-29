@@ -476,7 +476,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         checkPageRebuild();
       } catch (Exception e) {
         // only watch mode needs it: the build goes on
-        pageRebuild.notReusable("it couldn't be told if a page rebuild can follow this build (" + e.getMessage() + ")");
+        pageRebuild.notReusable("it couldn't be told if a page rebuild can follow this build (" + e + ")");
+        if (settings.isDebug()) {
+          e.printStackTrace();
+        }
       }
     }
     finishGenerate(null);
@@ -552,7 +555,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
         pageRebuild.setFolderBlockers(pf.template.pageFolderBlockers());
       } catch (IOException e) {
-        pageRebuild.notReusable("the template's scripts can't be read (" + e.getMessage() + ")");
+        pageRebuild.notReusable("the template's scripts can't be read (" + e + ")");
       }
     }
   }
