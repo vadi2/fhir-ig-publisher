@@ -73,6 +73,33 @@ class TemplateScriptPageUseTest {
   }
 
   @Test
+  void aFolderThatCantBeToldBlocksAll() {
+    // a property or a wildcard could be any folder
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${dir.input}/${folder.pages}\"/>"));
+    assertTrue(folders("<fileset dir=\"${dir.input}/${folder.pages}\"/>").isEmpty());
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${dir.input}/inc*\"/>"));
+    assertTrue(folders("<fileset dir=\"${dir.input}/inc*\"/>").isEmpty());
+    assertNull(Template.scriptPageUse("onGenerate.xml", "<copy file=\"${dir.input}/data/x.json;${dir.input}/data/y.json\" todir=\"x\"/>"));
+  }
+
+  @Test
+  void theInputFolderByItsPath() {
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"input\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"input/\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\".\" includes=\"input/**\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"input/${x}\"/>"));
+    assertNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"input-cache\"/>"));
+    // the base template defines it
+    String base = "<property name=\"folder.input\" value=\"input\"/><copy file=\"${folder.input}/data/x.json\" todir=\"x\"/>";
+    assertNull(Template.scriptPageUse("onGenerate.xml", base));
+    assertEquals(Set.of("data"), folders(base));
+    String in = "<property name=\"in\" value=\"input\"/><copy file=\"${in}/includes/menu.xml\" todir=\"x\"/>";
+    assertNull(Template.scriptPageUse("onGenerate.xml", in));
+    assertEquals(Set.of("includes"), folders(in));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"in\" value=\"input\"/><fileset dir=\"${in}\"/>"));
+  }
+
+  @Test
   void howTheScriptReadsTheFolder() {
     // the translated base template reads the menu for its QA check, and its own translations
     Map<String, String> use = Template.scriptFolderUse("ant.xml",

@@ -437,7 +437,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     // the languages that each page is written in again from its translation (see generateFileOutput())
     List<String> langs = new ArrayList<>();
     for (String l : allLangs()) {
-      if (!pf.defaultTranslationLang.equals(l)) {
+      if (!Objects.equals(pf.defaultTranslationLang, l)) {
         langs.add(l);
       }
     }
@@ -459,7 +459,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       if (reason != null) {
         pageRebuild.notReusable(reason);
       }
-      pageRebuild.setFolderBlockers(pf.template.pageFolderBlockers());
+      try {
+        pageRebuild.setFolderBlockers(pf.template.pageFolderBlockers());
+      } catch (IOException e) {
+        pageRebuild.notReusable("the template's scripts can't be read (" + e.getMessage() + ")");
+      }
     }
   }
 
@@ -485,7 +489,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
             throw new IOException("The page " + f.getPath() + " was not written to " + dst + " before");
           }
           File df = new File(dst);
-          before.add(df.exists() ? FileUtilities.fileToBytes(df) : null);
+          before.add(df.isFile() ? FileUtilities.fileToBytes(df) : null);
         }
         int count = pf.allOutputs.size();
         generateHtmlOutputs(f, false, null, null);
@@ -914,7 +918,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
       } catch (IOException e) {
         log("Exception generating page "+dst+" for "+o.getRelativePath()+" in "+ this.pf.tempDir +": "+e.getMessage());
-
+        if (regeneratingPages) {
+          // a page rebuild can't leave the page as it was: it falls back to a build
+          throw new IOException("The page " + f.getPath() + " could not be written to " + dst + ": " + e.getMessage(), e);
+        }
       }
     } else if (o.getProcessMode() == FetchedFile.PROCESS_XSLT) {
       String dst = Utilities.path(this.pf.tempDir, o.getRelativePath());

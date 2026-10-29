@@ -519,6 +519,30 @@ class PageRebuildTest {
   }
 
   @Test
+  void notForATranslationInAFolderTheTemplateReads() throws IOException {
+    translated();
+    prePage("includes/menu.xml", "<ul/>");
+    write("input/translations/ru/includes/menu.xml", "<ul><li>Меню</li></ul>");
+    Map<String, String> blockers = new HashMap<>();
+    blockers.put("includes", "the template's script ant.xml reads (${dir.input}/includes)");
+    blockers.put("intro-notes", "the template's script ant.xml names");
+    state.setFolderBlockers(blockers);
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/includes/menu.xml", "<ul><li>Меню 2</li></ul>")), reason));
+    assertTrue(reason.get(0).endsWith("menu.xml is in a folder that the template's script ant.xml reads (${dir.input}/includes)"), reason.get(0));
+    // a page folder that the template names
+    prePage("intro-notes/StructureDefinition-a-intro.md", "Intro");
+    write("input/translations/ru/intro-notes/StructureDefinition-a-intro.md", "Введение");
+    built();
+    reason.clear();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/intro-notes/StructureDefinition-a-intro.md", "Введение 2")), reason));
+    assertTrue(reason.get(0).endsWith("is in a folder that the template's script ant.xml names"), reason.get(0));
+    // and not the others
+    assertEquals(Collections.singletonList(page), state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная 2")), reason));
+  }
+
+  @Test
   void aLangFragmentIsPlainContent() {
     // it's an include of the fragment in the page's language, which is in the temp folder already
     assertTrue(PageRebuild.isPlainContent("{% lang-fragment ip-statements.xhtml %}"));

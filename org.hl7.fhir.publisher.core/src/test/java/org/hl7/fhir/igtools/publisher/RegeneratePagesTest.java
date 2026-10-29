@@ -2,6 +2,7 @@ package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -12,6 +13,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 
+import org.hl7.fhir.utilities.logging.ILoggingService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -28,6 +30,7 @@ class RegeneratePagesTest {
   private PublisherFields pf;
   private PublisherGenerator gen;
   private FetchedFile page;
+  private final List<String> log = new ArrayList<>();
 
   private void write(String path, String content) throws IOException {
     Path p = dir.resolve(path);
@@ -59,6 +62,16 @@ class RegeneratePagesTest {
     pf = new PublisherFields();
     pf.rootDir = dir.toString();
     pf.tempDir = dir.resolve("temp").toString();
+    pf.outputDir = dir.resolve("output").toString();
+    Files.createDirectories(dir.resolve("output"));
+    pf.logger = new ILoggingService() {
+      public void logMessage(String message) {
+        log.add(message);
+      }
+
+      public void logDebugMessage(LogCategory category, String message) {
+      }
+    };
     pf.defaultTranslationLang = "en";
     pf.translationLangs.addAll(Arrays.asList("ru", "uz"));
     pf.translationSources.addAll(Arrays.asList("input/translations/ru", "input/translations/uz"));
@@ -135,6 +148,66 @@ class RegeneratePagesTest {
   void notIfTheBuildDidntRecordItsOutput() {
     pf.allOutputs.remove(temp("_includes/ru/index.md").toLowerCase());
     assertThrows(IOException.class, this::regenerate);
+  }
+
+  @Test
+  void notIfThePageCantBeWritten() throws Exception {
+    // the last file the page is written to
+    Files.delete(dir.resolve("temp/_includes/index.md"));
+    Files.createDirectories(dir.resolve("temp/_includes/index.md"));
+    write("input/pagecontent/index.md", "# Home, edited");
+    IOException e = assertThrows(IOException.class, () -> gen.regeneratePages(Collections.singletonList(page)));
+    assertTrue(e.getMessage().contains("could not be written to " + temp("_includes/index.md")), e.getMessage());
+    assertTrue(log.get(0).startsWith("Exception generating page " + temp("_includes/index.md")), log.toString());
+  }
+
+  @Test
+  void aPageThatIsntAnInclude() throws Exception {
+    // written to the language's folder (as the pages of a path-pages folder are)
+    page.setRelativePath("index.md");
+    pf.allOutputs.clear();
+    page.getOutputNames().clear();
+    for (String s : Arrays.asList(temp("en/index.md"), temp("ru/index.md"), temp("uz/index.md"), temp("index.md"))) {
+      pf.allOutputs.add(s.toLowerCase());
+      page.getOutputNames().add(s);
+    }
+    write("temp/en/index.md", "# Home");
+    write("temp/ru/index.md", "# Главная");
+    write("temp/uz/index.md", "# Home");
+    write("temp/index.md", "# Home");
+    write("input/translations/ru/pagecontent/index.md", "# Главная страница");
+    assertEquals(Collections.singletonList(temp("ru/index.md")), regenerate());
+    assertEquals("# Главная страница", read("temp/ru/index.md"));
+  }
+
+  @Test
+  void anEditToATranslationThroughTheRebuild() throws Exception {
+    // what the watch session does with it: find the page, write it again, and put the temp folder back for Jekyll
+    page.setPath(dir.resolve("input/pagecontent/index.md").toFile().getCanonicalPath());
+    pf.altMap.put("page/" + page.getPath(), page);
+    pf.fileList.add(page);
+    PageRebuild state = new PageRebuild();
+    state.setPf(pf);
+    state.setPageLanguages(Arrays.asList("ru", "uz"));
+    try {
+      state.beforeJekyll();
+      state.afterJekyll();
+      state.afterPackage();
+      state.finished();
+      List<Path> roots = Collections.singletonList(dir.resolve("input"));
+      SourceSnapshot before = SourceSnapshot.take(roots, null);
+      write("input/translations/ru/pagecontent/index.md", "# Главная страница");
+      List<String> reason = new ArrayList<>();
+      List<FetchedFile> pages = state.pagesFor(SourceSnapshot.take(roots, before).changesSince(before), reason);
+      assertEquals(Collections.singletonList(page), pages, reason.toString());
+      List<String> written = gen.regeneratePages(pages);
+      assertEquals(Collections.singletonList(temp("_includes/ru/index.md")), written);
+      // the other files the page is written to are as they were
+      state.prepareTemp(written);
+      assertEquals("# Главная страница", read("temp/_includes/ru/index.md"));
+    } finally {
+      state.discard();
+    }
   }
 
   @Test

@@ -355,8 +355,10 @@ public class Template {
     return !(v == null || v.isJsonNull() || Utilities.noString(v.asString()));
   }
 
+  // what ends a folder name in a path (not a wildcard, or a property that names a folder: those may stand for any folder)
+  private static final String FOLDER_END = "(?![^/\"'\\s<>;,)&])";
   // a reference to the input folder, and the folder in it, if one is named: ${folder.input}, ${ig.root}/input...
-  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir)\\}/input(?![\\w.-]))(/([^/\"*&;\\s<>]+))?";
+  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir)\\}/input(?![\\w.-]))(/([^/\"*&;\\s<>$]+)" + FOLDER_END + ")?";
   private static final java.util.regex.Pattern PROPERTY = java.util.regex.Pattern.compile(
       "<property\\s[^>]*?name=\"([^\"]+)\"[^>]*>");
   // a file set or the like that starts from the IG's root folder
@@ -364,7 +366,13 @@ public class Template {
       "<([\\w.:-]+)\\s[^>]*?(?<=\\s)dir=\"\\$\\{(?:ig\\.root|basedir)\\}/?\"[^>]*>");
   // a folder in the input folder named by its path from the IG's folder (input/pagecontent)
   private static final java.util.regex.Pattern INPUT_PATH = java.util.regex.Pattern.compile(
-      "(?<![\\w.-])input/([^/\"*&;\\s<>$]+)");
+      "(?<![\\w.-])input/([^/\"*&;\\s<>$]+)" + FOLDER_END);
+  // the whole input folder by its path from the IG's folder ("input", input/** or input/${x})
+  private static final java.util.regex.Pattern INPUT_WHOLE = java.util.regex.Pattern.compile(
+      "(?<![\\w.-])input(?:/?[\"']|/\\*|/\\$)");
+  // a property defined as the input folder by its path from the IG's folder
+  private static final java.util.regex.Pattern INPUT_VALUE = java.util.regex.Pattern.compile(
+      "\\s(?:value|location)=\"(?:\\./)?input/?\"");
   // the folders that only pages come from: a script that names one may read them
   private static final String[] PAGE_FOLDER_NAMES = {"pagecontent", "intro-notes"};
 
@@ -460,10 +468,14 @@ public class Template {
     java.util.regex.Pattern inputRef = inputRef(src);
     java.util.regex.Matcher m = inputRef.matcher(src);
     while (m.find()) {
-      int tag = src.lastIndexOf('<', m.start());
-      boolean inPropertyDefinition = tag >= 0 && src.startsWith("<property", tag) && src.indexOf('>', tag) > m.start();
-      if (m.group(3) == null && !inPropertyDefinition) {
+      if (m.group(3) == null && !inPropertyDefinition(src, m.start())) {
         return "the template's script " + name + " reads " + m.group();
+      }
+    }
+    java.util.regex.Matcher w = INPUT_WHOLE.matcher(src);
+    while (w.find()) {
+      if (!inPropertyDefinition(src, w.start())) {
+        return "the template's script " + name + " reads " + w.group();
       }
     }
     java.util.regex.Matcher r = ROOT_DIR.matcher(src);
@@ -481,6 +493,11 @@ public class Template {
     return null;
   }
 
+  private static boolean inPropertyDefinition(String src, int i) {
+    int tag = src.lastIndexOf('<', i);
+    return tag >= 0 && src.startsWith("<property", tag) && src.indexOf('>', tag) > i;
+  }
+
   /**
    * The pattern for a reference to the input folder in src, including through the properties src defines as the input
    * folder (e.g. &lt;property name="in" value="${folder.input}"/&gt; makes ${in} one)
@@ -494,7 +511,7 @@ public class Template {
       java.util.regex.Matcher p = PROPERTY.matcher(src);
       while (p.find()) {
         java.util.regex.Matcher m = ref.matcher(p.group());
-        if (m.find() && m.group(3) == null && !aliases.contains(p.group(1))) {
+        if ((m.find() && m.group(3) == null || INPUT_VALUE.matcher(p.group()).find()) && !aliases.contains(p.group(1))) {
           aliases.add(p.group(1));
           more = true;
         }

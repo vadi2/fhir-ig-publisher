@@ -333,6 +333,12 @@ public class PageRebuild {
         reason.add(p + " is in a folder that " + blocker);
         return null;
       }
+      // for an edit to a translation, the page's own source too
+      blocker = folderBlocker(new File(f.getPath()).getCanonicalPath());
+      if (blocker != null) {
+        reason.add(p + " is the translation of a page in a folder that " + blocker);
+        return null;
+      }
       for (FetchedFile.Output o : f.getOutputs()) {
         if (o.getProcessMode() != FetchedFile.PROCESS_NONE) {
           reason.add(p + " is transformed");
@@ -408,18 +414,25 @@ public class PageRebuild {
     return pf.altMap.get("page/" + f.getPath()) == f || pf.altMap.get("pre-page/" + f.getPath()) == f;
   }
 
-  /** How the template reads the folder in the input folder that the file is in, if it does */
+  /**
+   * How the template reads a folder that the file is in, if it does: any folder on its path from the IG's folder that
+   * has the name of one the template reads (so the same folder in a translation source too, e.g.
+   * input/translations/ru/includes)
+   */
   private String folderBlocker(String path) throws IOException {
     if (folderBlockers.isEmpty()) {
       return null;
     }
-    String input = new File(Utilities.path(pf.rootDir, "input")).getCanonicalPath() + File.separator;
-    if (!path.startsWith(input)) {
-      return null;
+    String root = new File(pf.rootDir).getCanonicalPath() + File.separator;
+    String rest = path.startsWith(root) ? path.substring(root.length()) : path;
+    String[] parts = rest.split(java.util.regex.Pattern.quote(File.separator));
+    for (int i = 0; i < parts.length - 1; i++) {
+      String blocker = folderBlockers.get(parts[i]);
+      if (blocker != null) {
+        return blocker;
+      }
     }
-    String rest = path.substring(input.length());
-    int i = rest.indexOf(File.separatorChar);
-    return i < 0 ? null : folderBlockers.get(rest.substring(0, i));
+    return null;
   }
 
   private static boolean isInFolder(String path, Collection<String> folders) throws IOException {
