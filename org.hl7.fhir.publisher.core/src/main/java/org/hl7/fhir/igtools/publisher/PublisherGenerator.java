@@ -541,6 +541,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       // they are made again only in a build, from files that may be anywhere
       pageRebuild.notReusable("the IG has page factories");
     }
+    // (the loader has taken out the folders that don't exist, such as the default pages folder)
     for (String d : pf.pagesDirs) {
       if (!isWatched(d)) {
         pageRebuild.notReusable("the pages in " + d + " are outside the folders that are watched");
@@ -1066,7 +1067,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
-  private void generateHtmlOutputs(FetchedFile f, boolean regen, DBBuilder db, String lang) throws Exception {
+  void generateHtmlOutputs(FetchedFile f, boolean regen, DBBuilder db, String lang) throws Exception {
     if (this.settings.isGenerationOff()) {
       return;
     }
