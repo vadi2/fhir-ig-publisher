@@ -357,8 +357,9 @@ public class Template {
 
   // what ends a folder name in a path (not a wildcard, or a property that names a folder: those may stand for any folder)
   private static final String FOLDER_END = "(?![^/\"'\\s<>;,)&])";
-  // a reference to the input folder, and the folder in it, if one is named: ${folder.input}, ${ig.root}/input...
-  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir%s)\\}/input(?![\\w.-]))(/([^/\"'*&;,()\\s<>$?\\[{]+)" + FOLDER_END + ")?";
+  // a reference to the input folder (or fsh-generated, which pages come from too), and the folder in it, if one is
+  // named: ${folder.input}, ${ig.root}/input...
+  private static final String INPUT_REF = "(\\$\\{(?:folder\\.input|dir\\.input%s)\\}|\\$\\{(?:ig\\.root|basedir%s)\\}/(?:input|fsh-generated)(?![\\w.-]))(/([^/\"'*&;,()\\s<>$?\\[{]+)" + FOLDER_END + ")?";
   private static final java.util.regex.Pattern PROPERTY = java.util.regex.Pattern.compile(
       "<property\\s[^>]*?name=\"([^\"]+)\"[^>]*>");
   // a file set or the like that starts from the IG's root folder
@@ -367,19 +368,20 @@ public class Template {
   // a property defined as the IG's folder (${ig.root}, ${basedir} or .), by group 1 the property it's defined from
   private static final java.util.regex.Pattern ROOT_VALUE = java.util.regex.Pattern.compile(
       "\\s(?:value|location)=\"(?:\\$\\{([^}]+)\\}|\\.)/?\"");
-  // a path that goes up out of the template's folder, which is in the IG's folder
-  private static final java.util.regex.Pattern OUT_OF_TEMPLATE = java.util.regex.Pattern.compile(
-      "\\$\\{ig\\.(?:template|scripts)\\}(?:/[^/\"'\\s<>]*)*?/\\.\\.(?![^/\"'\\s<>])");
+  // a path that goes up out of a folder (by group 1, the property it starts from, if it does): all but the IG's
+  // folder are in the IG's folder
+  private static final java.util.regex.Pattern PARENT = java.util.regex.Pattern.compile(
+      "(?:\\$\\{([^}]+)\\}|(?<![\\w.$}/-])(?!\\.\\.(?![^/\"'\\s<>]))[\\w.-]+)((?:/[^/\"'\\s<>]*)*?)/\\.\\.(?![^/\"'\\s<>])");
   // a folder in the input folder named by its path from the IG's folder (input/pagecontent)
   private static final java.util.regex.Pattern INPUT_PATH = java.util.regex.Pattern.compile(
-      "(?<![\\w.-])input/([^/\"'*&;,()\\s<>$?\\[{]+)" + FOLDER_END);
+      "(?<![\\w.-])(?:input|fsh-generated)/([^/\"'*&;,()\\s<>$?\\[{]+)" + FOLDER_END);
   // the input folder by its path from the IG's folder, followed by something that isn't a folder name ("input",
   // input/** or input/${x})
   private static final java.util.regex.Pattern INPUT_WHOLE = java.util.regex.Pattern.compile(
-      "(?<![\\w.-])input(?:/?[\"']|/)");
+      "(?<![\\w.-])(?:input|fsh-generated)(?:/?[\"']|/)");
   // a property defined as the input folder by its path from the IG's folder
   private static final java.util.regex.Pattern INPUT_VALUE = java.util.regex.Pattern.compile(
-      "\\s(?:value|location)=\"(?:\\./)?input/?\"");
+      "\\s(?:value|location)=\"(?:\\./)?(?:input|fsh-generated)/?\"");
   // the folders that only pages come from: a script that names one may read them
   private static final String[] PAGE_FOLDER_NAMES = {"pagecontent", "intro-notes"};
 
@@ -502,7 +504,8 @@ public class Template {
   private static final java.util.regex.Pattern ANT_FILE = java.util.regex.Pattern.compile(
       "<(?:import|include)\\s[^>]*?(?<=\\s)file=\"([^\"]*)\"");
   // another build or a program that a script runs (ant, subant, exec, apply, or a task it defines), or an ant file it
-  // imports from the class path: they aren't read
+  // imports from the class path: they aren't read. (Not java: the base templates run plantuml with it, on the folder
+  // their scripts name, so it would stop every page rebuild)
   private static final java.util.regex.Pattern SUB_BUILD = java.util.regex.Pattern.compile(
       "<(?:ant|subant|exec|apply|taskdef|typedef)[\\s/>]|<(?:import|include)\\s[^>]*?(?<=\\s)resource=\"");
   // a style sheet or script that an ant file uses: it must be one of the template's scripts, which are read
@@ -624,11 +627,17 @@ public class Template {
         return "the template's script " + name + " reads " + src.substring(w.start(), end);
       }
     }
-    java.util.regex.Matcher o = OUT_OF_TEMPLATE.matcher(src);
-    if (o.find()) {
-      return "the template's script " + name + " reads " + o.group() + ", which is in the IG's folder";
+    Set<String> roots = rootAliases(all);
+    java.util.regex.Matcher o = PARENT.matcher(src);
+    while (o.find()) {
+      // straight up out of the IG's folder (${ig.root}/../schemas) is outside it
+      boolean outside = o.group(1) != null && o.group(2).isEmpty()
+          && (o.group(1).equals("ig.root") || o.group(1).equals("basedir") || roots.contains(o.group(1)));
+      if (!outside) {
+        return "the template's script " + name + " reads " + o.group() + ", which may be the IG's folder";
+      }
     }
-    java.util.regex.Matcher r = java.util.regex.Pattern.compile(String.format(ROOT_DIR, alternatives(rootAliases(all)))).matcher(src);
+    java.util.regex.Matcher r = java.util.regex.Pattern.compile(String.format(ROOT_DIR, alternatives(roots))).matcher(src);
     while (r.find()) {
       // what it selects: the includes attribute, or what's in the element
       String selection = r.group();

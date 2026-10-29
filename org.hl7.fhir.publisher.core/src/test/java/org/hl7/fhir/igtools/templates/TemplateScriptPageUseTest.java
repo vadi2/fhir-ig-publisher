@@ -206,6 +206,19 @@ class TemplateScriptPageUseTest {
     assertNull(Template.scriptPageUse("onGenerate.xml", menu));
     assertEquals(Set.of("includes"), folders(menu));
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<property name=\"root\" value=\"${ig.root}\"/><fileset dir=\"${root}/input\"/>"));
+    // fsh-generated, which pages come from too
+    String fsh = "<xslt basedir=\"${ig.root}\" destdir=\"x\" style=\"s.xslt\"><include name=\"fsh-generated/includes/menu.xml\"/></xslt>";
+    assertNull(Template.scriptPageUse("onGenerate.xml", fsh));
+    assertEquals(Set.of("includes"), folders(fsh));
+    assertEquals(Set.of("includes"), folders("<copy file=\"${ig.root}/fsh-generated/includes/menu.xml\" todir=\"x\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.root}/fsh-generated\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<copy todir=\"x\"><fileset dir=\"fsh-generated\"/></copy>"));
+    // a path that goes up out of a folder in the IG's folder
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.temp}/..\" includes=\"**/*.md\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.root}/temp/..\" includes=\"**/*.md\"/>"));
+    assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"temp/..\" includes=\"**/*.md\"/>"));
+    // but not one out of the IG's folder
+    assertNull(Template.scriptPageUse("onGenerate.xml", "<xmlcatalog><dtd location=\"${ig.root}/../schemas/x.dtd\"/></xmlcatalog>"));
     // the template's folder is in the IG's folder
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<fileset dir=\"${ig.template}/..\" includes=\"**/*.md\"/>"));
     assertNotNull(Template.scriptPageUse("onGenerate.xml", "<copy file=\"${ig.scripts}/../../input/includes/menu.xml\" todir=\"x\"/>"));
