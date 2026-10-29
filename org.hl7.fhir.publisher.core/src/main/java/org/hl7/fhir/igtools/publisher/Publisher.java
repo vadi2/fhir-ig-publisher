@@ -341,6 +341,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       // then a complete build tells
       pages = null;
       reason.add(0, "the changes couldn't be checked: " + e);
+      if (settings.isDebug() || !(e instanceof IOException)) {
+        e.printStackTrace();
+      }
     }
     if (pages == null) {
       log("Rapido Mode: Not a Page Rebuild (" + reason.get(0) + ")");
