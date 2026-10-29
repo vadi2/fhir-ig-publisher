@@ -170,6 +170,23 @@ class TemplateScriptPageUseTest {
   }
 
   @Test
+  void theStyleSheetsAndScriptsThatTheAntFileUses() throws IOException {
+    write("template/config.json", "{\"script\": \"scripts/ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
+    write("template/scripts/s.xslt", "<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\"/>");
+    write("template/xslt/x.xslt", "<xsl:stylesheet version=\"1.0\" xmlns:xsl=\"http://www.w3.org/1999/XSL/Transform\"/>");
+    String[][] uses = {{"${ig.scripts}/s.xslt", null}, {"${ig.template}/xslt/x.xslt", "uses ${ig.template}/xslt/x.xslt"},
+        {"${ig.scripts}/gone.xslt", "uses ${ig.scripts}/gone.xslt"},
+        // a path in the IG's folder: nothing there reads nothing, but a file there isn't read
+        {"{$ig.scripts}/s.xslt", null}, {"template/xslt/x.xslt", "uses template/xslt/x.xslt"}};
+    for (String[] u : uses) {
+      write("template/scripts/ant.xml", "<project name=\"t\"><target name=\"onGenerate\"><xslt in=\"a.xml\" out=\"b.xml\" style=\"" + u[0]
+          + "\"/></target></project>");
+      Template t = new Template(dir.toString(), true, null, null, false, false, false);
+      assertEquals(u[1] == null ? null : "the template's script scripts/ant.xml " + u[1] + ", which isn't read", t.pageOnlyRebuildBlocker(), u[0]);
+    }
+  }
+
+  @Test
   void twoScriptsWithTheSameFileName() throws IOException {
     write("template/config.json", "{\"script\": \"ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}}");
     write("template/ant.xml", "<project name=\"t\"><target name=\"onGenerate\"><copy file=\"${dir.input}/includes/menu.xml\" todir=\"x\"/></target></project>");

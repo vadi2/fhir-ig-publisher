@@ -497,8 +497,14 @@ public class Template {
   // another build that a script runs (ant, subant), or an ant file it imports from the class path: they aren't read
   private static final java.util.regex.Pattern SUB_BUILD = java.util.regex.Pattern.compile(
       "<(?:ant|subant)[\\s/>]|<(?:import|include)\\s[^>]*?(?<=\\s)resource=\"");
+  // a style sheet or script that an ant file uses: it must be one of the template's scripts, which are read
+  private static final java.util.regex.Pattern USED_FILE = java.util.regex.Pattern.compile(
+      "<(?:xslt|style)\\s[^>]*?(?<=\\s)style=\"([^\"]*)\"|<script\\s[^>]*?(?<=\\s)src=\"([^\"]*)\"");
 
-  /** An ant file that a script runs or imports and that isn't one of the template's scripts, if there is one */
+  /**
+   * An ant file that a script runs or imports, or a style sheet or script it uses, that isn't one of the template's
+   * scripts, if there is one
+   */
   private String unreadAntFile(Map<java.nio.file.Path, String> files) throws IOException {
     for (Map.Entry<java.nio.file.Path, String> e : files.entrySet()) {
       java.util.regex.Matcher m = ANT_FILE.matcher(e.getValue());
@@ -511,6 +517,22 @@ public class Template {
       java.util.regex.Matcher b = SUB_BUILD.matcher(e.getValue());
       if (b.find()) {
         return "the template's script " + scriptName(e.getKey()) + " runs another build (" + b.group().trim() + "), which isn't read";
+      }
+      if (e.getKey().getFileName().toString().endsWith(".xml")) {
+        java.util.regex.Matcher u = USED_FILE.matcher(e.getValue());
+        while (u.find()) {
+          String f = u.group(1) != null ? u.group(1) : u.group(2);
+          if (!f.contains("${") && !new File(f).isAbsolute() && !new File(Utilities.path(root, f)).exists()) {
+            // a path without properties is in the IG's folder (the ant project's basedir): if there's no such file,
+            // the task reads nothing (fhir2.base.template has style="{$ig.scripts}/..." with failonerror="false")
+            continue;
+          }
+          String rest = f.startsWith("${ig.scripts}/") ? f.substring("${ig.scripts}/".length()) : null;
+          if (rest == null || rest.contains("$")
+              || !files.containsKey(new File(Utilities.path(templateDir, "scripts", rest)).getCanonicalFile().toPath())) {
+            return "the template's script " + scriptName(e.getKey()) + " uses " + f + ", which isn't read";
+          }
+        }
       }
     }
     return null;
