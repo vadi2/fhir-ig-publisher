@@ -364,9 +364,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       finishIg(state.getUncsList(), buildTracker, tts);
     } catch (Exception | Error e) {
       // (such as a page written twice: but running out of memory isn't something a complete build would help with)
-      if (e instanceof VirtualMachineError && !(e instanceof StackOverflowError)) {
+      if (BuildFailures.isFatal(e)) {
         state.discard();
-        throw (VirtualMachineError) e;
+        throw (Error) e;
       }
       log("Rapido Mode: the page rebuild failed (" + e + "), so doing a complete build");
       // a write that fails is expected to be a reason to build again; anything else may be a bug
