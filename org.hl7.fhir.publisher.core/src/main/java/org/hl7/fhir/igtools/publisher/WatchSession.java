@@ -20,12 +20,13 @@ import org.hl7.fhir.igtools.templates.Template;
 /**
  * What watch mode (-watch) keeps from one build to the next:
  * <ul>
- *   <li>the content of the watched source files when the current build started, to decide whether anything changed
- *   since, and what</li>
+ *   <li>the content of the watched source files when the current and the previous build started, to decide whether
+ *   anything changed since, and what</li>
  *   <li>the source files as the last SUSHI run saw them, so SUSHI is not run again when only page content changed</li>
  * </ul>
  *
- * Every rebuild is still a complete build: only work whose inputs are known not to have changed is skipped.
+ * A rebuild is a complete build, except when only the content of plain pages changed: then the pages are rendered again
+ * on top of what the last build left (see PageRebuild).
  */
 public class WatchSession {
 
@@ -45,6 +46,7 @@ public class WatchSession {
   private final List<Path> notMonitored = new ArrayList<>();
 
   private SourceSnapshot buildStart;
+  private SourceSnapshot previousBuildStart;
   private SourceSnapshot sushiInputs;
   /** while the template writes to its folder, the folder as it was before */
   private OutputWindow output;
@@ -96,9 +98,9 @@ public class WatchSession {
 
   /** Records the content of the watched files as the build that is starting will see them */
   public void startBuild() throws IOException {
-    SourceSnapshot last = buildStart;
+    previousBuildStart = buildStart;
     buildStart = SourceSnapshot.take(watched, buildStart);
-    countWhatStartedThisBuild(last);
+    countWhatStartedThisBuild(previousBuildStart);
   }
 
   /**
@@ -129,6 +131,14 @@ public class WatchSession {
         }
       }
     }
+  }
+
+  /**
+   * What changed in the watched files between the start of the previous build (with what SUSHI generated in it) and
+   * the start of the current one; null if this is the first build
+   */
+  public SourceSnapshot.Changes changesSincePreviousBuild() {
+    return previousBuildStart == null ? null : buildStart.changesSince(previousBuildStart);
   }
 
   /**

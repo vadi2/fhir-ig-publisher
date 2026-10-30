@@ -171,6 +171,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   private PublisherIGLoader loader;
   private PublisherProcessor processor;
   private PublisherGenerator generator;
+  // watch mode: what the last build kept for a page-only rebuild (see PageRebuild), or null
+  private PageRebuild pageRebuild;
 
   public Publisher() {
     super();
@@ -230,10 +232,15 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         } else {
           session.startBuild();
           try {
-            if (!first) {
-              resetForRebuild(cliNoNarratives, cliNoValidate);
+            // a page rebuild goes on from where the last build was, so the state it left is kept for it
+            if (!rebuildPages(session)) {
+              if (!first) {
+                resetForRebuild(cliNoNarratives, cliNoValidate);
+              }
+              pageRebuild = new PageRebuild();
+              build(rootDir);
+              pageRebuild.finished();
             }
-            build(rootDir);
           } catch (Exception | Error e) {
             if (BuildFailures.isFatal(e)) {
               throw e;
@@ -259,6 +266,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         }
       } while (session != null && waitForChanges(monitor, session));
     } finally {
+      discardPageRebuild();
       if (monitor != null) {
         monitor.close();
       }
@@ -303,11 +311,86 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     }
   }
 
+  private void discardPageRebuild() {
+    if (pageRebuild != null) {
+      pageRebuild.discard();
+      pageRebuild = null;
+    }
+    generator.setPageRebuild(null);
+  }
+
+  /**
+   * Watch mode: if only the content of some pages changed since the last build, and what that build kept allows it (see
+   * PageRebuild), copies them to the temp folder again and does what comes after (Jekyll, the html checks, qa) without
+   * doing the rest of the build again. Returns false if it can't, or if it fails: then a complete build is needed
+   */
+  boolean rebuildPages(WatchSession session) throws IOException {
+    PageRebuild state = pageRebuild;
+    pageRebuild = null;
+    generator.setPageRebuild(null);
+    if (state == null) {
+      return false;
+    }
+    List<String> reason = new ArrayList<>();
+    List<FetchedFile> pages;
+    try {
+      pages = state.pagesFor(session.changesSincePreviousBuild(), reason);
+    } catch (Exception e) {
+      // then a complete build tells
+      pages = null;
+      reason.add(0, "the changes couldn't be checked: " + e);
+      if (settings.isDebug() || !(e instanceof IOException)) {
+        e.printStackTrace();
+      }
+    }
+    if (pages == null) {
+      log("Rapido Mode: Complete Build (" + reason.get(0) + ")");
+      state.discard();
+      return false;
+    }
+    log("Rapido Mode: Page Rebuild (" + pages.size() + " " + (pages.size() == 1 ? "page" : "pages") + " changed)");
+    pf = state.getPf();
+    loader.setPf(pf);
+    processor.setPf(pf);
+    generator.setPf(pf);
+    pf.tt = new TimeTracker();
+    try {
+      IniFile buildTracker = new IniFile(Utilities.path(pf.vsCache, ".build-tracker.ini"));
+      TimeTracker.Session tts = pf.tt.start("generate");
+      state.restore();
+      log("Generating Outputs in " + pf.outputDir);
+      state.prepareTemp(generator.regeneratePages(pages));
+      generator.finishGenerate(state);
+      finishIg(state.getUncsList(), buildTracker, tts);
+    } catch (Exception | Error e) {
+      // (such as a page written twice: but running out of memory isn't something a complete build would help with)
+      if (BuildFailures.isFatal(e)) {
+        state.discard();
+        throw (Error) e;
+      }
+      log("Rapido Mode: the page rebuild failed (" + e + "), so doing a complete build");
+      // a write that fails is expected to be a reason to build again; anything else may be a bug
+      if (settings.isDebug() || !(e instanceof IOException)) {
+        e.printStackTrace();
+      }
+      state.discard();
+      return false;
+    } finally {
+      saveTerminologyCache();
+    }
+    pageRebuild = state;
+    return true;
+  }
+
   private void build(String rootDir) throws Exception {
     pf = new PublisherFields();
     loader.setPf(pf);
     processor.setPf(pf);
     generator.setPf(pf);
+    if (pageRebuild != null) {
+      pageRebuild.setPf(pf);
+      generator.setPageRebuild(pageRebuild);
+    }
     pf.resolver = this;
     setLogger(this);
 
@@ -543,35 +626,11 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       }
       log("Generating Outputs in "+ pf.outputDir);
       Map<String, String> uncsList = scanForUnattributedCodeSystems();
-      generator.generate();
-      clean();
-      pf.dependentIgFinder.finish(pf.outputDir, pf.sourceIg.present());
-      List<FetchedResource> fragments = new ArrayList<>();
-      listFragments(fragments);
-      checkForSnomedVersion();
-      if (pf.txLog != null) {
-        if (ManagedFileAccess.file(pf.txLog).exists()) {
-           FileUtilities.copyFile(pf.txLog, Utilities.path(pf.rootDir, "output", "qa-tx.html"));
-        }
+      if (pageRebuild != null) {
+        pageRebuild.setUncsList(uncsList);
       }
-      deleteDuplicateMessages();
-      ValidationPresenter val = new ValidationPresenter(pf.version, workingVersion(), pf.igpkp, pf.rootDir, pf.npmName,
-          IGVersionUtil.getVersion(), fetchCurrentIGPubVersion(), pf.realmRules, pf.previousVersionComparator, pf.ipaComparator, pf.ipsComparator,
-          new DependencyRenderer(pf.pcm, pf.outputDir, pf.npmName, pf.templateManager, pf.dependencyList, pf.context, pf.markdownEngine, pf.rc, pf.specMaps, pf.effectiveBaseIg).setFetchedPackageLists(pf.fetchedPackageLists).render(pf.getEffectiveBaseIg(), true, false, false), new HTAAnalysisRenderer(pf.context, pf.outputDir, pf.markdownEngine).render(pf.packageId(), pf.fileList, pf.publishedIg.present()),
-          new PublicationChecker(pf.repoRoot, pf.historyPage, pf.markdownEngine, findReleaseLabelString(), pf.getEffectiveBaseIg(), pf.relatedIGs).check(), renderGlobals(), pf.copyrightYear, pf.context, scanForR5Extensions(), pf.modifierExtensions,
-          generateDraftDependencies(), pf.noNarrativeResources, pf.noValidateResources, settings.isValidationOff(), settings.isGenerationOff(), pf.dependentIgFinder, pf.context.getTxClientManager(),
-          fragments, makeLangInfo(), pf.relatedIGs);
-      val.setValidationFlags(pf.hintAboutNonMustSupport, pf.anyExtensionsAllowed, pf.checkAggregation, pf.autoLoad, pf.showReferenceMessages, pf.noExperimentalContent, pf.displayWarnings);
-      FileUtilities.stringToFile(new IPViewRenderer(uncsList, pf.inspector.getExternalReferences(), pf.inspector.getImageRefs(), pf.inspector.getCopyrights(),
-              pf.ipStmt, pf.inspector.getVisibleFragments().get("1"), pf.context).execute(), Utilities.path(pf.outputDir, "qa-ipreview.html"));
-      tts.end();
-      log("Built. "+ pf.tt.report());
-      log("Generating QA");
-      log("Validation output in "+val.generate(pf.sourceIg.getName(), pf.errors, pf.fileList, Utilities.path(settings.getDestDir() != null ? settings.getDestDir() : pf.outputDir, "qa.html"), pf.suppressedMessages, pinSummary()));
-      recordOutcome(null, val);
-      buildTracker.setBooleanProperty("status", "complete", true, null);
-      buildTracker.save();
-      log("Finished @ "+nowString()+". Max Memory Used = "+Utilities.describeSize(pf.maxMemory)+logSummary());
+      generator.generate();
+      finishIg(uncsList, buildTracker, tts);
     } catch (Exception e) {
       try {
         recordOutcome(e, null);
@@ -586,6 +645,38 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       // make the next attempt ask for all of it again.
       saveTerminologyCache();
     }
+  }
+
+  /** What the build does once the output has been generated and checked: the IG wide qa pages, and qa.html */
+  private void finishIg(Map<String, String> uncsList, IniFile buildTracker, TimeTracker.Session tts) throws Exception {
+    clean();
+    pf.dependentIgFinder.finish(pf.outputDir, pf.sourceIg.present());
+    List<FetchedResource> fragments = new ArrayList<>();
+    listFragments(fragments);
+    checkForSnomedVersion();
+    if (pf.txLog != null) {
+      if (ManagedFileAccess.file(pf.txLog).exists()) {
+         FileUtilities.copyFile(pf.txLog, Utilities.path(pf.rootDir, "output", "qa-tx.html"));
+      }
+    }
+    deleteDuplicateMessages();
+    ValidationPresenter val = new ValidationPresenter(pf.version, workingVersion(), pf.igpkp, pf.rootDir, pf.npmName,
+        IGVersionUtil.getVersion(), fetchCurrentIGPubVersion(), pf.realmRules, pf.previousVersionComparator, pf.ipaComparator, pf.ipsComparator,
+        new DependencyRenderer(pf.pcm, pf.outputDir, pf.npmName, pf.templateManager, pf.dependencyList, pf.context, pf.markdownEngine, pf.rc, pf.specMaps, pf.effectiveBaseIg).setFetchedPackageLists(pf.fetchedPackageLists).render(pf.getEffectiveBaseIg(), true, false, false), new HTAAnalysisRenderer(pf.context, pf.outputDir, pf.markdownEngine).render(pf.packageId(), pf.fileList, pf.publishedIg.present()),
+        new PublicationChecker(pf.repoRoot, pf.historyPage, pf.markdownEngine, findReleaseLabelString(), pf.getEffectiveBaseIg(), pf.relatedIGs).check(), renderGlobals(), pf.copyrightYear, pf.context, scanForR5Extensions(), pf.modifierExtensions,
+        generateDraftDependencies(), pf.noNarrativeResources, pf.noValidateResources, settings.isValidationOff(), settings.isGenerationOff(), pf.dependentIgFinder, pf.context.getTxClientManager(),
+        fragments, makeLangInfo(), pf.relatedIGs);
+    val.setValidationFlags(pf.hintAboutNonMustSupport, pf.anyExtensionsAllowed, pf.checkAggregation, pf.autoLoad, pf.showReferenceMessages, pf.noExperimentalContent, pf.displayWarnings);
+    FileUtilities.stringToFile(new IPViewRenderer(uncsList, pf.inspector.getExternalReferences(), pf.inspector.getImageRefs(), pf.inspector.getCopyrights(),
+            pf.ipStmt, pf.inspector.getVisibleFragments().get("1"), pf.context).execute(), Utilities.path(pf.outputDir, "qa-ipreview.html"));
+    tts.end();
+    log("Built. "+ pf.tt.report());
+    log("Generating QA");
+    log("Validation output in "+val.generate(pf.sourceIg.getName(), pf.errors, pf.fileList, Utilities.path(settings.getDestDir() != null ? settings.getDestDir() : pf.outputDir, "qa.html"), pf.suppressedMessages, pinSummary()));
+    recordOutcome(null, val);
+    buildTracker.setBooleanProperty("status", "complete", true, null);
+    buildTracker.save();
+    log("Finished @ "+nowString()+". Max Memory Used = "+Utilities.describeSize(pf.maxMemory)+logSummary());
   }
 
   /**
