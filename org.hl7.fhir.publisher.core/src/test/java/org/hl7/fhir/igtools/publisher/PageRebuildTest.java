@@ -242,6 +242,19 @@ class PageRebuildTest {
   }
 
   @Test
+  void prepareTempLeavesRapidosStateAlone() throws IOException {
+    write("temp/_rapido/state.json", "{}");
+    state.beforeJekyll();
+    // saved again at the end of the build, and created by the first one
+    write("temp/_rapido/state.json", "{\"files\":{}}");
+    Files.setLastModifiedTime(dir.resolve("temp/_rapido/state.json"), FileTime.fromMillis(System.currentTimeMillis() + 5000));
+    write("temp/_rapido/claimed.txt", "x");
+    state.prepareTemp(Collections.emptyList());
+    assertEquals("{\"files\":{}}", read("temp/_rapido/state.json"));
+    assertEquals("x", read("temp/_rapido/claimed.txt"));
+  }
+
+  @Test
   void prepareTempFailsForAPageThatWasntThereBefore() throws IOException {
     state.beforeJekyll();
     write("temp/other.md", "other");

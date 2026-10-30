@@ -715,6 +715,8 @@ public class PageRebuild {
     return new Stamp(a.size(), a.lastModifiedTime());
   }
 
+  private static final String RAPIDO_STATE = "_rapido";
+
   /** The files under root (relative to it) with their size and modified time; and the folders, if folders isn't null */
   private static Map<Path, Stamp> list(Path root, Set<Path> folders) throws IOException {
     Map<Path, Stamp> res = new HashMap<>();
@@ -724,6 +726,11 @@ public class PageRebuild {
     Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
       @Override
       public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+        if (dir.equals(root.resolve(RAPIDO_STATE))) {
+          // Rapido's state (see RapidoTracker, StaleTempFiles), which Jekyll doesn't read: each build saves it after
+          // Jekyll has run, a page rebuild too
+          return FileVisitResult.SKIP_SUBTREE;
+        }
         if (folders != null && !dir.equals(root)) {
           folders.add(root.relativize(dir));
         }
