@@ -1,9 +1,11 @@
 package org.hl7.fhir.igtools.publisher;
 
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -242,9 +244,30 @@ public class StaleTempFiles {
   private Set<String> keys(Collection<String> paths) {
     Set<String> res = new HashSet<>();
     for (String s : paths) {
-      res.add(key(Paths.get(s)));
+      Path p = path(s);
+      if (p != null) {
+        res.add(key(p));
+      }
     }
     return res;
+  }
+
+  /**
+   * The file a path (as the publisher keeps it) names. A name that isn't a valid Path (any non-ASCII name under a POSIX
+   * locale) names the file java.io writes for it: the name in the file system encoding, what can't be encoded replaced
+   * (by '?'). Null if it names no file at all
+   */
+  static Path path(String s) {
+    try {
+      return Paths.get(s);
+    } catch (InvalidPathException e) {
+      try {
+        Charset cs = Charset.forName(System.getProperty("sun.jnu.encoding"));
+        return Paths.get(new String(s.getBytes(cs), cs));
+      } catch (IllegalArgumentException e2) {
+        return null;
+      }
+    }
   }
 
   private static boolean isTableImage(Path p) {
