@@ -1,0 +1,154 @@
+# Cross-platform QA of the perf2/all2 Rapido / watch changes (qa/xplat branch only, not for merge).
+# Each OS runs the code under test (perf2/all2) and the upstream base it came from, so that a failure can be told
+# apart: on both = pre-existing on that OS, on all2 only = ours.
+name: xplat-qa
+
+on:
+  push:
+    branches: [ qa/xplat ]
+  workflow_dispatch:
+    inputs:
+      all2_ref:
+        description: 'code under test (perf2/all2 commit)'
+        required: false
+        default: '7839d3067b40e477ea7a5c10deec7ebec12c36a8'
+      base_ref:
+        description: 'upstream base commit'
+        required: false
+        default: '0bac8e38d39781c8095d21c297bff29f80b59a84'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xplat-qa-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ALL2_REF: ${{ inputs.all2_ref || '7839d3067b40e477ea7a5c10deec7ebec12c36a8' }}
+  BASE_REF: ${{ inputs.base_ref || '0bac8e38d39781c8095d21c297bff29f80b59a84' }}
+  PYTHONIOENCODING: utf-8
+
+jobs:
+  qa:
+    name: ${{ matrix.os }} / ${{ matrix.code }} / ${{ matrix.suite }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 200
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ windows-latest, macos-latest, ubuntu-latest ]
+        code: [ all2, base ]
+        suite: [ unit, rapido-qa, scenarios ]
+        exclude:
+          # RapidoQaMessagesTest only exists on all2
+          - code: base
+            suite: rapido-qa
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Check out the QA files
+        uses: actions/checkout@v4
+        with:
+          path: qa
+
+      - name: Check out the code (${{ matrix.code }})
+        uses: actions/checkout@v4
+        with:
+          path: src
+          ref: ${{ matrix.code == 'all2' && env.ALL2_REF || env.BASE_REF }}
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: maven
+          cache-dependency-path: |
+            src/pom.xml
+            src/org.hl7.fhir.publisher.core/pom.xml
+            src/org.hl7.fhir.publisher.cli/pom.xml
+
+      - name: Set up Ruby
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+
+      - name: Install Jekyll
+        run: |
+          gem install jekyll -v 4.3.4 --no-document
+          jekyll -v
+
+      - name: Set up Python (for the summary)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Environment
+        run: |
+          echo "code: ${{ matrix.code }} at $(git -C src rev-parse HEAD)"
+          echo "core.autocrlf: $(git -C src config --get core.autocrlf || echo unset)"
+          file src/org.hl7.fhir.publisher.core/src/test/resources/rapido-qa-ig/input/pagecontent/index.md 2>/dev/null || true
+          java -XshowSettings:properties -version 2>&1 | grep -E "file.encoding|sun.jnu.encoding|java.version|os.name|os.arch|java.io.tmpdir" || true
+          locale 2>/dev/null || true
+
+      - name: Add the scenario test (and its fixture on base)
+        if: matrix.suite == 'scenarios'
+        run: |
+          m=src/org.hl7.fhir.publisher.core
+          cp qa/.github/xplat/XplatScenarioTest.java $m/src/test/java/org/hl7/fhir/igtools/publisher/
+          if [ ! -d $m/src/test/resources/rapido-qa-ig ]; then
+            cp -R qa/org.hl7.fhir.publisher.core/src/test/resources/rapido-qa-ig $m/src/test/resources/
+          fi
+
+      - name: Run the tests (${{ matrix.suite }})
+        id: tests
+        run: |
+          case "${{ matrix.suite }}" in
+            unit)      props="" ;;
+            rapido-qa) props="-Dtest=RapidoQaMessagesTest -Drapido.qa.ig=true" ;;
+            scenarios) props="-Dtest=XplatScenarioTest -Dxplat.qa=true -Dxplat.side=${{ matrix.code }} -Dxplat.out=$RUNNER_TEMP/xplat" ;;
+          esac
+          if [ "$RUNNER_OS" = Windows ]; then
+            # the user temp folder's path has an 8.3 short name in it (C:\Users\RUNNER~1\...), and the publisher's
+            # page loader can't build an IG from such a path (it compares stated and canonical path lengths). That fails
+            # on the base code too: scenario D shows it, and RapidoQaMessagesTest's @TempDir runs in RUNNER_TEMP instead
+            short=$(powershell -NoProfile -Command "(New-Object -ComObject Scripting.FileSystemObject).GetFolder('$LOCALAPPDATA\Temp').ShortPath" | tr -d '\r')
+            echo "short temp path: $short"
+            if [ "${{ matrix.suite }}" = scenarios ]; then props="$props -Dxplat.shortTemp=$short"; fi
+            if [ "${{ matrix.suite }}" = rapido-qa ]; then
+              export TMP="$(cygpath -w "$RUNNER_TEMP")\\jtmp" TEMP="$(cygpath -w "$RUNNER_TEMP")\\jtmp"
+              mkdir -p "$RUNNER_TEMP/jtmp"; echo "TMP=$TMP"
+            fi
+          fi
+          set +e
+          (cd src && mvn -B -ntp -pl org.hl7.fhir.publisher.core -am test \
+             -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false -Dcheckstyle.skip=true $props)
+          code=$?
+          echo "exit=$code" >> "$GITHUB_OUTPUT"
+          echo "maven exit code: $code"
+
+      - name: Summarise
+        if: always()
+        run: |
+          python qa/.github/xplat/summarize.py "${{ matrix.os }} ${{ matrix.code }} ${{ matrix.suite }}" \
+            src/org.hl7.fhir.publisher.core/target/surefire-reports "$RUNNER_TEMP/xplat/checks.txt"
+
+      - name: Upload reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xplat-${{ matrix.os }}-${{ matrix.code }}-${{ matrix.suite }}
+          retention-days: 3
+          if-no-files-found: warn
+          path: |
+            src/org.hl7.fhir.publisher.core/target/surefire-reports/
+            ${{ runner.temp }}/xplat/**/*.log
+            ${{ runner.temp }}/xplat/checks.txt
+
+      - name: Fail if the tests failed
+        if: steps.tests.outputs.exit != '0'
+        run: |
+          echo "maven exit code ${{ steps.tests.outputs.exit }}"
+          exit 1
