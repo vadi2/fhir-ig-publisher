@@ -310,7 +310,7 @@ public class PublisherIGLoader extends PublisherBase {
       throw new Exception("Error Parsing File "+ pf.igName +": "+e.getMessage(), e);
     }
     pf.templateManager.loadTemplateOverrides(ini, pf.rootDir);
-    pf.template = pf.templateManager.loadTemplate(templateName, pf.rootDir, pf.packageId(), settings.getMode() == PublisherUtils.IGBuildMode.AUTOBUILD, pf.logOptions.contains("template"), settings.isRapidoMode());
+    pf.template = pf.templateManager.loadTemplate(templateName, pf.rootDir, pf.packageId(), settings.getMode() == PublisherUtils.IGBuildMode.AUTOBUILD, pf.logOptions.contains("template"), false); // Rapido has to produce every fragment that a full build does
     if (pf.template.hasExtraTemplates()) {
       processExtraTemplates(pf.template.getExtraTemplates());
     }
@@ -922,7 +922,9 @@ public class PublisherIGLoader extends PublisherBase {
       pf.jekyllTimeout = ini.getLongProperty("IG", "jekyll-timeout") * 1000;
     }
 
-    if (pf.template.isDevMode()) {
+    if (pf.template.isDevMode() && !settings.isRapidoMode()) {
+      // (Rapido hashes the template, and clears the temp folder itself when it changes: clearing it here would throw
+      // away what Rapido reuses, in every build with a local template)
       FileUtilities.clearDirectory(pf.tempDir);
     } else {
       File fTempDir = new File(pf.tempDir);
@@ -3305,9 +3307,9 @@ public class PublisherIGLoader extends PublisherBase {
       } else if (contentType.contains("xml")) {
         res = new org.hl7.fhir.r5.formats.XmlParser(true).parse(source);
       } else if (contentType.contains("fml")) {
-        // don't need a context to parse, which is good since we don't have one
-        StructureMapUtilities mu = new StructureMapUtilities(null, null, null);
-        res = mu.parse(new String(source), "");
+        StructureMapTools mu = new StructureMapTools(pf.context, null, null);
+        mu.setExceptionsForChecks(false);
+        return mu.parse(new String(source), "");
       } else {
         throw new Exception("Unable to determine file type for "+name);
       }
@@ -3371,7 +3373,8 @@ public class PublisherIGLoader extends PublisherBase {
     for (StructureDefinition sd : pf.context.fetchResourcesByType(StructureDefinition.class)) {
       if (sd.getKind() == StructureDefinition.StructureDefinitionKind.RESOURCE && sd.getDerivation() == StructureDefinition.TypeDerivationRule.SPECIALIZATION) {
         String scope = sd.getUrl().substring(0, sd.getUrl().lastIndexOf("/"));
-        if (!"http://hl7.org/fhir/StructureDefinition".equals(scope) && !isCrossVersionScope(scope)) {
+        if (ExtensionUtilities.readBoolExtension(sd, ExtensionDefinitions.EXT_ADDITIONAL_RESOURCE)
+            || (!"http://hl7.org/fhir/StructureDefinition".equals(scope) && !isCrossVersionScope(scope))) {
           pf.customResourceNames.add(sd.getTypeTail());
         }
       }
