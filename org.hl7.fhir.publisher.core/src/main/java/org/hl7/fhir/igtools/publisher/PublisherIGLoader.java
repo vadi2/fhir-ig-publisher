@@ -124,6 +124,8 @@ public class PublisherIGLoader extends PublisherBase {
   static final String AUTO_DEP_COMMENT_UTG = "Automatically added as a dependency - all IGs depend on HL7 Terminology";
 
   private List<StructureDefinition> additionalResources = new ArrayList<>();
+  // in watch mode, what is kept from one build to the next (else null)
+  private WatchSession watchSession;
 
   public PublisherIGLoader(PublisherSettings settings) {
     super(settings);
@@ -131,6 +133,7 @@ public class PublisherIGLoader extends PublisherBase {
 
 
   public void initialize() throws Exception {
+    additionalResources.clear(); // in watch mode, this loader runs once per build
     pf.pcm = getFilesystemPackageCacheManager();
     log("Build FHIR IG from "+ settings.getConfigFile());
     if (settings.getMode() == PublisherUtils.IGBuildMode.PUBLICATION)
@@ -170,14 +173,12 @@ public class PublisherIGLoader extends PublisherBase {
       }
       File fsh = new File(Utilities.path(focusDir(), "fsh"));
       if (fsh.exists() && fsh.isDirectory() && !settings.isNoSushi()) {
-        prescanSushiConfig(focusDir());
-        new FSHRunner(this).runFsh(new File(FileUtilities.getDirectoryForFile(fsh.getAbsolutePath())), settings.getMode());
+        runSushi(fsh);
         pf.isSushi = true;
       } else {
         File fsh2 = new File(Utilities.path(focusDir(), "input", "fsh"));
         if (fsh2.exists() && fsh2.isDirectory() && !settings.isNoSushi()) {
-          prescanSushiConfig(focusDir());
-          new FSHRunner(this).runFsh(new File(FileUtilities.getDirectoryForFile(fsh.getAbsolutePath())), settings.getMode());
+          runSushi(fsh);
           pf.isSushi = true;
         }
       }
@@ -194,6 +195,33 @@ public class PublisherIGLoader extends PublisherBase {
       throw new Error("Old style JSON configuration is no longer supported. If you see this, then ig.ini wasn't found in '"+ pf.rootDir +"'");
     }
     pf.expectedJurisdiction = checkForJurisdiction();
+  }
+
+  private void runSushi(File fsh) throws Exception {
+    if (watchSession != null && watchSession.canSkipSushi()) {
+      log("Sushi: not run again - only page content has changed since it last ran");
+      return;
+    }
+    try {
+      prescanSushiConfig(focusDir());
+      new FSHRunner(this).runFsh(new File(FileUtilities.getDirectoryForFile(fsh.getAbsolutePath())), settings.getMode());
+    } catch (Exception | Error e) {
+      if (watchSession != null) {
+        try {
+          watchSession.sushiFailed();
+        } catch (IOException e2) {
+          e.addSuppressed(e2);
+        }
+      }
+      throw e;
+    }
+    if (watchSession != null) {
+      watchSession.sushiRan();
+    }
+  }
+
+  public void setWatchSession(WatchSession watchSession) {
+    this.watchSession = watchSession;
   }
 
   private void prescanSushiConfig(String dir) throws IOException {
@@ -310,7 +338,24 @@ public class PublisherIGLoader extends PublisherBase {
       throw new Exception("Error Parsing File "+ pf.igName +": "+e.getMessage(), e);
     }
     pf.templateManager.loadTemplateOverrides(ini, pf.rootDir);
-    pf.template = pf.templateManager.loadTemplate(templateName, pf.rootDir, pf.packageId(), settings.getMode() == PublisherUtils.IGBuildMode.AUTOBUILD, pf.logOptions.contains("template"), settings.isRapidoMode());
+    try {
+      pf.template = pf.templateManager.loadTemplate(templateName, pf.rootDir, pf.packageId(), settings.getMode() == PublisherUtils.IGBuildMode.AUTOBUILD, pf.logOptions.contains("template"), settings.isRapidoMode());
+    } catch (Throwable e) {
+      if (watchSession != null) {
+        // a template that is being worked on, and can't be loaded now: fixing it needs a rebuild
+        try {
+          watchSession.watchTemplateFolders(pf.templateManager.getLocalFolders());
+        } catch (IOException e2) {
+          e.addSuppressed(e2);
+        }
+      }
+      throw e;
+    }
+    if (watchSession != null) {
+      // a template that is being worked on: a change to it needs a rebuild
+      watchSession.watchTemplateFolders(pf.templateManager.getLocalFolders());
+      pf.template.setOutputListener(watchSession.templateOutputs());
+    }
     if (pf.template.hasExtraTemplates()) {
       processExtraTemplates(pf.template.getExtraTemplates());
     }
@@ -1987,7 +2032,7 @@ public class PublisherIGLoader extends PublisherBase {
     logDebugMessage(LogCategory.INIT, "Fetch Package history from "+Utilities.pathURL(canonical, "package-list.json"));
     try {
       final String secureCanonical = ManagedWebAccess.makeSecureRef(canonical);
-      pl = PackageList.fromUrl(Utilities.pathURL(secureCanonical, "package-list.json"));
+      pl = PackageListFetcher.fromUrl(Utilities.pathURL(secureCanonical, "package-list.json"));
     } catch (Exception e) {
       return null;
     }
@@ -3305,9 +3350,9 @@ public class PublisherIGLoader extends PublisherBase {
       } else if (contentType.contains("xml")) {
         res = new org.hl7.fhir.r5.formats.XmlParser(true).parse(source);
       } else if (contentType.contains("fml")) {
-        // don't need a context to parse, which is good since we don't have one
-        StructureMapUtilities mu = new StructureMapUtilities(null, null, null);
-        res = mu.parse(new String(source), "");
+        StructureMapTools mu = new StructureMapTools(pf.context, null, null);
+        mu.setExceptionsForChecks(false);
+        return mu.parse(new String(source), "");
       } else {
         throw new Exception("Unable to determine file type for "+name);
       }
@@ -3371,7 +3416,8 @@ public class PublisherIGLoader extends PublisherBase {
     for (StructureDefinition sd : pf.context.fetchResourcesByType(StructureDefinition.class)) {
       if (sd.getKind() == StructureDefinition.StructureDefinitionKind.RESOURCE && sd.getDerivation() == StructureDefinition.TypeDerivationRule.SPECIALIZATION) {
         String scope = sd.getUrl().substring(0, sd.getUrl().lastIndexOf("/"));
-        if (!"http://hl7.org/fhir/StructureDefinition".equals(scope) && !isCrossVersionScope(scope)) {
+        if (ExtensionUtilities.readBoolExtension(sd, ExtensionDefinitions.EXT_ADDITIONAL_RESOURCE)
+            || (!"http://hl7.org/fhir/StructureDefinition".equals(scope) && !isCrossVersionScope(scope))) {
           pf.customResourceNames.add(sd.getTypeTail());
         }
       }
