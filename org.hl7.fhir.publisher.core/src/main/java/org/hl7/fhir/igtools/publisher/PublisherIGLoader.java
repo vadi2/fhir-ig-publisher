@@ -3,6 +3,7 @@ package org.hl7.fhir.igtools.publisher;
 import org.hl7.fhir.convertors.advisors.impl.BaseAdvisor_10_50;
 import org.hl7.fhir.convertors.factory.*;
 import org.hl7.fhir.convertors.txClient.TerminologyClientFactory;
+import org.hl7.fhir.services.client.ITerminologyClientFactoryN;
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.igtools.openehr.ArchetypeImporter;
 import org.hl7.fhir.igtools.openehr.CKMClient;
@@ -124,6 +125,8 @@ public class PublisherIGLoader extends PublisherBase {
   static final String AUTO_DEP_COMMENT_UTG = "Automatically added as a dependency - all IGs depend on HL7 Terminology";
 
   private List<StructureDefinition> additionalResources = new ArrayList<>();
+  // in watch mode, what is kept from one build to the next (else null)
+  private WatchSession watchSession;
 
   public PublisherIGLoader(PublisherSettings settings) {
     super(settings);
@@ -131,6 +134,7 @@ public class PublisherIGLoader extends PublisherBase {
 
 
   public void initialize() throws Exception {
+    additionalResources.clear(); // in watch mode, this loader runs once per build
     pf.pcm = getFilesystemPackageCacheManager();
     log("Build FHIR IG from "+ settings.getConfigFile());
     if (settings.getMode() == PublisherUtils.IGBuildMode.PUBLICATION)
@@ -170,14 +174,12 @@ public class PublisherIGLoader extends PublisherBase {
       }
       File fsh = new File(Utilities.path(focusDir(), "fsh"));
       if (fsh.exists() && fsh.isDirectory() && !settings.isNoSushi()) {
-        prescanSushiConfig(focusDir());
-        new FSHRunner(this).runFsh(new File(FileUtilities.getDirectoryForFile(fsh.getAbsolutePath())), settings.getMode());
+        runSushi(fsh);
         pf.isSushi = true;
       } else {
         File fsh2 = new File(Utilities.path(focusDir(), "input", "fsh"));
         if (fsh2.exists() && fsh2.isDirectory() && !settings.isNoSushi()) {
-          prescanSushiConfig(focusDir());
-          new FSHRunner(this).runFsh(new File(FileUtilities.getDirectoryForFile(fsh.getAbsolutePath())), settings.getMode());
+          runSushi(fsh);
           pf.isSushi = true;
         }
       }
@@ -194,6 +196,33 @@ public class PublisherIGLoader extends PublisherBase {
       throw new Error("Old style JSON configuration is no longer supported. If you see this, then ig.ini wasn't found in '"+ pf.rootDir +"'");
     }
     pf.expectedJurisdiction = checkForJurisdiction();
+  }
+
+  private void runSushi(File fsh) throws Exception {
+    if (watchSession != null && watchSession.canSkipSushi()) {
+      log("Sushi: not run again - only page content has changed since it last ran");
+      return;
+    }
+    try {
+      prescanSushiConfig(focusDir());
+      new FSHRunner(this).runFsh(new File(FileUtilities.getDirectoryForFile(fsh.getAbsolutePath())), settings.getMode());
+    } catch (Exception | Error e) {
+      if (watchSession != null) {
+        try {
+          watchSession.sushiFailed();
+        } catch (IOException e2) {
+          e.addSuppressed(e2);
+        }
+      }
+      throw e;
+    }
+    if (watchSession != null) {
+      watchSession.sushiRan();
+    }
+  }
+
+  public void setWatchSession(WatchSession watchSession) {
+    this.watchSession = watchSession;
   }
 
   private void prescanSushiConfig(String dir) throws IOException {
@@ -247,6 +276,16 @@ public class PublisherIGLoader extends PublisherBase {
     }
   }
 
+  // null if they can't be read: watch mode then reports the changes in input by their events
+  private Map<Path, String> inputStates(Path input) {
+    try {
+      return FileChangeMonitor.fileStates(input);
+    } catch (IOException e) {
+      log("Unable to read the files in " + input + ", so watch mode may take what the module writes for edits: " + e.getMessage());
+      return null;
+    }
+  }
+
   private IniFile checkNewIg() throws IOException {
     if (settings.getConfigFile() == null)
       return null;
@@ -285,7 +324,21 @@ public class PublisherIGLoader extends PublisherBase {
     pf.module = loadModule(ini.getStringProperty("IG", "module"));
     if (pf.module.useRoutine("preProcess")) {
       log("== Ask "+ pf.module.name()+" to pre-process the IG ============================");
-      if (!pf.module.preProcess(pf.rootDir)) {
+      Path input = Paths.get(Utilities.path(pf.rootDir, "input"));
+      Map<Path, String> inputBefore = settings.isWatchMode() ? inputStates(input) : null;
+      boolean done;
+      try {
+        done = pf.module.preProcess(pf.rootDir);
+      } finally {
+        // also when it failed, what it wrote before then
+        Map<Path, String> inputAfter = inputBefore == null ? null : inputStates(input);
+        if (inputAfter != null) {
+          // so that watch mode doesn't take what it wrote for an edit
+          pf.inputBeforeModule = inputBefore;
+          pf.moduleWrites = FileChangeMonitor.changedFiles(inputBefore, inputAfter);
+        }
+      }
+      if (!done) {
         throw new Exception("Process terminating due to Module failure");
       } else {
         log("== Done ====================================================================");
@@ -310,7 +363,24 @@ public class PublisherIGLoader extends PublisherBase {
       throw new Exception("Error Parsing File "+ pf.igName +": "+e.getMessage(), e);
     }
     pf.templateManager.loadTemplateOverrides(ini, pf.rootDir);
-    pf.template = pf.templateManager.loadTemplate(templateName, pf.rootDir, pf.packageId(), settings.getMode() == PublisherUtils.IGBuildMode.AUTOBUILD, pf.logOptions.contains("template"), settings.isRapidoMode());
+    try {
+      pf.template = pf.templateManager.loadTemplate(templateName, pf.rootDir, pf.packageId(), settings.getMode() == PublisherUtils.IGBuildMode.AUTOBUILD, pf.logOptions.contains("template"), false); // Rapido has to produce every fragment that a full build does
+    } catch (Throwable e) {
+      if (watchSession != null) {
+        // a template that is being worked on, and can't be loaded now: fixing it needs a rebuild
+        try {
+          watchSession.watchTemplateFolders(pf.templateManager.getLocalFolders());
+        } catch (IOException e2) {
+          e.addSuppressed(e2);
+        }
+      }
+      throw e;
+    }
+    if (watchSession != null) {
+      // a template that is being worked on: a change to it needs a rebuild
+      watchSession.watchTemplateFolders(pf.templateManager.getLocalFolders());
+      pf.template.setOutputListener(watchSession.templateOutputs());
+    }
     if (pf.template.hasExtraTemplates()) {
       processExtraTemplates(pf.template.getExtraTemplates());
     }
@@ -632,7 +702,10 @@ public class PublisherIGLoader extends PublisherBase {
         case "additional-resource": {
           pf.additionalResourceFiles.add(p.getValue());
           try {
-            StructureDefinition sd = (StructureDefinition) new XmlParser(ModelContext.fullCoreContext()).parse(new FileInputStream(Utilities.path(pf.rootDir, p.getValue())));
+            StructureDefinition sd;
+            try (FileInputStream in = new FileInputStream(Utilities.path(pf.rootDir, p.getValue()))) {
+              sd = (StructureDefinition) new XmlParser(ModelContext.fullCoreContext()).parse(in);
+            }
             if (sd.hasExtension(ExtensionDefinitions.EXT_ADDITIONAL_RESOURCE)) {
               sd.getExtensionByUrl(ExtensionDefinitions.EXT_ADDITIONAL_RESOURCE).setValue(new BooleanType(true));
             } else {
@@ -922,7 +995,9 @@ public class PublisherIGLoader extends PublisherBase {
       pf.jekyllTimeout = ini.getLongProperty("IG", "jekyll-timeout") * 1000;
     }
 
-    if (pf.template.isDevMode()) {
+    if (pf.template.isDevMode() && !settings.isRapidoMode()) {
+      // (Rapido hashes the template, and clears the temp folder itself when it changes: clearing it here would throw
+      // away what Rapido reuses, in every build with a local template)
       FileUtilities.clearDirectory(pf.tempDir);
     } else {
       File fTempDir = new File(pf.tempDir);
@@ -1054,11 +1129,11 @@ public class PublisherIGLoader extends PublisherBase {
         pf.context.setCanRunWithoutTerminology(true);
         pf.txLog = null;
       } else {
-        log("Connect to Terminology Server at "+ settings.getTxServer());
-        pf.context.connectToTSServer(new TerminologyClientFactory(pf.version), settings.getTxServer(), "fhir/publisher", pf.txLog, true);
+        log("Connect to Terminology Server at "+ settings.getTxServer()+(settings.getEcosystem() == null ? " (no ecosystem)" : " (ecosystem: "+settings.getEcosystem()+")"));
+        pf.context.connectToTSServer(txClientFactory(), settings.getTxServer(), "fhir/publisher", pf.txLog, settings.getEcosystem());
       }
     } else {
-      pf.context.connectToTSServer(new TerminologyClientFactory(pf.version), pf.webTxServer.getAddress(), "fhir/publisher", pf.txLog, true);
+      pf.context.connectToTSServer(txClientFactory(), pf.webTxServer.getAddress(), "fhir/publisher", pf.txLog, settings.getEcosystem());
     }
     if (expParams != null) {
       /* This call to uncheckedPath is allowed here because the path is used to
@@ -1521,20 +1596,20 @@ public class PublisherIGLoader extends PublisherBase {
         }
       } else {
         this.pf.errors.add(new ValidationMessage(ValidationMessage.Source.Publisher, ValidationMessage.IssueType.NOTFOUND, path, "Supressed messages file is not using the new format (see https://confluence.hl7.org/display/FHIR/Implementation+Guide+Parameters)", ValidationMessage.IssueSeverity.ERROR));
-        InputStreamReader r = new InputStreamReader(new FileInputStream(messageFile));
-        StringBuilder b = new StringBuilder();
-        while (r.ready()) {
-          char c = (char) r.read();
-          if (c == '\r' || c == '\n') {
-            if (b.length() > 0)
-              this.pf.suppressedMessages.add(b.toString(), "?pub-msg-2?");
-            b = new StringBuilder();
-          } else
-            b.append(c);
+        try (InputStreamReader r = new InputStreamReader(new FileInputStream(messageFile))) {
+          StringBuilder b = new StringBuilder();
+          while (r.ready()) {
+            char c = (char) r.read();
+            if (c == '\r' || c == '\n') {
+              if (b.length() > 0)
+                this.pf.suppressedMessages.add(b.toString(), "?pub-msg-2?");
+              b = new StringBuilder();
+            } else
+              b.append(c);
+          }
+          if (b.length() > 0)
+            this.pf.suppressedMessages.add(b.toString(), "?pub-msg-3?");
         }
-        if (b.length() > 0)
-          this.pf.suppressedMessages.add(b.toString(), "?pub-msg-3?");
-        r.close();
       }
     }
   }
@@ -1564,7 +1639,9 @@ public class PublisherIGLoader extends PublisherBase {
       pi = pf.pcm.loadPackage(VersionUtilities.packageForVersion(v), v);
     } else {
       log("Load Core from provided file "+ pf.igPack);
-      pi = NpmPackage.fromPackage(new FileInputStream(pf.igPack));
+      try (FileInputStream in = new FileInputStream(pf.igPack)) {
+        pi = NpmPackage.fromPackage(in);
+      }
     }
     if (pi == null) {
       throw new Error("Unable to load core package!");
@@ -1587,6 +1664,16 @@ public class PublisherIGLoader extends PublisherBase {
       }
     }
     return sp;
+  }
+
+  private ITerminologyClientFactoryN txClientFactory() {
+    ITerminologyClientFactoryN res = new TerminologyClientFactory(pf.version);
+    if (settings.isRapidoMode()) {
+      // a call that got no answer from the server means the next build can't reuse this one
+      pf.txFailures = new RapidoTracker.TxFailures(res);
+      res = pf.txFailures;
+    }
+    return res;
   }
 
   private Parameters makeExpProfile() {
@@ -1987,7 +2074,7 @@ public class PublisherIGLoader extends PublisherBase {
     logDebugMessage(LogCategory.INIT, "Fetch Package history from "+Utilities.pathURL(canonical, "package-list.json"));
     try {
       final String secureCanonical = ManagedWebAccess.makeSecureRef(canonical);
-      pl = PackageList.fromUrl(Utilities.pathURL(secureCanonical, "package-list.json"));
+      pl = PackageListFetcher.fromUrl(Utilities.pathURL(secureCanonical, "package-list.json"));
     } catch (Exception e) {
       return null;
     }
@@ -2808,7 +2895,11 @@ public class PublisherIGLoader extends PublisherBase {
     for (String dir : pf.translationSources) {
       File df = new File(Utilities.path(pf.rootDir, dir));
       if (df.exists()) {
-        for (String fn : df.list()) {
+        // sorted, so that translations come in the same order on every machine: File.list() makes no promise
+        // about the order, and the translation extensions are made in the order the units are found
+        String[] names = df.list();
+        Arrays.sort(names);
+        for (String fn : names) {
           if ((fn.startsWith(base+".") || fn.startsWith(base+"-") || fn.startsWith(base+"_")) ||
                   (fn.startsWith(tbase+".") || fn.startsWith(tbase+"-") || fn.startsWith(tbase+"_"))) {
             LanguageFileProducer lp = null;
@@ -3305,9 +3396,9 @@ public class PublisherIGLoader extends PublisherBase {
       } else if (contentType.contains("xml")) {
         res = new org.hl7.fhir.r5.formats.XmlParser(true).parse(source);
       } else if (contentType.contains("fml")) {
-        // don't need a context to parse, which is good since we don't have one
-        StructureMapUtilities mu = new StructureMapUtilities(null, null, null);
-        res = mu.parse(new String(source), "");
+        StructureMapTools mu = new StructureMapTools(pf.context, null, null);
+        mu.setExceptionsForChecks(false);
+        return mu.parse(new String(source), "");
       } else {
         throw new Exception("Unable to determine file type for "+name);
       }
@@ -3371,7 +3462,8 @@ public class PublisherIGLoader extends PublisherBase {
     for (StructureDefinition sd : pf.context.fetchResourcesByType(StructureDefinition.class)) {
       if (sd.getKind() == StructureDefinition.StructureDefinitionKind.RESOURCE && sd.getDerivation() == StructureDefinition.TypeDerivationRule.SPECIALIZATION) {
         String scope = sd.getUrl().substring(0, sd.getUrl().lastIndexOf("/"));
-        if (!"http://hl7.org/fhir/StructureDefinition".equals(scope) && !isCrossVersionScope(scope)) {
+        if (ExtensionUtilities.readBoolExtension(sd, ExtensionDefinitions.EXT_ADDITIONAL_RESOURCE)
+            || (!"http://hl7.org/fhir/StructureDefinition".equals(scope) && !isCrossVersionScope(scope))) {
           pf.customResourceNames.add(sd.getTypeTail());
         }
       }
@@ -4107,10 +4199,12 @@ public class PublisherIGLoader extends PublisherBase {
 
   private List<LanguageFileProducer.TranslationUnit> loadTranslations(File f, String ext) throws FileNotFoundException, IOException, ParserConfigurationException, SAXException {
     try {
-      switch (ext) {
-        case "po": return new PoGetTextProducer().loadSource(new FileInputStream(f));
-        case "xliff": return new XLIFFProducer().loadSource(new FileInputStream(f));
-        case "json": return new JsonLangFileProducer().loadSource(new FileInputStream(f));
+      try (FileInputStream in = new FileInputStream(f)) {
+        switch (ext) {
+          case "po": return new PoGetTextProducer().loadSource(in);
+          case "xliff": return new XLIFFProducer().loadSource(in);
+          case "json": return new JsonLangFileProducer().loadSource(in);
+        }
       }
     } catch (Exception e) {
       throw new FHIRException("Error parsing "+f.getAbsolutePath()+": "+e.getMessage(), e);
@@ -4119,7 +4213,7 @@ public class PublisherIGLoader extends PublisherBase {
   }
 
 
-  private void loadPrePages() throws Exception {
+  void loadPrePages() throws Exception {
     if (pf.prePagesDirs.isEmpty())
       return;
 
@@ -4152,12 +4246,11 @@ public class PublisherIGLoader extends PublisherBase {
       }
       addFile(dir, false);
     }
+    // the fetched paths are canonical, and basePath may not be (a symlink, or an 8.3 short name on Windows)
+    String canonicalBasePath = new File(basePath).getCanonicalPath();
     for (String link : dir.getFiles()) {
       FetchedFile f = this.pf.fetcher.fetch(link);
-      if (basePath.startsWith("/var") && f.getPath().startsWith("/private/var")) {
-        f.setPath(f.getPath().substring(8));
-      }
-      f.setRelativePath(f.getPath().substring(basePath.length()+1));
+      f.setRelativePath(f.getPath().substring(canonicalBasePath.length()+1));
       if (f.isFolder())
         loadPrePages(f, basePath);
       else
@@ -4467,7 +4560,7 @@ public class PublisherIGLoader extends PublisherBase {
           r.setElement(e).setId(id).setTitle(e.getChildValue("name"));
           r.setResource(res);
         }
-        if (new AdjunctFileLoader(pf.binaryPaths, pf.cql).replaceAttachments1(file, r, metadataResourceNames())) {
+        if (new AdjunctFileLoader(pf.binaryPaths, pf.cql, isDebugLogging()).replaceAttachments1(file, r, metadataResourceNames())) {
           altered = true;
         }
         if (isNewML()) {
@@ -4834,7 +4927,7 @@ public class PublisherIGLoader extends PublisherBase {
             bc.setStatus(Enumerations.PublicationStatus.DRAFT);
           }
         }
-        if (new AdjunctFileLoader(this.pf.binaryPaths, this.pf.cql).replaceAttachments2(f, r)) {
+        if (new AdjunctFileLoader(this.pf.binaryPaths, this.pf.cql, isDebugLogging()).replaceAttachments2(f, r)) {
           altered = true;
         }
         if (this.pf.oidRoot != null && !hasOid(bc.getIdentifierList())) {
