@@ -1,5 +1,6 @@
 package org.hl7.fhir.igtools.publisher;
 
+import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
@@ -252,6 +253,7 @@ class PublisherIGLoaderSushiAlongsideTest {
       Thread.sleep(10);
     }
     assertTrue(igFile.toFile().setReadable(false));
+    assumeFalse(Files.isReadable(igFile), "root can still read it");
 
     loader.sushiAfterFailure(startUp);
 
