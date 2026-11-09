@@ -62,6 +62,62 @@ class PublisherRapidoWatchTest {
     assertEquals("the-last-build", HierarchicalTableGenerator.uuid);
   }
 
+  /**
+   * A watch session's next build takes the state the last one saved from memory: here, the file is overwritten in place
+   * with what can't be read, and its size and modified time are restored, so only a build that reads it notices
+   */
+  @Test
+  void aWatchBuildTakesTheStateTheLastOneSavedFromMemory() throws Exception {
+    Publisher publisher = publisher(true);
+    finish(build(publisher, "a"));
+    garbleStateKeepingItsStamp();
+
+    PublisherFields pf = build(publisher, "a2");
+
+    assertFalse(pf.rapido.isCompleteBuild(), pf.rapido.getReason());
+    assertEquals(List.of("Observation-o.json (something it depends on changed)", "Patient-a.json (changed)",
+        "ig.json (always processed)", "page.md (always processed)"), pf.rapido.listRenderDirty());
+  }
+
+  /** without -watch, each build is a process of its own: the state is read from the file */
+  @Test
+  void withoutWatchTheStateIsReadFromTheFile() throws Exception {
+    Publisher publisher = publisher(false);
+    finish(build(publisher, "a"));
+    garbleStateKeepingItsStamp();
+
+    PublisherFields pf = build(publisher, "a2");
+
+    assertTrue(pf.rapido.isCompleteBuild());
+    assertTrue(pf.rapido.getReason().contains("can't be read"), pf.rapido.getReason());
+  }
+
+  /** what the state file holds now is what counts: once it's changed, the next build reads it */
+  @Test
+  void aWatchBuildReadsTheStateFileOnceItChanged() throws Exception {
+    Publisher publisher = publisher(true);
+    finish(build(publisher, "a"));
+    Path state = dir.resolve("temp").resolve("_rapido").resolve("state.json");
+    Files.writeString(state, "not json");
+
+    PublisherFields pf = build(publisher, "a2");
+
+    assertTrue(pf.rapido.isCompleteBuild());
+    assertTrue(pf.rapido.getReason().contains("can't be read"), pf.rapido.getReason());
+  }
+
+  private void garbleStateKeepingItsStamp() throws Exception {
+    Path state = dir.resolve("temp").resolve("_rapido").resolve("state.json");
+    java.nio.file.attribute.FileTime modified = Files.getLastModifiedTime(state);
+    byte[] garbage = new byte[(int) Files.size(state)];
+    java.util.Arrays.fill(garbage, (byte) '#');
+    // written over in place: the same file, as the memo tells files apart by their key as well
+    try (java.io.RandomAccessFile f = new java.io.RandomAccessFile(state.toFile(), "rw")) {
+      f.write(garbage);
+    }
+    Files.setLastModifiedTime(state, modified);
+  }
+
   @Test
   void withoutARecordOfWhatTheLastBuildWroteTheBuildIsComplete() throws Exception {
     finish(build("a"));
@@ -201,6 +257,18 @@ class PublisherRapidoWatchTest {
 
   /** checkDependencies on new files, as a watch rebuild loads them, with the given content for Patient/a */
   private PublisherFields build(String patientContent) throws Exception {
+    return build(publisher(true), patientContent);
+  }
+
+  private static Publisher publisher(boolean watch) {
+    Publisher publisher = new Publisher();
+    publisher.getSettings().setRapidoMode(true);
+    publisher.getSettings().setWatchMode(watch);
+    return publisher;
+  }
+
+  /** as build(patientContent), by the given publisher (a watch session's builds are all by one) */
+  private PublisherFields build(Publisher publisher, String patientContent) throws Exception {
     FetchedFile ig = file("ig.json", "{}");
     FetchedFile patient = file("Patient-a.json", patientContent, resource("Patient", "a", primitive(patientContent)));
     FetchedFile other = file("Patient-b.json", "b", resource("Patient", "b"));
@@ -208,9 +276,6 @@ class PublisherRapidoWatchTest {
     FetchedFile page = file("page.md", "# page");
     page.setProcessMode(FetchedFile.PROCESS_NONE);
 
-    Publisher publisher = new Publisher();
-    publisher.getSettings().setRapidoMode(true);
-    publisher.getSettings().setWatchMode(true);
     PublisherFields pf = new PublisherFields();
     pf.logger = mock(ILoggingService.class);
     pf.rootDir = dir.toString();

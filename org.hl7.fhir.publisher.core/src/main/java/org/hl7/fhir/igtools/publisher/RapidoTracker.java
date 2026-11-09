@@ -19,6 +19,8 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Calendar;
@@ -30,6 +32,7 @@ import java.util.IdentityHashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
@@ -97,6 +100,8 @@ public class RapidoTracker {
 
   private final PublisherFields pf;
   private final String stateFile;
+  /** in watch mode, the state the last build saved (else null) */
+  private final StateMemo memo;
   private final Map<FetchedFile, String> keys = new IdentityHashMap<>();
   private final Set<FetchedFile> validationClean = Collections.newSetFromMap(new IdentityHashMap<>());
   private final Set<FetchedFile> renderClean = Collections.newSetFromMap(new IdentityHashMap<>());
@@ -125,7 +130,13 @@ public class RapidoTracker {
   private final String buildDate;
 
   public RapidoTracker(PublisherFields pf) throws IOException {
+    this(pf, null);
+  }
+
+  /** @param memo in watch mode, what keeps the saved state from one build to the next (else null) */
+  public RapidoTracker(PublisherFields pf, StateMemo memo) throws IOException {
     this.pf = pf;
+    this.memo = memo;
     this.stateFile = Utilities.path(pf.tempDir, "_rapido", "state.json");
     this.buildDate = new DateTimeType(pf.getExecTime()).asStringValue();
   }
@@ -784,9 +795,59 @@ public class RapidoTracker {
       return null;
     }
     try {
-      return readState(f);
+      JsonObject kept = memo == null ? null : memo.recall(f);
+      return kept != null ? kept : readState(f);
     } catch (Exception e) {
       return new JsonObject().add("unreadable", e.getMessage() == null ? e.getClass().getName() : e.getMessage());
+    }
+  }
+
+  /**
+   * In watch mode, the state the last build saved, so that the next build doesn't parse it back from the file (on a
+   * large IG, that takes about a second). The file is still written and is still what counts: what is kept here is
+   * used only while the file is the one it was written to (same file, size and modification time)
+   */
+  public static class StateMemo {
+    private File file;
+    private Object fileKey;
+    private long size;
+    private FileTime modified;
+    private JsonObject state;
+
+    synchronized void remember(File f, JsonObject state) {
+      forget();
+      try {
+        BasicFileAttributes a = Files.readAttributes(f.toPath(), BasicFileAttributes.class);
+        this.file = f.getAbsoluteFile();
+        this.fileKey = a.fileKey();
+        this.size = a.size();
+        this.modified = a.lastModifiedTime();
+        // a copy: what the build saved may still be changed after it was written
+        this.state = state.deepCopy();
+      } catch (IOException e) {
+        // not kept: the next build reads the file
+      }
+    }
+
+    synchronized void forget() {
+      file = null;
+      state = null;
+    }
+
+    /** a copy of the state, if f is still the file it was saved to (the build changes what it is given) */
+    synchronized JsonObject recall(File f) {
+      if (state == null || !file.equals(f.getAbsoluteFile())) {
+        return null;
+      }
+      try {
+        BasicFileAttributes a = Files.readAttributes(f.toPath(), BasicFileAttributes.class);
+        if (a.size() != size || !a.lastModifiedTime().equals(modified) || !Objects.equals(a.fileKey(), fileKey)) {
+          return null;
+        }
+      } catch (IOException e) {
+        return null;
+      }
+      return state.deepCopy();
     }
   }
 
@@ -894,7 +955,7 @@ public class RapidoTracker {
     if (txFailures > 0) {
       // what the build made from those calls isn't what the server would have said, so none of it can be reused
       state.add("txFailures", txFailures);
-      writeState(state, sf);
+      writeKept(state, sf);
       return;
     }
     state.add("uuid", uuid);
@@ -941,7 +1002,15 @@ public class RapidoTracker {
       files.set(key, nf);
     }
     state.add("files", files);
+    writeKept(state, sf);
+  }
+
+  /** writes the state, and in watch mode keeps it for the next build */
+  private void writeKept(JsonObject state, File sf) throws IOException {
     writeState(state, sf);
+    if (memo != null) {
+      memo.remember(sf, state);
+    }
   }
 
   /** the terminology calls of this build that got no answer, including the ones that ask the registry which server to use */

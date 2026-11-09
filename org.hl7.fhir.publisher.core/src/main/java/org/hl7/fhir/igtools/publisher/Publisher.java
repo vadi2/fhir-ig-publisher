@@ -168,6 +168,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   private PublisherIGLoader loader;
   private PublisherProcessor processor;
   private PublisherGenerator generator;
+  // in watch mode, the Rapido state the last build saved, for the next build of the session (else null)
+  private RapidoTracker.StateMemo rapidoState;
 
   public Publisher() {
     super();
@@ -1076,7 +1078,10 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     buildTracker.setBooleanProperty("status", "started", true, null);
     buildTracker.save();
 
-    pf.rapido = new RapidoTracker(pf);
+    if (settings.isWatchMode() && rapidoState == null) {
+      rapidoState = new RapidoTracker.StateMemo();
+    }
+    pf.rapido = new RapidoTracker(pf, rapidoState);
     pf.rapido.analyse(igf, failure);
     if (pf.rapido.isCompleteBuild()) {
       log("Rapido Mode: Complete Build ("+pf.rapido.getReason()+")");
