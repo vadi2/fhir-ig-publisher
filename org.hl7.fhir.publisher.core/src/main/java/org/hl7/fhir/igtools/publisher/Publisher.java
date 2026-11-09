@@ -232,6 +232,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         PackageListFetcher.rememberFetches();
         jekyllDriver = JekyllDriver.forCommand(settings.jekyllCommand);
         generator.setWatchTools(jekyllDriver, new FullIgZip());
+        loader.setJekyllDriver(jekyllDriver);
       }
       loader.setWatchSession(session);
       watchSession = session;
@@ -293,6 +294,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         jekyllDriver.stop();
       }
       generator.setWatchTools(null, null);
+      loader.setJekyllDriver(null);
       if (monitor != null) {
         // its thread would keep the JVM running
         try {

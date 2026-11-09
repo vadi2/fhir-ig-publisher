@@ -11,6 +11,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermissions;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -471,6 +472,210 @@ class JekyllDriverTest {
     assertEquals(Arrays.asList("b.html"), driver.changedSinceWritten(src.toString(), out.toString()));
     assertTrue(driver.rewrite(src.toString(), out.toString(), Arrays.asList("b.html"), TIMEOUT, log::add).isOk());
     sameAsBuild(src, out);
+  }
+
+  // --- the source files Jekyll last read (complete builds in watch mode) ---------------------------------------------
+
+  private static final String OK = "@@ig-jekyll-driver@@ {\"ok\":true,\"full\":true}";
+  private static final String OK_PART = "@@ig-jekyll-driver@@ {\"ok\":true,\"full\":false,\"written\":[]}";
+
+  /** a "Ruby" that answers each command with the line in the reply file at the time */
+  private JekyllDriver fakeReplying(String reply) throws IOException {
+    Path f = dir.resolve("reply.txt");
+    write(dir, "reply.txt", reply + "\n");
+    return fake("cat '" + f.toString().replace(File.separatorChar, '/') + "'");
+  }
+
+  private void reply(String reply) throws IOException {
+    write(dir, "reply.txt", reply + "\n");
+  }
+
+  /** a source folder as the publisher's temp folder is, with the staging folder in it */
+  private Path site() throws IOException {
+    Path src = Files.createDirectories(dir.resolve("temp"));
+    write(src, "a.html", "a");
+    write(src, "b.html", "b");
+    write(src, "en/a.html", "en a");
+    write(src, "_includes/x.xhtml", "x");
+    write(src, "_data/d.json", "{}");
+    write(src, ".jekyll-cache/c", "c");
+    write(src, "_rapido/state.json", "{}");
+    write(src, "full-ig.zip", "zip");
+    write(src, ".watch-output/index.html", "out");
+    return src;
+  }
+
+  private List<String> changedSources(Path src) throws IOException {
+    return driver.changedSources(src.toString(), src.resolve(".watch-output").toString());
+  }
+
+  @Test
+  void theSourceFilesWhoseContentChangedSinceJekyllReadThem() throws Exception {
+    Path src = site();
+    String out = src.resolve(".watch-output").toString();
+    driver = fakeReplying(OK);
+    driver.trackSources(Arrays.asList("_rapido", "full-ig.zip"));
+    // nothing to go by before Jekyll has built the site
+    assertEquals(null, changedSources(src));
+    assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+    assertEquals(Collections.emptyList(), changedSources(src));
+
+    // written again with the same content: not a change
+    Files.delete(src.resolve("a.html"));
+    write(src, "a.html", "a");
+    write(src, "_includes/x.xhtml", "x");
+    assertEquals(Collections.emptyList(), changedSources(src));
+
+    // what's written again, added or removed, wherever it is, but not what Jekyll doesn't read
+    write(src, "en/a.html", "en a2");
+    write(src, "_includes/x.xhtml", "x2");
+    write(src, "c.html", "c");
+    Files.delete(src.resolve("_data/d.json"));
+    write(src, ".jekyll-cache/c", "c2");
+    write(src, "_rapido/state.json", "{\"x\":1}");
+    write(src, "full-ig.zip", "zip2");
+    write(src, ".watch-output/index.html", "out2");
+    write(src, ".watch-output/new.html", "new");
+    assertEquals(Arrays.asList("_data/d.json", "_includes/x.xhtml", "c.html", "en/a.html"), changedSources(src));
+    // they are taken as what Jekyll reads next
+    assertEquals(Collections.emptyList(), changedSources(src));
+  }
+
+  @Test
+  void whatAnUpdateWasGivenIsWhatJekyllRead() throws Exception {
+    // as in a page rebuild, which tells Jekyll which files it wrote again
+    Path src = site();
+    String out = src.resolve(".watch-output").toString();
+    driver = fakeReplying(OK);
+    driver.trackSources(Arrays.asList("_rapido", "full-ig.zip"));
+    assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+    reply(OK_PART);
+    write(src, "a.html", "a2");
+    assertTrue(driver.update(src.toString(), out, Arrays.asList("a.html"), 20_000, log::add).isOk());
+    write(src, "b.html", "b2");
+    assertEquals(Arrays.asList("b.html"), changedSources(src));
+
+    // and one it was told is gone (else the next update would be given it again, and build everything for it)
+    Files.delete(src.resolve("en/a.html"));
+    assertTrue(driver.update(src.toString(), out, Arrays.asList("en/a.html"), 20_000, log::add).isOk());
+    assertEquals(Collections.emptyList(), changedSources(src));
+
+    // a full build (an update can be one) has read them all
+    write(src, "a.html", "a3");
+    write(src, "en/a.html", "en a3");
+    reply(OK);
+    assertTrue(driver.update(src.toString(), out, Arrays.asList("a.html"), 20_000, log::add).isOk());
+    assertEquals(Collections.emptyList(), changedSources(src));
+  }
+
+  @Test
+  void whatJekyllReadIsntKnownOnceItFailedOrStoppedOrIfItIsntTracked() throws Exception {
+    Path src = site();
+    String out = src.resolve(".watch-output").toString();
+    driver = fakeReplying(OK);
+    assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+    assertEquals(null, changedSources(src));
+
+    driver.trackSources(Arrays.asList("_rapido", "full-ig.zip"));
+    assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+    assertEquals(Collections.emptyList(), changedSources(src));
+    // (nor for another site)
+    assertEquals(null, driver.changedSources(src.resolve("en").toString(), out));
+    reply("@@ig-jekyll-driver@@ {\"ok\":false,\"error\":\"x\"}");
+    assertFalse(driver.update(src.toString(), out, Arrays.asList("a.html"), 20_000, log::add).isOk());
+    assertEquals(null, changedSources(src));
+
+    reply(OK);
+    assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+    driver.stop();
+    assertEquals(null, changedSources(src));
+
+    // what isn't tracked changed
+    assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+    assertEquals(Collections.emptyList(), changedSources(src));
+    driver.trackSources(Arrays.asList("_rapido"));
+    assertEquals(null, changedSources(src));
+    assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+    write(src, "full-ig.zip", "zip2");
+    assertEquals(Arrays.asList("full-ig.zip"), changedSources(src));
+    driver.trackSources(null);
+    assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+    assertEquals(null, changedSources(src));
+  }
+
+  @Test
+  @DisabledOnOs(OS.WINDOWS)
+  void sourceFilesThatCantBeScannedArentKnownButJekyllDidWhatItWasAsked() throws Exception {
+    Path src = site();
+    String out = src.resolve(".watch-output").toString();
+    driver = fakeReplying(OK);
+    driver.trackSources(Arrays.asList("_rapido", "full-ig.zip"));
+    Path en = src.resolve("en");
+    Files.setPosixFilePermissions(en, PosixFilePermissions.fromString("---------"));
+    try {
+      assumeTrue(!Files.isReadable(en), "the folder can't be made unreadable (run as root?)");
+      assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+      assertEquals(null, changedSources(src));
+      assertTrue(log.stream().anyMatch(l -> l.startsWith("unable to tell which source files it read")), log.toString());
+
+      // nor after an update that was a full build
+      assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+      Files.setPosixFilePermissions(en, PosixFilePermissions.fromString("rwx------"));
+      assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+      assertEquals(Collections.emptyList(), changedSources(src));
+      Files.setPosixFilePermissions(en, PosixFilePermissions.fromString("---------"));
+      assertTrue(driver.update(src.toString(), out, Arrays.asList("a.html"), 20_000, log::add).isOk());
+      assertEquals(null, changedSources(src));
+    } finally {
+      Files.setPosixFilePermissions(en, PosixFilePermissions.fromString("rwx------"));
+    }
+  }
+
+  @Test
+  void aCompleteBuildRendersWhatDependsOnTheSourcesWhoseContentChanged() throws Exception {
+    assumeTrue(jekyllInstalled(), "jekyll is not installed");
+    Path src = Files.createDirectories(dir.resolve("src"));
+    Path out = src.resolve(".watch-output");
+    write(src, "_includes/inc.html", "<p>included</p>\n");
+    write(src, "a.html", "---\ntitle: A\n---\n<h1>{{ page.title }}</h1>\n{% include inc.html %}\n");
+    write(src, "b.html", "---\ntitle: B\n---\n<h1>{{ page.title }}</h1>\n");
+    write(src, "c.html", "---\ntitle: C\n---\n<h1>{{ page.title }}</h1>\n");
+    driver = JekyllDriver.forCommand("jekyll");
+    driver.trackSources(Arrays.asList("_rapido"));
+    assertTrue(driver.build(src.toString(), out.toString(), TIMEOUT, log::add).isOk());
+    // the html checks change what they check, and the publisher writes its own files
+    write(out, "b.html", "checked");
+    write(src, "_rapido/state.json", "{}");
+
+    // the next build writes every source again, and changes the include
+    write(src, "_includes/inc.html", "<p>included again</p>\n");
+    write(src, "a.html", "---\ntitle: A\n---\n<h1>{{ page.title }}</h1>\n{% include inc.html %}\n");
+    write(src, "b.html", "---\ntitle: B\n---\n<h1>{{ page.title }}</h1>\n");
+    write(src, "c.html", "---\ntitle: C\n---\n<h1>{{ page.title }}</h1>\n");
+    List<String> changed = driver.changedSources(src.toString(), out.toString());
+    assertEquals(Arrays.asList("_includes/inc.html"), changed);
+    JekyllDriver.Result r = driver.update(src.toString(), out.toString(), changed, TIMEOUT, log::add);
+    assertTrue(r.isOk(), r.getError());
+    assertFalse(r.isFull(), r.getReason());
+    assertEquals(Arrays.asList("a.html"), r.getWritten());
+    assertEquals("checked", new String(Files.readAllBytes(out.resolve("b.html")), StandardCharsets.UTF_8));
+    assertEquals(Arrays.asList("b.html"), driver.changedSinceWritten(src.toString(), out.toString()));
+    assertTrue(driver.rewrite(src.toString(), out.toString(), Arrays.asList("b.html"), TIMEOUT, log::add).isOk());
+    Path ref = dir.resolve("ref");
+    assertEquals(0, cliBuild(src, ref));
+    for (String f : Arrays.asList("a.html", "b.html", "c.html")) {
+      assertArrayEquals(Files.readAllBytes(ref.resolve(f)), Files.readAllBytes(out.resolve(f)), f);
+    }
+
+    // a build that no longer writes a page: its output goes too
+    Files.delete(src.resolve("c.html"));
+    changed = driver.changedSources(src.toString(), out.toString());
+    assertEquals(Arrays.asList("c.html"), changed);
+    r = driver.update(src.toString(), out.toString(), changed, TIMEOUT, log::add);
+    assertTrue(r.isOk(), r.getError());
+    assertFalse(Files.exists(out.resolve("c.html")));
+    assertTrue(Files.exists(out.resolve("a.html")));
+    assertEquals(Collections.emptyList(), driver.changedSources(src.toString(), out.toString()));
   }
 
   private JekyllDriver.Result update(Path src, Path out, String... changed) throws IOException {

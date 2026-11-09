@@ -130,6 +130,8 @@ public class PublisherIGLoader extends PublisherBase {
   private List<StructureDefinition> additionalResources = new ArrayList<>();
   // in watch mode, what is kept from one build to the next (else null)
   private WatchSession watchSession;
+  // in watch mode, the Jekyll that's kept running between builds (else null)
+  private JekyllDriver jekyllDriver;
 
   public PublisherIGLoader(PublisherSettings settings) {
     super(settings);
@@ -226,6 +228,37 @@ public class PublisherIGLoader extends PublisherBase {
 
   public void setWatchSession(WatchSession watchSession) {
     this.watchSession = watchSession;
+  }
+
+  public void setJekyllDriver(JekyllDriver jekyllDriver) {
+    this.jekyllDriver = jekyllDriver;
+  }
+
+  /**
+   * Watch mode: whether to leave the staging folder as the last build left it, rather than empty it: when the Jekyll
+   * that's kept running built it, so that it can bring it up to date by writing just what changed (it removes what
+   * isn't its own, as `jekyll build` does, so what the build writes after it is written again)
+   */
+  boolean keepsStagedOutput() {
+    return pf.watchOutputDir != null && !settings.isGenerationOff() && !settings.isSimplifierMode() && jekyllDriver != null
+        && jekyllDriver.isRunningFor(new File(pf.tempDir).getAbsolutePath(), new File(pf.outputDir).getAbsolutePath());
+  }
+
+  /**
+   * Clears the output folder, except the staged output that the Jekyll that's kept running goes on from: but not the
+   * last build's files that the build reads before it writes its own: qa.json, which would be taken as this build's if
+   * it fails before it writes one, and package.tgz, which the combined package would be made from (see
+   * PublisherGenerator.genCombinedPackage(), which runs before this build's package.tgz is written)
+   */
+  void clearOutputUnlessKept() throws IOException {
+    pf.stagedOutputKept = keepsStagedOutput();
+    if (pf.stagedOutputKept) {
+      logDebugMessage(LogCategory.INIT, "Staging: kept as the last build left it, for the Jekyll that's still running");
+      Files.deleteIfExists(Paths.get(pf.outputDir, "qa.json"));
+      Files.deleteIfExists(Paths.get(pf.outputDir, "package.tgz"));
+    } else {
+      FileUtilities.clearDirectory(pf.outputDir);
+    }
   }
 
   private void prescanSushiConfig(String dir) throws IOException {
@@ -1076,7 +1109,7 @@ public class PublisherIGLoader extends PublisherBase {
     logDebugMessage(LogCategory.INIT, "Output: "+ pf.outputDir);
     forceDir(pf.outputDir);
     setUpWatchOutput();
-    FileUtilities.clearDirectory(pf.outputDir);
+    clearOutputUnlessKept();
     if (pf.qaDir != null) {
       logDebugMessage(LogCategory.INIT, "QA Dir: "+ pf.qaDir);
       forceDir(pf.qaDir);

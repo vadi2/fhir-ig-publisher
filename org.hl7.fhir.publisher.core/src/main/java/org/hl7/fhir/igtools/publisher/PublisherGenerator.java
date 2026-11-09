@@ -772,6 +772,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       keepForPageRebuild(() -> pageRebuild.beforeJekyll());
     }
 
+    // a complete build in watch mode: what the last build's html checks found (if Jekyll leaves the output files it
+    // doesn't write again as that build left them, the checks need it, however this build's state is kept)
+    HtmlCheckRecords lastChecks = replay == null && pageRebuild != null ? pageRebuild.getHtmlRecords() : null;
     boolean jekyllOk;
     // the output files that are new since the last build or rebuild (null: all of them)
     Set<String> fresh;
@@ -888,6 +891,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         generateZips(df);
       }
       keepForPageRebuild(() -> pageRebuild.afterPackage());
+      if (fresh != null) {
+        if (pageRebuild != null) {
+          fresh.addAll(pageRebuild.getPackageOutputs());
+          freshFrom.append(", ").append(pageRebuild.getPackageOutputs().size()).append(" by the package step");
+        } else {
+          // (they are among the files changed since they were checked)
+          freshFrom.append(", the package step's");
+        }
+      }
     }
 
     log("Checking Output HTML");
@@ -956,11 +968,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (pf.ipsComparator != null && pf.ipsComparator.hasLast()) {
       pf.inspector.getComparisonFiles().add(pf.ipsComparator.getBaseFile());
     }
-    if (kept != null && !settings.isGenerationOff()) {
-      if (replay != null && fresh != null) {
+    HtmlCheckRecords lastRecords = recordsForCheck(replay, fresh, lastChecks);
+    if ((kept != null || lastRecords != null) && !settings.isGenerationOff()) {
+      if (fresh != null) {
         log("Rapido Mode: the output files new since the last html check: " + freshFrom);
       }
-      pf.inspector.recordChecks(replay != null ? replay.getHtmlRecords() : null, fresh, rewriter);
+      pf.inspector.recordChecks(lastRecords, fresh, rewriter);
     }
     List<ValidationMessage> linkmsgs = settings.isGenerationOff() ? new ArrayList<ValidationMessage>() : pf.inspector.check(statusMessage, statusMessages);
     if (kept != null) {
@@ -4679,10 +4692,16 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     // the template's check script runs next, and may look at the output: it must see what `jekyll build` would leave
     String seesOutput = update && pf.template != null ? pf.template.whyOnCheckMaySeeOutput(out) : null;
     boolean restore = seesOutput != null;
+    // a complete build: the temp files whose content changed, if Jekyll can just render what depends on them
+    List<String> changedSources = replay == null ? changedSources(temp, out) : null;
     MyFilterHandler filter = new MyFilterHandler();
     JekyllDriver.Result res;
     try {
-      if (update) {
+      if (changedSources != null) {
+        log("Run jekyll: render the pages that depend on the " + changedSources.size() + " temp " + (changedSources.size() == 1 ? "file" : "files")
+            + " whose content changed (Jekyll kept running, in folder " + pf.tempDir + ")");
+        res = jekyllDriver.update(temp, out, changedSources, pf.jekyllTimeout, filter::line);
+      } else if (update) {
         List<String> changed = new ArrayList<>();
         for (String f : changedTempFiles) {
           changed.add(JekyllDriver.sitePath(Paths.get(temp).relativize(Paths.get(f).toAbsolutePath())));
@@ -4727,7 +4746,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       jekyllDriver.stop();
       return String.valueOf(res.getError());
     }
-    if (update && res.isFull()) {
+    if ((update || changedSources != null) && res.isFull()) {
       log("Jekyll: rendered the whole site again (" + res.getReason() + ")"
           + (res.isAllWritten() ? "" : "; " + res.getWritten().size() + " output files changed"));
     }
@@ -4739,6 +4758,54 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     return null;
   }
+
+  /**
+   * Watch mode: what the last html check found, for this one to go on from (see HTMLInspector.recordChecks()): a page
+   * rebuild's; or in a complete build, the last build's if Jekyll left the output files it didn't write again as that
+   * build left them (fresh: the files written since); else none
+   */
+  static HtmlCheckRecords recordsForCheck(PageRebuild replay, Set<String> fresh, HtmlCheckRecords lastChecks) {
+    return replay != null ? replay.getHtmlRecords() : fresh != null ? lastChecks : null;
+  }
+
+  /**
+   * Watch mode, in a complete build: the files in the temp folder (relative to it) whose content isn't what the Jekyll
+   * that's kept running last read, so that it can render just what depends on them, leaving the other output files as
+   * the last build left them; or null if it can't. It can if the last build's staged output is still there (see
+   * PublisherIGLoader.keepsStagedOutput()), what the last build's html checks found was carried over to this one (the
+   * output files Jekyll doesn't write again still have what those checks changed in them), and the template's check
+   * script doesn't look at the output (as for a page rebuild, it would have to see what `jekyll build` would leave)
+   */
+  List<String> changedSources(String temp, String out) {
+    String seesOutput = pf.template == null ? null : pf.template.whyOnCheckMaySeeOutput(out);
+    jekyllDriver.trackSources(seesOutput == null ? UNTRACKED_TEMP : null);
+    String whyNot = seesOutput != null ? "the template's check may look at the output: " + seesOutput
+        : !pf.stagedOutputKept ? "the last build's staged output isn't kept"
+        : pageRebuild == null ? "there's no state kept from the last build"
+        : pageRebuild.getHtmlRecords() == null ? "the last build's html checks can't be reused" : null;
+    if (whyNot != null) {
+      log("Rapido Mode: Jekyll renders the whole site (" + whyNot + ")");
+      return null;
+    }
+    long start = System.currentTimeMillis();
+    try {
+      List<String> res = jekyllDriver.changedSources(temp, out);
+      if (res != null) {
+        log("Rapido Mode: " + res.size() + " temp " + (res.size() == 1 ? "file" : "files") + " changed since Jekyll last ran ("
+            + (System.currentTimeMillis() - start) + " ms)");
+      } else {
+        log("Rapido Mode: Jekyll renders the whole site (what it last read isn't known: it was started again, failed or stopped since)");
+      }
+      return res;
+    } catch (IOException e) {
+      log("Unable to tell which temp files changed since Jekyll last ran (" + e.getMessage() + "), so Jekyll builds everything");
+      return null;
+    }
+  }
+
+  // the files that each build writes to the temp folder after Jekyll has run, and Jekyll doesn't read: Rapido's state
+  // (see RapidoTracker) and the final zip (see finishGenerate())
+  static final List<String> UNTRACKED_TEMP = Collections.unmodifiableList(Arrays.asList("_rapido", "full-ig.zip"));
 
   /**
    * Watch mode, before Jekyll writes these output files (relative to out) again for the template's check: moves aside
