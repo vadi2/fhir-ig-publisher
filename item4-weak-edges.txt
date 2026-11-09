@@ -1,0 +1,75 @@
+ITEM 4 (round 3): weak edges in the Rapido dependency hashes - fhir-ig-publisher
+Branch: vadi2/fhir-ig-publisher perf/weak-edges@474889b4d65acac68ea18ef544ba1fd98b29d41d
+  Base: 557f93a1 (head of perf/watch-fsh-tail, item 2, which pins timestamps per watch session). Stacks on item 2.
+Status: bench pending (VM has 15 GB). The cgroup limit for this session is 14.3 GB; the -Xmx10g publisher reaches
+  ~12 GB RSS by the time it starts Jekyll on uz.dhp.core and is OOM-killed there. Happened twice in the first build of
+  the base jar with nothing else running (dmesg: "Memory cgroup out of memory: Killed process ... java"). No numbers
+  were measured; none are given below.
+Tests: publisher.core suite at 474889b: 674 run, 1 failure, 13 skipped. The failure is GitUtilitiesTests.testGetGitSource[4]
+  (expects git@github.com:..., gets https://...): fails the same at 557f93a1, from this VM's git URL rewrite, not ours.
+  New tests: 15 (RapidoDependencyAnalyserTest +10, RapidoTrackerResourcesTest +5). All 15 fail under the old behaviour
+  (every edge full). Mutation sweep: 55 hand-written source mutations, all killed. Known untested: the branch for a
+  package StructureDefinition without a snapshot (conservative; the worker context generates snapshots, and the IG's
+  are generated before the analysis).
+Review: 4 rounds of code-reviewer, silent-failure-hunter, pr-test-analyzer (general-purpose agents with those briefs)
+  on the full branch diff. Each non-nit claim checked against core sources / by a test, fixed as a new commit:
+  r1: definitions from packages and core (Observation's obs-9 etc.) with resolve() not seen; contained/bundled
+      targets validated with CHECK_VALID against the full target profile; logical-target characteristics missing
+      from identity; test gaps (narrative link, inherited full edge, identity fields).
+  r2: cycle in the definition walk could memoise a wrong false; imposeProfile not followed; discriminator paths with
+      a `reference` segment fetch the target; MeasureReport subject-list counts its Lists' entries; web path is null
+      at analysis time (removed from identity); test gaps.
+  r3: before R4 definitions are linked by Reference (binding valueSetReference, QuestionnaireResponse.questionnaire):
+      References are full edges unless the IG is R4+; discriminator resolve() test was masked.
+  r4: nothing confirmed. Dropped as nits: modifierExtension url collection untested; Binary logical instance
+      switching model. Noted, pre-existing and out of scope: an absolute reference that resolves to a Bundle entry's
+      fullUrl in another file gets no edge (Bundle entries aren't nodes).
+
+BENCH DESIGN (to run on a machine that fits it)
+- IG: uz.dhp.core (github.com/uzinfocom-org/digital-health-ig @2c39cd0a, template fhir2.base.template#current: the
+  repo at that commit has no template/ folder). Jars: base = 557f93a1, branch = 474889b
+  (mvn -T 4 -DskipTests package; org.hl7.fhir.publisher.cli/target/org.hl7.fhir.publisher.cli-3.0.4-SNAPSHOT.jar).
+- Per session, fresh copy of the IG, warm tx cache:
+    IG_GATE_OFF=1 java -Xmx10g -jar <jar> -ig . -rapido -watch -tx https://tx.fhir.org -package-cache-folder <dir>
+  steps: first, prof1, prof2, restore-prof, inst1, inst2, restore-inst (item 2's edits: UZCoreSpecimen status ^short
+  "Bench<n> lifecycle status..." checked in output/en/StructureDefinition-uz-core-specimen.html; UZCoreObservation
+  component valueQuantity 120 -> 13n checked in output/Observation-blood-pressure-example.json). Time from edit to
+  "Finished @" plus the text in output. Sessions base1, branch1, branch2, base2 interleaved; medians.
+- Per build also record the "Rapido Mode: Differential Build (R of N files to render, V to validate)" line and the
+  phases "Validating Conformance Resources" / "Validating Resources" / "Generate HTML Outputs" / "Generate
+  Spreadsheets" from the log: those are where this item's saving is.
+- Output: snapshot output/ after the last restore and after a fresh complete non-watch build with the branch jar
+  (item 2's snap.py); expect masked-equal apart from the known timestamped files. QA counts equal across base, branch,
+  fresh. The driver used here is /home/user/bench/session.py on the VM (not kept).
+- Expected (from the round 2 reports, NOT measured here): rendering about -9 to -10 s per profile edit, validation about
+  -1 s. Two things may lower the validation share against round 2's prototype: resources validated against a core or
+  package definition with resolve() (Observation, Encounter, Procedure, DiagnosticReport, Provenance, DocumentReference,
+  CareTeam, vital signs profiles) and resources holding others (Bundles, contained) follow every edge. Examples that
+  refer to an edited profile's examples are still rendered again (rendering a reference can show the target).
+
+DRAFT PR TEXT
+-----
+Branch: vadi2/perf/weak-edges. Stacks on the watch FSH tail PR (perf/watch-fsh-tail), which keeps timestamps stable within a watch session.
+
+Title: Rapido: what only links to a changed file isn't validated or rendered again
+
+In `-rapido` and `-watch`, a profile edit validates and renders again everything that reaches the profile through any chain of references. On uz.dhp.core a short text change in the specimen profile renders about 190 files and validates about 180, because profiles target each other (adverse event -> observation -> specimen) and examples claim those profiles. Most of that work produces the same output.
+
+### Cause
+
+The Rapido dependency hash treats every reference as a full dependency, followed transitively: a profile's hash includes the content of every profile its `targetProfile`s point to, and of everything those depend on, and the same for Reference.reference and links in narrative. But the validator only checks that a reference target exists with the right type (the publisher's policy is CHECK_EXISTS_AND_TYPE), and a target profile only needs to exist with the right type, kind and base. Pages only link to target profiles by title and path.
+
+### Fix
+
+- Edges are full or weak. For a weak edge the hash holds the target's identity (key, file, url, version, name, title, base, and for a StructureDefinition its type, kind, derivation, abstract and logical target extensions, with its base chain), not its content, and doesn't go on through it.
+- `ElementDefinition.type.targetProfile` and narrative links are weak for validation and rendering. `Reference.reference` is weak for validation only (a page may show the target), and only in R4+ IGs (before R4, bindings and questionnaires are References).
+- Validation follows every edge, as before, when the resource can read its targets: a `resolve()` or `conformsTo(` in it or in what it depends on, in the IG or in a definition from core or a package that it is validated against (type, profiles, imposed profiles, extensions, element types), a discriminator path through a `reference`, contained or bundled resources (validated with CHECK_VALID), a MeasureReport, or no worker context.
+- A page lists what only links to it by identity, so a content change there doesn't render it again.
+
+Adds 15 tests in `RapidoDependencyAnalyserTest` and `RapidoTrackerResourcesTest`, including one where the real narrative renderer shows a referenced patient's name, so the referring resource is still rendered again; existing tests pass.
+
+| uz.dhp.core, -rapido -watch | base | this | saved |
+|---|---|---|---|
+| profile edit | pending | pending | pending |
+| instance edit | pending | pending | pending |
+-----
