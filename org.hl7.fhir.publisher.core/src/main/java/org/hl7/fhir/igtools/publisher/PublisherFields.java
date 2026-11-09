@@ -52,6 +52,16 @@ public class PublisherFields {
 
     FHIRToolingClient webTxServer;
     @Getter private Calendar execTime = Calendar.getInstance();
+    /**
+     * When the build ran, for the qa reports. The same as execTime, except in watch mode, where execTime stays at the
+     * day's first build (see WatchSession.buildTime) and this is still when the build ran
+     */
+    @Getter @Setter private Calendar reportTime = execTime;
+
+    /** the time the build says it was built at (the report time stays when it ran) */
+    void pinExecTime(Calendar time) {
+        execTime = time;
+    }
 
 
     Locale forcedLanguage;

@@ -2,6 +2,8 @@ package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -12,9 +14,11 @@ import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
+import java.util.TimeZone;
 
 import org.hl7.fhir.igtools.templates.Template;
 import org.junit.jupiter.api.Test;
@@ -526,5 +530,58 @@ class WatchSessionTest {
     s.startBuild();
     window(l, "onGenerate", "template/stamp.txt", "built at 3");
     assertEquals(Collections.singleton(abs("template/stamp.txt")), s.changesSinceBuildStart().getModified());
+  }
+
+  private static Calendar at(int day, int hour, int minute) {
+    Calendar c = Calendar.getInstance(TimeZone.getTimeZone("Europe/Stockholm"));
+    c.clear();
+    c.set(2026, Calendar.NOVEMBER, day, hour, minute, 0);
+    return c;
+  }
+
+  @Test
+  void everyBuildOfTheDaySaysItWasBuiltWhenTheFirstWas() throws IOException {
+    WatchSession s = session();
+    assertEquals(at(9, 8, 0).getTimeInMillis(), s.buildTime(at(9, 8, 0)).getTimeInMillis());
+    assertEquals(at(9, 8, 0).getTimeInMillis(), s.buildTime(at(9, 12, 30)).getTimeInMillis());
+    assertEquals(at(9, 8, 0).getTimeInMillis(), s.buildTime(at(9, 23, 59)).getTimeInMillis());
+  }
+
+  @Test
+  void theFirstBuildOfANewDayGetsItsOwnTime() throws IOException {
+    WatchSession s = session();
+    s.buildTime(at(9, 23, 50));
+    assertEquals(at(10, 0, 5).getTimeInMillis(), s.buildTime(at(10, 0, 5)).getTimeInMillis());
+    assertEquals(at(10, 0, 5).getTimeInMillis(), s.buildTime(at(10, 9, 0)).getTimeInMillis());
+  }
+
+  @Test
+  void aBuildCantChangeTheTimeTheNextOneGets() throws IOException {
+    WatchSession s = session();
+    Calendar first = s.buildTime(at(9, 8, 0));
+    first.add(Calendar.HOUR, 2);
+    Calendar second = s.buildTime(at(9, 9, 0));
+    assertNotSame(first, second);
+    assertEquals(at(9, 8, 0).getTimeInMillis(), second.getTimeInMillis());
+  }
+
+  @Test
+  void aWatchBuildReportsWhenItRanButIsDatedAtTheDaysFirstBuild() throws Exception {
+    WatchSession s = session();
+    PublisherFields first = Publisher.fieldsForBuild(s);
+    Thread.sleep(5);
+    PublisherFields second = Publisher.fieldsForBuild(s);
+    assertEquals(first.getExecTime().getTimeInMillis(), second.getExecTime().getTimeInMillis());
+    assertNotEquals(second.getExecTime().getTimeInMillis(), second.getReportTime().getTimeInMillis());
+    assertTrue(second.getReportTime().getTimeInMillis() > first.getReportTime().getTimeInMillis());
+  }
+
+  @Test
+  void aBuildOutsideWatchModeIsDatedAndReportedWhenItRan() throws Exception {
+    PublisherFields first = Publisher.fieldsForBuild(null);
+    Thread.sleep(5);
+    PublisherFields second = Publisher.fieldsForBuild(null);
+    assertTrue(second.getExecTime().getTimeInMillis() > first.getExecTime().getTimeInMillis());
+    assertEquals(second.getExecTime(), second.getReportTime());
   }
 }

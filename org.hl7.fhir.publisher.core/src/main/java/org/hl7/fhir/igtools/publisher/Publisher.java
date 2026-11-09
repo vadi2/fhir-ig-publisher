@@ -41,6 +41,7 @@ import java.time.format.DateTimeFormatter;
 import java.time.format.FormatStyle;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -171,6 +172,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   private PublisherGenerator generator;
   // watch mode: what the last build kept for a page-only rebuild (see PageRebuild), or null
   private PageRebuild pageRebuild;
+  /** in watch mode, the session; else null */
+  private WatchSession watchSession;
 
   public Publisher() {
     super();
@@ -229,6 +232,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         generator.setWatchTools(jekyllDriver, new FullIgZip());
       }
       loader.setWatchSession(session);
+      watchSession = session;
 
       boolean first = true;
       do {
@@ -358,6 +362,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     processor.setPf(pf);
     generator.setPf(pf);
     pf.tt = new TimeTracker();
+    pf.setReportTime(Calendar.getInstance());
     // in watch mode the staging folder is synced into the output folder again at the end
     pf.watchOutputSynced = false;
     try {
@@ -394,8 +399,21 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     return true;
   }
 
+  /**
+   * The fields for a new build. In watch mode every build of the day says it was built when the day's first build was
+   * (the pages, the package and the canonical resources carry that time), so a rebuild changes only the outputs whose
+   * content changed
+   */
+  static PublisherFields fieldsForBuild(WatchSession session) {
+    PublisherFields res = new PublisherFields();
+    if (session != null) {
+      res.pinExecTime(session.buildTime(res.getExecTime()));
+    }
+    return res;
+  }
+
   private void build(String rootDir) throws Exception {
-    pf = new PublisherFields();
+    pf = fieldsForBuild(watchSession);
     loader.setPf(pf);
     processor.setPf(pf);
     generator.setPf(pf);
@@ -550,8 +568,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     qaJson.add("ig-ver", pf.templateInfo.asString("version"));
     txt.append("ig-ver = "+ pf.templateInfo.asString("version")+"\r\n");
     txtGen.append("ig-ver = "+ pf.templateInfo.asString("version")+"\r\n");
-    qaJson.add("date", new SimpleDateFormat("EEE, dd MMM, yyyy HH:mm:ss Z", new Locale("en", "US")).format(pf.getExecTime().getTime()));
-    qaJson.add("dateISO8601", new DateTimeType(pf.getExecTime()).asStringValue());
+    qaJson.add("date", new SimpleDateFormat("EEE, dd MMM, yyyy HH:mm:ss Z", new Locale("en", "US")).format(pf.getReportTime().getTime()));
+    qaJson.add("dateISO8601", new DateTimeType(pf.getReportTime()).asStringValue());
     qaJson.add("version", Constants.VERSION);
     qaJson.add("tool", Constants.VERSION+" ("+ToolsVersion.TOOLS_VERSION+")");
     try {
@@ -1051,8 +1069,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         j.add("package-id", pf.packageId());
         j.add("ig-ver", pf.publishedIg.getVersion());
       }
-      j.add("date", new SimpleDateFormat("EEE, dd MMM, yyyy HH:mm:ss Z", new Locale("en", "US")).format(pf.getExecTime().getTime()));
-      j.add("dateISO8601", new DateTimeType(pf.getExecTime()).asStringValue());
+      j.add("date", new SimpleDateFormat("EEE, dd MMM, yyyy HH:mm:ss Z", new Locale("en", "US")).format(pf.getReportTime().getTime()));
+      j.add("dateISO8601", new DateTimeType(pf.getReportTime()).asStringValue());
       if (val != null) {
         j.add("errs", val.getErr());
         j.add("warnings", val.getWarn());
@@ -1074,7 +1092,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       FileUtilities.stringToFile(json, Utilities.path(settings.getDestDir() != null ? settings.getDestDir() : pf.outputDir, "qa.json"));
 
       j = new JsonObject();
-      j.add("date", new SimpleDateFormat("EEE, dd MMM, yyyy HH:mm:ss Z", new Locale("en", "US")).format(pf.getExecTime().getTime()));
+      j.add("date", new SimpleDateFormat("EEE, dd MMM, yyyy HH:mm:ss Z", new Locale("en", "US")).format(pf.getReportTime().getTime()));
       j.add("doco", "For each file: start is seconds after start activity occurred. Length = milliseconds activity took");
 
       for (FetchedFile f : pf.fileList) {

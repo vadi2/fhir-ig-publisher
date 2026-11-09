@@ -4,6 +4,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
@@ -68,6 +69,8 @@ public class WatchSession {
   /** files that a window writes on every build, with different content: taken as its output */
   private final Map<String, Set<Path>> alwaysWritten = new HashMap<>();
   private Consumer<String> log = s -> { };
+  /** when the first build of the current day started (see buildTime) */
+  private Calendar buildTime;
 
   private static class OutputWindow {
     final Path folder;
@@ -103,6 +106,18 @@ public class WatchSession {
 
   private SourceSnapshot take(Collection<Path> roots, SourceSnapshot previous) throws IOException {
     return SourceSnapshot.take(roots, previous, excluded);
+  }
+
+  /**
+   * The time a build that starts now says it was built at: the time the first build of the day started, so that builds
+   * of the same content write the same outputs. A build on another day gets the time it started (the pages show the
+   * day, and a page rebuild needs the day to be today, see PageRebuild.pagesFor)
+   */
+  public Calendar buildTime(Calendar now) {
+    if (buildTime == null || !PageRebuild.sameDay(buildTime, now)) {
+      buildTime = (Calendar) now.clone();
+    }
+    return (Calendar) buildTime.clone();
   }
 
   /** Records the content of the watched files as the build that is starting will see them */
