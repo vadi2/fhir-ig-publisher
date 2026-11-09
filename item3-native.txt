@@ -1,0 +1,49 @@
+perf/native-outputs-threads@3d2f21c4202c64802e7b1a0fd7667c0b47b2ba7f
+STATUS: ready (bench numbers are the handoff's, measured on Vadim's 12-core machine; the optional fair -watch re-run is
+pending: this VM has 15 GB, cgroup limit 13.4 GB, and the -Xmx10g build plus Jekyll was OOM-killed)
+
+TESTS: mvn test, org.hl7.fhir.publisher.core on this VM (JDK 21): 440 run, 1 failure, 2 skipped. The failure,
+GitUtilitiesTests.testGetGitSource[4] (SSH URL case), also fails on master 42687809 on this VM: pre-existing, not ours.
+All new tests (OrderedWorkersTest 10, NativeOutputsThreadsTest 6, TemplateFragmentCountTest, FetchedFileColumnsTest)
+pass; mutation-checked per handoff.
+REVIEW: 3 rounds (code-reviewer, silent-failure-hunter, pr-test-analyzer) in the handoff; round 3 clean. No code
+changed in this session, so no new round.
+BENCH (this session): attempted interleaved complete builds on this VM (4 cores, 15 GB). The first build was OOM-killed
+in Jekyll (memcg limit 13.4 GB). No numbers from this VM are used. The table below is the handoff's, unchanged.
+Remaining optional step: re-run both -watch sessions back to back under equal load on a machine with >= 16 GB free.
+No PR opened (needs Vadim's OK).
+
+-----8<----- DRAFT PR TEXT
+Title: Generate native outputs on the -threads workers
+Branch: vadi2/fhir-ig-publisher perf/native-outputs-threads, base HL7 master 42687809, commits 5fda240b ab00247b 3d2f21c4
+
+With `-threads`, the "Generate Native Outputs" step still runs on one thread. For every file in the change list it writes the JSON, XML and Turtle of each resource, once per language, plus the `_includes` copies, while the workers sit idle. On uz.dhp.core (811 files) that takes about 12 s of a complete build.
+
+### Cause
+
+- `PublisherGenerator.generate()` loops over `pf.changeList` and calls `saveNativeResourceOutputs()` for each resource in turn. Most of that work is per resource and touches nothing shared; only the package entries, the cross-version notes and the database row are shared.
+
+### Fix
+
+- With `-threads N` (N > 0), the files are done on N workers by a new `OrderedWorkers`, which hands each file's result back to the main thread in change-list order, at most 8N files ahead. With `-threads 0`, the default, the loop is as before.
+- The workers write the files into temp. Everything that adds to shared state - the npm, per-language and per-version package entries, the cross-version omissions and problems, the "Unable to convert" line, the debug log - is kept as a step and run on the main thread, in the same order as without threads, so the packages come out the same.
+- The database rows are saved last, in order, once no worker is left. Saving a row marks the resource (and a custom resource's StructureDefinition) with its key, which the workers read.
+- Failures behave as without threads: the steps and rows of the resources before the failing one still run, and the same exception is thrown, Errors included. The workers are waited for, even when the build is interrupted.
+- If two resources' type and id differ only in case, they would write the same file on a case-insensitive file system, so then the files are done without threads.
+- Two counters that the workers now update together are made thread-safe: the Rapido template fragment counts and `FetchedFile`'s shared column list.
+
+Adds `OrderedWorkersTest` (10 tests), `NativeOutputsThreadsTest` (6), `TemplateFragmentCountTest` and `FetchedFileColumnsTest`: the package entries, notes, rows, files written and output names match the run without threads on 1, 3 and 8 threads, covering logical-as-Binary, custom resources, ADL, conversion failures, no database, exceptions and Errors; all mutation-checked.
+
+Checked on uz.dhp.core: the complete builds of master and this PR write the same 20,643 files. Apart from the build dates, they differ only where two builds of the same jar differ from each other. That includes the order of the "used by" links in codesystem-list, codesystem-ref-list and codesystem-ref-all-list (.json and .csv): they come from a HashSet of resources, so their order follows identity hash codes and changes between runs of either jar; the entries are the same. The QA counts are the same (0 errors, 262 warnings, 8,521 hints, 6 broken links in the complete builds).
+
+Measured: master 42687809 vs this PR, uz.dhp.core, `-rapido -threads 10`, java 25, -Xmx10g, 12 cores. Complete builds interleaved (B M B M B M), medians of 3, seconds. The `-watch` sessions (one per jar: first build, 2 profile edits + restore, 2 instance edits + restore) ran hours apart under different machine load (master's under memory pressure), so for those only the native phase compares fairly.
+
+| build | native outputs, master | native outputs, this PR | publisher total, master | publisher total, this PR |
+|---|---|---|---|---|
+| complete build | 11.7 | 5.8 (-50%) | 271.1 | 263.7 (-7.4) |
+| `-watch` first build (1 run each) | 14.1 | 5.9 | 309.8 | 258.9 |
+| `-watch` profile edit (68 files) | 1.15 | 0.67 | 124.1 | 113.3 |
+| `-watch` instance edit (2 files) | 0.39 | 0.37 | 104.6 | 103.0 |
+
+So about 6 s off a complete build. In `-watch` rebuilds master already makes native outputs only for the files that changed, so there is little left to gain there.
+-----8<-----
