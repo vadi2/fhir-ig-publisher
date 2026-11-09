@@ -1,0 +1,41 @@
+vadi2/org.hl7.fhir.core perf/ig-validator-registry-cache@71de93fde6 (base master 4ea8d00521)
+STATUS: bench pending (VM has 15 GB). The 10g publisher JVM plus Jekyll does not fit: in the warm-up session the
+  kernel's memory cgroup killed java (anon-rss 12.1 GB) and jekyll (1.7 GB) at "Run jekyll" of the first build.
+  No A/B numbers were taken on this VM; none are extrapolated.
+TESTS: org.hl7.fhir.utilities full suite on the branch: 1682 run, 0 failures, 33 skipped. RegistryAnswerCacheTests
+  21 tests, mutation-checked by the previous agent (see handoff); spot re-check here: never-keep mutation -> 17/21 fail
+  (the other 4 assert answers are not kept). org.hl7.fhir.validation full suite on the branch: 5482 run, 15 failures,
+  59 errors, 1 skipped; the same 74 tests (TerminologyServiceTests vn-* x10, ValidationTests x9,
+  ValidationEngineTests.testResolveAbsoluteError, FhirValidatorHttpServiceTest$TestsThatCallAServer x53) fail
+  identically on base 4ea8d00521 in this VM, so they are not ours.
+REVIEW: converged before this session (r1-r3 fixes, r4 all three reviewers clean) on this same head; no code changed
+  since, so no new round was run.
+OTHER: branch merges cleanly onto current upstream master f6d3c306; upstream has not touched the changed files.
+BENCH READY TO RUN: jars built here as in the handoff (publisher master 504aa15 against core 7.0.6-r3igA-SNAPSHOT =
+  4ea8d00521 and 7.0.6-r3igB-SNAPSHOT = 71de93fde6; jar B has RegistryAnswerCache, jar A doesn't; note: the second
+  publisher build needs `clean`, otherwise shade re-wraps the previous shaded jar). Needs a VM with >= ~16 GB free for
+  the JVM + Jekyll. Design unchanged from the handoff (Title edits, sessions A B B A).
+
+-------------------------------------------------------------------------------------------------------------------
+DRAFT
+-------------------------------------------------------------------------------------------------------------------
+Title: Keep registry answers for IG dependency checks for an hour
+
+In an IG Publisher watch session, every build that validates the ImplementationGuide resource (a complete build, or any rebuild after an edit that changes the IG resource, such as a page title) asks the package registries and build.fhir.org the same questions again for each `dependsOn`. On uz.dhp.core (3 dependencies) that costs 2.5-3.1 s of network time in each such build on master, and the first build asks the same questions once per dependency.
+
+### Cause
+
+- `ImplementationGuideValidator.checkDependency` builds a new `FilesystemPackageCacheManager` for every dependency, so it also gets a new `CIBuildClient`, whose 1 h interval never applies: each one downloads `qas.json` again.
+- It then searches the catalog by canonical (packages2 and packages), lists the package's versions, and for IGs marked for publication asks for the latest version. None of it is kept between calls.
+
+### Fix
+
+- New `RegistryAnswerCache` in utilities/npm: answers kept by url for a ttl. `PackageClient` (catalog search, version list) and `CIBuildClient` (`qas.json`) use it when given one. `FilesystemPackageCacheManager.Builder.withRegistryAnswerCache` passes it to both, and `getLatestVersion` now goes through the client factory so it uses it too.
+- Only answers are kept. A request that fails (error status, timeout, no network, a body that doesn't parse) throws as before and the next caller asks again, as #2827 does for tx failures. A body that parses but can't be read (a version list without versions, entries that can't be read) is returned as on master but not kept. A catalog search that finds nothing is an answer; an unknown package is a 404, so it is asked again.
+- The cache holds the registry's JSON, not the filtered lists, so `exactMatch` or milestones-only calls don't change what the next caller gets.
+- Nothing changes unless a cache is given. Only `ImplementationGuideValidator` opts in, with a static cache and a 1 h ttl, the same as `CIBuildClient`'s interval. So for up to an hour a validator in the same process doesn't see a newly published version of a dependency.
+- The validator is only in the validation module, so there is no r5/standalone copy to change.
+
+Adds 21 tests in `RegistryAnswerCacheTests` against a fake registry (MockWebServer, no network), each checked to fail with its part of the change reverted; existing utilities and validation tests pass (validation failures are the same as on master).
+
+NUMBERS: pending (needs the A/B Title-edit bench; table: master vs this PR, rebuild median, Validating Conformance phase median, registry requests per Title rebuild, first build requests, QA counts).
