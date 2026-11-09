@@ -759,7 +759,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * each worker writes its file's outputs into temp, and keeps the steps that add to shared state (the packages,
    * the cross-version notes, the log) for this thread, which runs them in change list order. The database rows come
    * last, in the same order, once no worker is left: saving a row marks the resource (and, for a custom resource,
-   * its structure definition) with its key, which the workers read.
+   * its structure definition) with its key, which the workers read. Until then, the rows hold the resources' json.
    * <p>
    * If a file fails, the files after it may already have written their outputs into temp; the build stops anyway.
    */
@@ -795,11 +795,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
       });
     } catch (Exception | Error e) {
-      // as without threads, the rows of the resources before a failure are saved
+      // as without threads, the rows of the resources before a failure are saved. They come before it, so if one
+      // fails, that is what the loop without threads would have thrown
       try {
         rows.forEach(Runnable::run);
-      } catch (RuntimeException | Error e2) {
-        e.addSuppressed(e2);
+      } catch (RuntimeException | Error rowFailure) {
+        rowFailure.addSuppressed(e);
+        throw rowFailure;
       }
       throw e;
     }

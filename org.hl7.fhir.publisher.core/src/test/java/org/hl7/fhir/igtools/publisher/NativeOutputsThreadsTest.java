@@ -250,12 +250,18 @@ class NativeOutputsThreadsTest {
     return ids;
   }
 
+  /** the id whose database row fails, if any */
+  private String failRowOn;
+
   private DBBuilder db() {
     DBBuilder db = mock(DBBuilder.class);
     doAnswer(inv -> {
       FetchedFile f = inv.getArgument(0);
       FetchedResource r = inv.getArgument(1);
       rowsStarted.set(true);
+      if (r.getId().equals(failRowOn)) {
+        throw new IllegalArgumentException("no row for " + failRowOn);
+      }
       record("db " + f.getStatedPath() + " " + r.getId() + " " + sha(inv.getArgument(2)));
       return null;
     }).when(db).saveResource(any(FetchedFile.class), any(FetchedResource.class), any(byte[].class));
@@ -305,6 +311,10 @@ class NativeOutputsThreadsTest {
   }
 
   private Run run(String name, int threads, String failOn, String... ids) throws Exception {
+    return run(name, threads, true, failOn, ids);
+  }
+
+  private Run run(String name, int threads, boolean withDb, String failOn, String... ids) throws Exception {
     calls.clear();
     callThreads.clear();
     workThreads.clear();
@@ -314,7 +324,7 @@ class NativeOutputsThreadsTest {
     PublisherGenerator generator = generator(temp, threads, failOn, ids);
     Run run = new Run();
     try {
-      generator.generateNativeOutputs(db());
+      generator.generateNativeOutputs(withDb ? db() : null);
     } catch (Exception | Error e) {
       run.failure = e;
     }
@@ -380,6 +390,28 @@ class NativeOutputsThreadsTest {
     assertTrue(plain.calls.stream().anyMatch(c -> c.startsWith("db input/file12.json b12 ")), plain.calls.toString());
     assertEquals(plain.packageCalls(), threads.packageCalls());
     assertEquals(plain.rows(), threads.rows());
+  }
+
+  @Test
+  void aFailedRowIsThrownBeforeALaterFailureAsWithoutThreads() throws Exception {
+    failRowOn = "b4";
+    Run plain = run("plain", 0, "b13", ids(FILES));
+    Run threads = run("threads", 4, "b13", ids(FILES));
+    assertTrue(plain.failure instanceof IllegalArgumentException, String.valueOf(plain.failure));
+    assertEquals(plain.failure.getClass(), threads.failure.getClass());
+    assertEquals(plain.failure.getMessage(), threads.failure.getMessage());
+    assertEquals(plain.rows(), threads.rows());
+  }
+
+  @Test
+  void theSameOutputsWithoutADatabase() throws Exception {
+    Run plain = run("plain", 0, false, null, ids(FILES));
+    Run threads = run("threads", 4, false, null, ids(FILES));
+    assertEquals(null, plain.failure);
+    assertEquals(null, threads.failure);
+    assertTrue(threads.rows().isEmpty());
+    assertEquals(plain.packageCalls(), threads.packageCalls());
+    assertEquals(plain.files, threads.files);
   }
 
   @Test
