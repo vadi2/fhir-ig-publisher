@@ -194,6 +194,23 @@ class RapidoTxCacheScrubTest {
   }
 
   @Test
+  void theUrlOfAValueSetDeletedAfterABuildWithTxFailuresIsScrubbed() throws Exception {
+    fillCache();
+    PublisherFields first = build(true);
+    // the server didn't answer some calls: the state keeps nothing for the next build, apart from the urls
+    first.txFailures = mock(RapidoTracker.TxFailures.class);
+    when(first.txFailures.count()).thenReturn(1);
+    finish(first);
+    fillCache();
+    ig.remove("ValueSet-vs-other.json");
+
+    PublisherFields pf = build(true);
+
+    assertTrue(pf.rapido.isCompleteBuild());
+    assertEquals(Set.of(SCT, EXTERNAL_VS, VS_A+"x"), cached());
+  }
+
+  @Test
   void nothingChangedKeepsEveryEntry() throws Exception {
     firstBuild();
 
