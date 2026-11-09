@@ -748,6 +748,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     } catch (IOException | RuntimeException e) {
       log("Unable to keep the state for a page rebuild: " + e);
       pageRebuild.notReusable("its state couldn't be kept (" + e + ")");
+      pageRebuild.dropped();
       pageRebuild.discard();
       pageRebuild = null;
     }
@@ -4830,9 +4831,14 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       res.addAll(byRelative.values());
       return res;
     }
-    JekyllDriver.Result r = jekyllDriver.rewrite(temp, out, byRelative.keySet(), pf.jekyllTimeout, new MyFilterHandler()::line);
+    JekyllDriver.Result r;
+    try {
+      r = jekyllDriver.rewrite(temp, out, byRelative.keySet(), pf.jekyllTimeout, new MyFilterHandler()::line);
+    } catch (IOException e) {
+      throw new HTMLInspector.OutputRewriteFailure("Jekyll could not write output files again: " + e.getMessage());
+    }
     if (!r.isOk()) {
-      throw new IOException("Jekyll could not write output files again: " + r.getError());
+      throw new HTMLInspector.OutputRewriteFailure("Jekyll could not write output files again: " + r.getError());
     }
     for (String f : r.getUnknown()) {
       res.add(byRelative.get(f));

@@ -61,6 +61,17 @@ public class AIProcessor {
     private final Set<String> written = new HashSet<>();
 
     /**
+     * Watch mode, for the next build: a cache with what this one worked out from the pages and the zips it wrote, but
+     * not what it took from the package or the build (the rewriter holds the whole build)
+     */
+    public Cache carryOver() {
+      Cache res = new Cache();
+      res.pages.putAll(pages);
+      res.zips.putAll(zips);
+      return res;
+    }
+
+    /**
      * Before a run: the files in the output written since the last run (null: all of them), and how to write the
      * others again as Jekyll wrote them, if the run needs to read one it didn't read last time
      */

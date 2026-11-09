@@ -112,13 +112,43 @@ public class PageRebuild {
   private Path checkedFolder;
   private boolean captured;
   private boolean complete;
+  // the build stopped keeping its state in this (see dropped())
+  private boolean dropped;
   // what the html checks found, and what the AI step worked out, in the last build or rebuild (for the next rebuild)
   private HtmlCheckRecords htmlRecords;
-  private final AIProcessor.Cache aiCache = new AIProcessor.Cache();
+  private final AIProcessor.Cache aiCache;
   /** the languages that the pages are also written in, from their translations if they have one */
   private List<String> pageLanguages = Collections.emptyList();
   /** the folders in the input folder that the template reads before Jekyll, and how */
   private Map<String, String> folderBlockers = Collections.emptyMap();
+
+  public PageRebuild() {
+    this(null, new AIProcessor.Cache());
+  }
+
+  private PageRebuild(HtmlCheckRecords htmlRecords, AIProcessor.Cache aiCache) {
+    this.htmlRecords = htmlRecords;
+    this.aiCache = aiCache;
+  }
+
+  /**
+   * Watch mode, when the next build is a complete one: the state for it, with what this one's html checks found and
+   * what its AI step worked out, which the next build can use for the output files that are the same (see
+   * HTMLInspector.recordSignature()). Nothing else of this build is kept: not its fields, nor its html check. Only
+   * if this build finished, and kept its state in this: else the output may have changed since its html checks and AI
+   * step ran
+   */
+  public PageRebuild carryOver() {
+    return complete && !dropped ? new PageRebuild(htmlRecords, aiCache.carryOver()) : new PageRebuild();
+  }
+
+  /**
+   * The build stopped keeping its state in this (as it couldn't keep what a page rebuild needs): what's in it may be
+   * the last build's, which the next build mustn't go on from
+   */
+  public void dropped() {
+    dropped = true;
+  }
 
   /** The fields of the build that this keeps the state of */
   public void setPf(PublisherFields pf) {

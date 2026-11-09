@@ -125,6 +125,23 @@ class AIProcessorTest {
     assertSameAsFullRun(out, true);
   }
 
+  @Test
+  void theNextBuildKeepsWhatThePagesAndZipsGave() throws IOException {
+    Path out = dir.resolve("out");
+    site(out);
+    AIProcessor.Cache cache = new AIProcessor.Cache();
+    run(out, cache, null);
+    Map<String, String> before = stamps(out);
+
+    // a complete build that wrote the resources' pages again: the other pages aren't read (they may have what the html
+    // check changed in them), and nothing is written
+    AIProcessor.Cache next = cache.carryOver();
+    run(out, next, set(out, "en/CodeSystem-cs1.html", "en/ValueSet-vs1.html", "en/Patient-p1.html"));
+    assertEquals(Collections.emptySet(), next.getWritten());
+    assertEquals(before, stamps(out));
+    assertSameAsFullRun(out);
+  }
+
   // --- helpers -------------------------------------------------------------------------------------------------
 
   private void run(Path out, AIProcessor.Cache cache, Set<String> fresh) throws IOException {

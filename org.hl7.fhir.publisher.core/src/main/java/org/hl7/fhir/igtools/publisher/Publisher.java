@@ -172,6 +172,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   private PublisherGenerator generator;
   // watch mode: what the last build kept for a page-only rebuild (see PageRebuild), or null
   private PageRebuild pageRebuild;
+  /** watch mode: what the last build left for the complete build that's next (see PageRebuild.carryOver()) */
+  private PageRebuild carriedOver;
   /** in watch mode, the session; else null */
   private WatchSession watchSession;
 
@@ -246,9 +248,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
               if (!first) {
                 resetForRebuild(cliNoNarratives, cliNoValidate);
               }
-              pageRebuild = new PageRebuild();
-              build(rootDir);
-              pageRebuild.finished();
+              PageRebuild carried = carriedOver;
+              carriedOver = null;
+              completeBuild(carried, () -> build(rootDir), () -> resetForRebuild(cliNoNarratives, cliNoValidate));
             }
           } catch (Exception | Error e) {
             if (BuildFailures.isFatal(e)) {
@@ -319,6 +321,41 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     ResourceComparer.resetCounter(); // comparison page ids
   }
 
+  interface BuildStep {
+    void run() throws Exception;
+  }
+
+  /**
+   * Watch mode: a complete build, going on from what the last build left for it (see PageRebuild.carryOver()), if
+   * anything. If it fails because of that (Jekyll couldn't write files again that the html checks or the AI step it
+   * left needed), the build is done again without it
+   */
+  void completeBuild(PageRebuild carried, BuildStep build, BuildStep reset) throws Exception {
+    pageRebuild = carried != null ? carried : new PageRebuild();
+    try {
+      build.run();
+    } catch (Exception e) {
+      if (carried == null || !isOutputRewriteFailure(e)) {
+        throw e;
+      }
+      log("Rapido Mode: Complete Build again, without what the last build left (" + e.getMessage() + ")");
+      discardPageRebuild();
+      reset.run();
+      pageRebuild = new PageRebuild();
+      build.run();
+    }
+    pageRebuild.finished();
+  }
+
+  private static boolean isOutputRewriteFailure(Throwable e) {
+    for (Throwable t = e; t != null; t = t.getCause()) {
+      if (t instanceof HTMLInspector.OutputRewriteFailure) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private void discardPageRebuild() {
     if (pageRebuild != null) {
       pageRebuild.discard();
@@ -353,6 +390,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     }
     if (pages == null) {
       log("Rapido Mode: Complete Build (" + reason.get(0) + ")");
+      carriedOver = state.carryOver();
       state.discard();
       return false;
     }

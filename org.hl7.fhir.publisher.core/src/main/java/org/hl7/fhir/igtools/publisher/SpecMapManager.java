@@ -32,7 +32,9 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
+import java.util.TreeSet;
 
+import org.apache.commons.codec.digest.DigestUtils;
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.services.context.IContextResourceLoaderN;
 import org.hl7.fhir.model.core.Constants;
@@ -313,6 +315,30 @@ public class SpecMapManager {
       return Utilities.pathURL(base, "valueset-iso3166-1-2.html");
     }
     return null;
+  }
+
+  /**
+   * What the html checks look up in this map (its bases, targets, images and paths, see HTMLInspector), as a digest:
+   * the same for two maps with the same content
+   */
+  public String contentSignature() {
+    StringBuilder b = new StringBuilder();
+    b.append(base).append('\n').append(base2).append('\n').append(special).append('\n');
+    for (String s : new TreeSet<>(targetSet)) {
+      b.append('t').append(s).append('\n');
+    }
+    for (String s : new TreeSet<>(imageSet)) {
+      b.append('i').append(s).append('\n');
+    }
+    if (paths != null) {
+      for (String s : new TreeSet<>(paths.getNames())) {
+        b.append('p').append(s).append('\n');
+      }
+    }
+    if (wrapped != null) {
+      b.append('w').append(wrapped.contentSignature());
+    }
+    return DigestUtils.sha1Hex(b.toString());
   }
 
   public List<String> getPathUrls() {

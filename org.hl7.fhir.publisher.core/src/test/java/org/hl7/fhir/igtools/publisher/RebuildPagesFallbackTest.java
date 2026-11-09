@@ -2,7 +2,10 @@ package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -105,5 +108,49 @@ class RebuildPagesFallbackTest {
     assertNull(f.get(p));
     assertEquals("Rapido Mode: the page rebuild failed (java.lang.Error: Output file x is being generated more than once), so doing a complete build",
         log.get(log.size() - 1));
+  }
+
+  @Test
+  void whenACompleteBuildCantGoOnFromWhatTheLastBuildLeft() throws Exception {
+    List<String> log = new ArrayList<>();
+    Publisher p = new Publisher();
+    p.setPf(new PublisherFields());
+    p.getPf().logger = new ILoggingService() {
+      public void logMessage(String message) {
+        log.add(message);
+      }
+
+      public void logDebugMessage(LogCategory category, String message) {
+      }
+    };
+    Field f = Publisher.class.getDeclaredField("pageRebuild");
+    f.setAccessible(true);
+    PageRebuild carried = new PageRebuild();
+    List<Object> builtWith = new ArrayList<>();
+    int[] resets = {0};
+    p.completeBuild(carried, () -> {
+      builtWith.add(f.get(p));
+      if (builtWith.size() == 1) {
+        throw new Exception("Publishing failed", new HTMLInspector.OutputRewriteFailure("Jekyll can't write en/a.md again"));
+      }
+    }, () -> resets[0]++);
+    assertEquals(2, builtWith.size());
+    assertSame(carried, builtWith.get(0));
+    assertNotSame(carried, builtWith.get(1));
+    assertEquals(1, resets[0]);
+    assertEquals(List.of("Rapido Mode: Complete Build again, without what the last build left (Publishing failed)"), log);
+
+    // any other failure, or one without anything from the last build, is the build's
+    builtWith.clear();
+    assertThrows(IOException.class, () -> p.completeBuild(new PageRebuild(), () -> {
+      builtWith.add(f.get(p));
+      throw new IOException("a FSH error");
+    }, () -> resets[0]++));
+    assertThrows(HTMLInspector.OutputRewriteFailure.class, () -> p.completeBuild(null, () -> {
+      builtWith.add(f.get(p));
+      throw new HTMLInspector.OutputRewriteFailure("Jekyll can't write en/a.md again");
+    }, () -> resets[0]++));
+    assertEquals(2, builtWith.size());
+    assertEquals(1, resets[0]);
   }
 }
