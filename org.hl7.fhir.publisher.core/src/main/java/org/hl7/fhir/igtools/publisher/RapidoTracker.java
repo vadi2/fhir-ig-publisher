@@ -805,7 +805,9 @@ public class RapidoTracker {
   /**
    * In watch mode, the state the last build saved, so that the next build doesn't parse it back from the file (on a
    * large IG, that takes about a second). The file is still written and is still what counts: what is kept here is
-   * used only while the file is the one it was written to (same file, size and modification time)
+   * used only while the file is the one it was written to (same file, size and modification time). It isn't copied (the
+   * state of a large IG is large): save() doesn't change it once written, and it is handed over to the next build
+   * once, which may change it
    */
   public static class StateMemo {
     private File file;
@@ -822,8 +824,7 @@ public class RapidoTracker {
         this.fileKey = a.fileKey();
         this.size = a.size();
         this.modified = a.lastModifiedTime();
-        // a copy: what the build saved may still be changed after it was written
-        this.state = state.deepCopy();
+        this.state = state;
       } catch (IOException e) {
         // not kept: the next build reads the file
       }
@@ -834,7 +835,7 @@ public class RapidoTracker {
       state = null;
     }
 
-    /** a copy of the state, if f is still the file it was saved to (the build changes what it is given) */
+    /** the state, if f is still the file it was saved to; once (the build changes what it is given) */
     synchronized JsonObject recall(File f) {
       if (state == null || !file.equals(f.getAbsoluteFile())) {
         return null;
@@ -847,7 +848,9 @@ public class RapidoTracker {
       } catch (IOException e) {
         return null;
       }
-      return state.deepCopy();
+      JsonObject res = state;
+      forget();
+      return res;
     }
   }
 

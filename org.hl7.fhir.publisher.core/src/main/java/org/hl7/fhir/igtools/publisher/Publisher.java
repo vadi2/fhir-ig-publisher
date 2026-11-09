@@ -289,10 +289,6 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     }
   }
 
-  /**
-   * Puts back the state that a build changes outside PublisherFields to what a fresh start has, so that a rebuild
-   * in watch mode doesn't see what the previous build did
-   */
   private void newFields() {
     pf = new PublisherFields();
     loader.setPf(pf);
@@ -304,6 +300,10 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     pf.tt = new TimeTracker();
   }
 
+  /**
+   * Puts back the state that a build changes outside PublisherFields to what a fresh start has, so that a rebuild
+   * in watch mode doesn't see what the previous build did
+   */
   void resetForRebuild(List<String> cliNoNarratives, List<String> cliNoValidate) {
     settings.getNoNarratives().clear();
     settings.getNoNarratives().addAll(cliNoNarratives);

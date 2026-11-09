@@ -167,6 +167,7 @@ public class PublisherIGLoader extends PublisherBase {
 
   public void initialize() throws Exception {
     additionalResources.clear(); // in watch mode, this loader runs once per build
+    pendingSushi = null; // (a build that failed before its start-up began may have left it)
     pf.pcm = packageCacheManager();
     log("Build FHIR IG from "+ settings.getConfigFile());
     if (settings.getMode() == PublisherUtils.IGBuildMode.PUBLICATION)
@@ -382,8 +383,15 @@ public class PublisherIGLoader extends PublisherBase {
    * be done again; if not, what was left until it had finished is done
    */
   void finishSushi() throws Exception {
+    if (joinSushi()) {
+      afterSushi();
+    }
+  }
+
+  /** waits for SUSHI, if it is running alongside the start-up: false if it isn't. Its failure is thrown */
+  private boolean joinSushi() throws Exception {
     if (sushi == null) {
-      return;
+      return false;
     }
     SushiAlongside s = sushi;
     sushi = null;
@@ -393,6 +401,11 @@ public class PublisherIGLoader extends PublisherBase {
       sushiFailed(e);
       throw e;
     }
+    return true;
+  }
+
+  /** SUSHI has finished properly */
+  private void afterSushi() throws Exception {
     if (watchSession != null) {
       watchSession.sushiRan();
     }
@@ -437,29 +450,43 @@ public class PublisherIGLoader extends PublisherBase {
       igRead = null;
       return;
     }
+    boolean pending = pendingSushi != null;
+    boolean ran;
     try {
-      if (pendingSushi != null) {
+      // SUSHI's own failure is the build's
+      if (pending) {
         File fsh = pendingSushi;
         pendingSushi = null;
         runSushi(fsh);
-        if (igChanged()) {
-          log("Sushi: it changed the IG resource, so the start-up is done again (it failed: " + failure.getMessage() + ")");
-          restart = true;
-        }
-      } else if (sushi != null) {
-        finishSushi();
-        if (restart) {
-          log("(the start-up had failed: " + failure.getMessage() + ")");
-        }
+        ran = true;
+      } else {
+        ran = joinSushi();
       }
     } catch (Exception | Error e) {
       igRead = null;
-      if (e != failure) {
-        e.addSuppressed(failure);
-      }
+      e.addSuppressed(failure);
       throw e;
     }
+    if (!ran) {
+      igRead = null;
+      return;
+    }
+    try {
+      if (!pending) {
+        afterSushi();
+      } else if (igChanged()) { // (runSushi recorded that SUSHI ran)
+        log("Sushi: it changed the IG resource, so the start-up is done again");
+        restart = true;
+      }
+    } catch (Exception e) {
+      // not why the start-up failed
+      restart = false;
+      failure.addSuppressed(e);
+    }
     igRead = null;
+    if (restart) {
+      log("(the start-up that is done again had failed: " + failure + ")");
+    }
   }
 
   private void sushiFailed(Throwable e) {
@@ -479,12 +506,15 @@ public class PublisherIGLoader extends PublisherBase {
     return res;
   }
 
-  /** in watch mode, the same one for every build (unless packages are loaded from a folder into it in each build) */
+  /**
+   * in watch mode, the same one for every build (unless packages are loaded from a folder into it in each build), until
+   * a build fails: if it couldn't read the list of CI builds, it wouldn't try again for an hour
+   */
   FilesystemPackageCacheManager packageCacheManager() throws IOException {
     if (watchSession == null || settings.getPackagesFolder() != null) {
       return getFilesystemPackageCacheManager();
     }
-    if (sessionPcm == null) {
+    if (sessionPcm == null || watchSession.lastBuildFailed()) {
       sessionPcm = getFilesystemPackageCacheManager();
     }
     return sessionPcm;

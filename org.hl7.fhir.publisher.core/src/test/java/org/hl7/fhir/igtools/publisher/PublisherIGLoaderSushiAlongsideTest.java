@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.File;
@@ -13,6 +14,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.time.Duration;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -234,6 +236,78 @@ class PublisherIGLoaderSushiAlongsideTest {
 
     assertTrue(finished);
     assertFalse(loader.takeRestart());
+    assertTrue(pf.prePagesDirs.isEmpty(), "the build failed");
+    loader.finishSushi();
+    assertTrue(pf.prePagesDirs.isEmpty());
+  }
+
+  /** what reading the IG resource again fails with isn't why the start-up failed */
+  @Test
+  void aStartUpFailureIsntHiddenByWhatFailsAfterSushi() throws Exception {
+    startUpToSushi();
+    Exception startUp = new Exception("the start-up failed");
+    release.countDown();
+    // SUSHI writes the IG resource again; it then can't be read
+    while (!finished) {
+      Thread.sleep(10);
+    }
+    assertTrue(igFile.toFile().setReadable(false));
+
+    loader.sushiAfterFailure(startUp);
+
+    assertFalse(loader.takeRestart());
+    assertEquals(1, startUp.getSuppressed().length);
+    assertTrue(startUp.getSuppressed()[0] instanceof IOException, startUp.getSuppressed()[0].toString());
+  }
+
+  @Test
+  void aStartUpThatFailedBeforeSushiStartedFailsAsItDidIfTheIgResourceIsTheSame() throws Exception {
+    release.countDown();
+    loader.startSushi(fsh);
+    loader.readIgBeforeSushi();
+
+    loader.sushiAfterFailure(new Exception("the template couldn't be loaded"));
+
+    assertTrue(finished);
+    assertFalse(loader.takeRestart());
+  }
+
+  @Test
+  void aStartUpThatFailedBeforeSushiStartedFailsWithSushisFailureIfItFails() throws Exception {
+    failWith = new IOException("Sushi failed with errors");
+    release.countDown();
+    loader.startSushi(fsh);
+    loader.readIgBeforeSushi();
+    Exception startUp = new Exception("the template couldn't be loaded");
+
+    IOException e = assertThrows(IOException.class, () -> loader.sushiAfterFailure(startUp));
+
+    assertSame(failWith, e);
+    assertSame(startUp, e.getSuppressed()[0]);
+    assertFalse(session.sushiRanBefore(), "it runs again next time");
+  }
+
+  /** the JVM is in no state to go on: SUSHI isn't waited for */
+  @Test
+  void aFatalErrorDoesntWaitForSushi() throws Exception {
+    startUpToSushi();
+    try {
+      assertTimeoutPreemptively(Duration.ofSeconds(5), () -> loader.sushiAfterFailure(new OutOfMemoryError()));
+      assertFalse(loader.takeRestart());
+      assertFalse(finished);
+    } finally {
+      release.countDown();
+    }
+  }
+
+  @Test
+  void aFailureWithoutSushiAlongsideIsLeftAsItIs() throws Exception {
+    loader.setWatchSession(null);
+
+    loader.sushiAfterFailure(new Exception("the start-up failed"));
+
+    assertEquals(0, runs.get());
+    assertFalse(loader.takeRestart());
   }
 
   @Test
@@ -288,6 +362,21 @@ class PublisherIGLoaderSushiAlongsideTest {
   }
 
   @Test
+  void aStartUpThatWaitedForSushiIsDoneAgainIfItChangedTheIgResource() throws Exception {
+    igWritten = IG.replace("\"x\"", "\"y\"");
+    release.countDown();
+    param(pf.sourceIg.getDefinition(), "path-suppressed-warnings", "fsh-generated/ignoreWarnings.txt");
+    loader.startSushi(fsh);
+    loader.readIgBeforeSushi();
+    loader.preProcess(includes());
+
+    loader.startPendingSushi();
+
+    assertTrue(loader.takeRestart());
+    assertTrue(pf.prePagesDirs.isEmpty());
+  }
+
+  @Test
   void whatTheStartUpReadsFromTheParameters() throws Exception {
     loader.startSushi(fsh);
     ImplementationGuide.ImplementationGuideDefinitionComponent def = pf.sourceIg.getDefinition();
@@ -317,6 +406,8 @@ class PublisherIGLoaderSushiAlongsideTest {
     loader.startSushi(fsh);
     param(pf.sourceIg.getDefinition(), "auto-oid-root", "1.2.3");
     assertTrue(loader.startupReadsSushiOutput());
+    pf.igName = dir.resolve("input").resolve("ig.json").toString();
+    assertFalse(loader.startupReadsSushiOutput());
   }
 
   @Test

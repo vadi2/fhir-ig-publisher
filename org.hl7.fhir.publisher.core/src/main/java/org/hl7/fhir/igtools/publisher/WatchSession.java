@@ -50,6 +50,8 @@ public class WatchSession {
   private SourceSnapshot buildStart;
   /** the watched files when the last build failed (null if it didn't) */
   private SourceSnapshot afterFailure;
+  // whether the build before the current one failed
+  private boolean lastBuildFailed;
   private SourceSnapshot sushiInputs;
   /** while the template writes to its folder, the folder as it was before */
   private OutputWindow output;
@@ -106,6 +108,7 @@ public class WatchSession {
   /** Records the content of the watched files as the build that is starting will see them */
   public void startBuild() throws IOException {
     SourceSnapshot last = buildStart;
+    lastBuildFailed = afterFailure != null;
     afterFailure = null;
     buildStart = take(watched, buildStart);
     countWhatStartedThisBuild(last);
@@ -351,6 +354,11 @@ public class WatchSession {
       }
     }
     return false;
+  }
+
+  /** whether the build before the current one failed */
+  public boolean lastBuildFailed() {
+    return lastBuildFailed;
   }
 
   /** whether SUSHI has run in this session, and finished properly the last time it ran */

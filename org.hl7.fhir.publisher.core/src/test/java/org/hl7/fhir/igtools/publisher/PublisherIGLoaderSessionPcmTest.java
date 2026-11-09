@@ -35,6 +35,22 @@ class PublisherIGLoaderSessionPcmTest {
     assertSame(loader.packageCacheManager(), loader.packageCacheManager());
   }
 
+  /** a build that failed may have failed because the list of CI builds couldn't be read: it would not be read again for an hour */
+  @Test
+  void afterABuildFailedTheNextOneHasANewOne() throws Exception {
+    PublisherIGLoader loader = loader(true, null);
+    WatchSession session = new WatchSession(dir, Collections.singletonList(dir.resolve("input")));
+    loader.setWatchSession(session);
+    session.startBuild();
+    var first = loader.packageCacheManager();
+    session.buildFailed();
+    session.startBuild();
+    var second = loader.packageCacheManager();
+    assertNotSame(first, second);
+    session.startBuild(); // (that one didn't fail)
+    assertSame(second, loader.packageCacheManager());
+  }
+
   @Test
   void withoutWatchEachBuildHasItsOwn() throws Exception {
     PublisherIGLoader loader = loader(false, null);

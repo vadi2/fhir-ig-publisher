@@ -1,7 +1,7 @@
 package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNotSame;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 
 import java.io.File;
@@ -43,15 +43,11 @@ class RapidoStateMemoTest {
   }
 
   @Test
-  void eachRecallIsACopyOfWhatWasSaved() throws Exception {
-    // the build changes the state it's given, and what saved it may change it after
-    memo.recall(file).getJsonObject("files").remove("input/a \"b\".json");
-    state.add("uuid", "changed after it was saved");
+  void itIsHandedOverOnce() throws Exception {
+    // the build changes the state it's given: the next one reads the file
+    assertNotNull(memo.recall(file));
 
-    JsonObject kept = memo.recall(file);
-
-    assertEquals(json(RapidoTracker.readState(file)), json(kept));
-    assertNotSame(memo.recall(file), memo.recall(file));
+    assertNull(memo.recall(file));
   }
 
   @Test

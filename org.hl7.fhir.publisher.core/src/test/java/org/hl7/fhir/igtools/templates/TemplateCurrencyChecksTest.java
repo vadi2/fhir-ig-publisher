@@ -1,6 +1,7 @@
 package org.hl7.fhir.igtools.templates;
 
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -68,11 +69,7 @@ class TemplateCurrencyChecksTest {
   void aFailedLoadIsNotTakenAsACheck() throws Exception {
     TemplateManager.CurrencyChecks checks = new TemplateManager.CurrencyChecks(now::get);
     when(pcm.loadPackage("x.template", "current")).thenThrow(new RuntimeException("offline")).thenReturn(npm);
-    try {
-      manager(checks).loadPackage("x.template#current", "/ig");
-    } catch (RuntimeException e) {
-      // expected
-    }
+    assertThrows(RuntimeException.class, () -> manager(checks).loadPackage("x.template#current", "/ig"));
     assertSame(npm, manager(checks).loadPackage("x.template#current", "/ig"));
     verify(pcm, never()).loadPackageFromCacheOnly(anyString(), anyString());
   }
