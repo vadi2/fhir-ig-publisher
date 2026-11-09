@@ -161,6 +161,7 @@ class PublisherIGLoaderStartUpTest {
     Error e = assertThrows(Error.class, this::initialize);
     assertTrue(e.getMessage().startsWith(UNSUPPORTED), e.getMessage());
     assertEquals(1, runs.get());
+    assertTrue(logged.contains("Sushi: not run again - it ran alongside the start-up that is being done again"), logged.toString());
     assertEquals("B", pf.sourceIg.getTitle());
     assertFalse(loader.takeRestart());
   }

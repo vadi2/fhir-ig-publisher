@@ -52,6 +52,8 @@ public class WatchSession {
   private SourceSnapshot afterFailure;
   // whether the build before the current one failed
   private boolean lastBuildFailed;
+  // whether the current build failed
+  private boolean failed;
   private SourceSnapshot sushiInputs;
   /** while the template writes to its folder, the folder as it was before */
   private OutputWindow output;
@@ -108,7 +110,8 @@ public class WatchSession {
   /** Records the content of the watched files as the build that is starting will see them */
   public void startBuild() throws IOException {
     SourceSnapshot last = buildStart;
-    lastBuildFailed = afterFailure != null;
+    lastBuildFailed = failed;
+    failed = false;
     afterFailure = null;
     buildStart = take(watched, buildStart);
     countWhatStartedThisBuild(last);
@@ -295,6 +298,7 @@ public class WatchSession {
    * timeout), so saving a file, even without changing it, builds again: see savedSinceFailure()
    */
   public void buildFailed() throws IOException {
+    failed = true; // (also if the files can't be read)
     afterFailure = take(watched, buildStart);
   }
 

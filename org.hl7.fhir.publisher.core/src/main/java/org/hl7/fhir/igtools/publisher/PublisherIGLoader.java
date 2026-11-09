@@ -157,6 +157,8 @@ public class PublisherIGLoader extends PublisherBase {
   // SUSHI changed the IG resource the start-up had read: the start-up is to be done again (SUSHI has run for this
   // build, so the watch session skips it)
   private boolean restart;
+  // this start-up is the one done again (SUSHI ran, alongside the first)
+  private boolean doneAgain;
   // what runs SUSHI on a folder (tests replace it)
   java.util.function.Function<File, SushiAlongside.Runner> sushiRunner = folder -> logger -> new FSHRunner(logger).runFsh(folder, settings.getMode());
 
@@ -246,8 +248,12 @@ public class PublisherIGLoader extends PublisherBase {
   }
 
   private void runSushi(File fsh) throws Exception {
+    runSushi(fsh, false);
+  }
+
+  private void runSushi(File fsh, boolean ranAlongside) throws Exception {
     if (watchSession != null && watchSession.canSkipSushi()) {
-      log("Sushi: not run again - only page content has changed since it last ran");
+      log(ranAlongside ? "Sushi: not run again - it ran alongside the start-up that is being done again" : "Sushi: not run again - only page content has changed since it last ran");
       return;
     }
     try {
@@ -270,7 +276,11 @@ public class PublisherIGLoader extends PublisherBase {
 
   /** runs SUSHI, or has it run alongside the start-up (see pendingSushi) */
   void startSushi(File fsh) throws Exception {
-    if (canRunSushiAlongside()) {
+    boolean again = doneAgain;
+    doneAgain = false;
+    if (again) {
+      runSushi(fsh, true);
+    } else if (canRunSushiAlongside()) {
       // (what an earlier build left, if its start-up was done again, isn't this build's)
       deferredPreProcess.clear();
       foldersDeferred = false;
@@ -503,6 +513,7 @@ public class PublisherIGLoader extends PublisherBase {
   public boolean takeRestart() {
     boolean res = restart;
     restart = false;
+    doneAgain = res;
     return res;
   }
 
