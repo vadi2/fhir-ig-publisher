@@ -31,14 +31,38 @@ class ExtensionUsageCheckTest {
     FetchedResource used = extension(pf, "used", "http://example.org/fixed/used");
     FetchedResource unused = extension(pf, "unused", null);
     FetchedResource onTheRoot = extension(pf, "root", null);
+    FetchedResource modifier = extension(pf, "modifier", null);
+    FetchedResource inner = extension(pf, "inner", null);
+    // a use by the SD's url doesn't count when Extension.url is fixed to another one
+    FetchedResource bySdUrl = extension(pf, "by-sd-url", "http://example.org/fixed/by-sd-url");
     Element name = element("name", "HumanName", null, uses("http://example.org/fixed/used"));
-    addResource(pf, "Patient-p1.json", element("Patient", "Patient", null, name, uses(url("root"))));
+    Element outer = uses(url("root"));
+    outer.getChildList().add(uses(url("inner")));
+    addResource(pf, "Patient-p1.json", element("Patient", "Patient", null, name, outer,
+        element("modifierExtension", "Extension", null, element("url", "uri", url("modifier"))), uses(url("by-sd-url"))));
 
     processor(pf).validateSDs();
 
     assertEquals(List.of(), messages(used));
     assertEquals(List.of(NO_EXAMPLES), messages(unused));
     assertEquals(List.of(), messages(onTheRoot));
+    assertEquals(List.of(), messages(modifier));
+    assertEquals(List.of(), messages(inner));
+    assertEquals(List.of(NO_EXAMPLES), messages(bySdUrl));
+  }
+
+  @Test
+  void nothingIsWalkedWhenNothingNeedsCounting() {
+    PublisherFields pf = new PublisherFields();
+    pf.noUsageCheck = true;
+    FetchedResource sd = extension(pf, "a", null);
+    int[] walks = new int[1];
+    addResource(pf, "Patient-p1.json", walkCounted(walks));
+
+    processor(pf).validateSDs();
+
+    assertEquals(0, walks[0]);
+    assertEquals(List.of(), messages(sd));
   }
 
   @Test
@@ -48,13 +72,7 @@ class ExtensionUsageCheckTest {
       extension(pf, id, null);
     }
     int[] walks = new int[1];
-    Element patient = new Element("Patient", property, "Patient", null) {
-      @Override
-      public NamedItemList<Element> getChildList() {
-        walks[0]++;
-        return super.getChildList();
-      }
-    };
+    Element patient = walkCounted(walks);
     patient.getChildList().add(uses(url("a")));
     walks[0] = 0;
     addResource(pf, "Patient-p1.json", patient);
@@ -115,6 +133,17 @@ class ExtensionUsageCheckTest {
     f.getResources().add(r);
     pf.fileList.add(f);
     return r;
+  }
+
+  /** a Patient that counts the calls to its getChildList(), one per walk over it */
+  private Element walkCounted(int[] walks) {
+    return new Element("Patient", property, "Patient", null) {
+      @Override
+      public NamedItemList<Element> getChildList() {
+        walks[0]++;
+        return super.getChildList();
+      }
+    };
   }
 
   private Element uses(String url) {
