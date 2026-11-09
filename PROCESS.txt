@@ -1,0 +1,32 @@
+SHARED PROCESS FOR ROUND 3 CLOUD SESSIONS (follow exactly)
+
+Context: upstream perf/bug PRs for HL7/fhir-ig-publisher and hapifhir/org.hl7.fhir.core, on behalf of Vadim Peretokin (vadi2).
+Forks: vadi2/fhir-ig-publisher, vadi2/org.hl7.fhir.core. Nothing from Vadim's machine is on your VM.
+Handoff briefs mention local machine rules (~/Programs paths, bench.lock, taskset/nice, dhp-bench copies): ignore those, you own this VM. Keep their bench designs.
+
+1. Smallest correct change.
+2. Tests mutation-checked: every new test fails with the change reverted. Run affected module suites in full.
+   Failures already present on upstream master are not ours; note them.
+3. Benchmark A/B: base vs change, interleaved, >=3 runs each, medians; output equal to a fresh complete build apart
+   from timestamps; QA error/warning counts equal. Test IG: github.com/uzinfocom-org/digital-health-ig, publisher -Xmx10g.
+   First check `nproc` and `free -g`; if the VM cannot fit a 10g JVM plus the build, do everything else and write
+   "bench: pending (VM has N GB)". Never invent or extrapolate numbers. Drop sub-changes with no measurable gain.
+4. Review loop: code-reviewer, silent-failure-hunter, pr-test-analyzer subagents on the full branch diff; drop nits;
+   empirically verify each non-nit claim; fix only confirmed ones; commit; repeat until a round finds nothing confirmed.
+5. Commits: terse messages; no footers or attribution lines, no model names, no em dashes. Never force push or rewrite
+   pushed history; fixes are new commits.
+6. Draft PR description: short symptom intro, ### Cause, ### Fix, one tests line, numbers table. No em dashes.
+
+PUBLISHING (strict)
+- Push commits only to the branch(es) named in your prompt, plain `git push` (`-u` for a new branch).
+- Draft file: push it alone on a new orphan branch r3-notes/<item> in vadi2/fhir-ig-publisher. Top of file: branch@sha,
+  status (ready / bench pending / blocked + why), test and review summary.
+- If the environment refuses those branch names, push to a branch it allows and record the name in your final message.
+- NEVER open, comment on, or edit PRs or issues; never reply to anyone; never push to HL7 or hapifhir repos; never post anywhere.
+
+BUILD TIPS
+- Maven needs JDK 21 (older default JDKs fail with "release version 17 not supported"). Install what's missing.
+- Publisher against a modified core: `mvn install -DskipTests` core, point the publisher's core version property at it.
+- IG builds need Ruby + Jekyll and SUSHI (`npm i -g fsh-sushi`). Terminology server https://tx.fhir.org.
+
+FINAL MESSAGE: one line "<item>: <status>, branch <name>@<sha>, notes <branch>", then the draft text.
