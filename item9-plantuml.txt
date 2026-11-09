@@ -1,0 +1,173 @@
+ITEM 9 HANDOFF: a Rapido complete build deletes the PlantUML svgs
+==================================================================
+
+REPO / BRANCH
+- Repo: HL7/fhir-ig-publisher. The branch lives in the vadi2 fork once it is pushed (the coordinator pushes it).
+- Branch: fix/plantuml-svgs-complete-build @ d1f9c352
+- Base: 50624908, the head of open PR #1447 (vadi2:perf2/ws5-rapido-deps, "rapido transitive deps"). The base is
+  origin/master 42687809 plus the 37 #1447 commits. The bug is in #1447, NOT on master (see CAUSE).
+- Our commit on top of #1447 (only this one is ours):
+    d1f9c352 Rapido: forget the outputs record when the temp folder is cleared
+- RECOMMENDATION: push d1f9c352 to #1447 as a fix commit rather than opening a separate PR. The bug exists only
+  with #1447: its commit b5d73d56 "Rapido: remove gone temp outputs when every file is generated" introduced it.
+- (A local-only scratch branch, investigate/r3-plantuml-stack @ bd4ec072, is the same commit cherry-picked onto the
+  round-2 bench stack: master + #1447 #1456 #1458 #1460 #1461 #1462 #1465 #1466. It was only used to build a jar
+  for the watch test, and isn't needed. The test-file conflict there was resolved by porting the test with a
+  daysLater field.)
+
+THE BUG
+- In -rapido, a complete build that follows a differential build deletes the PlantUML svgs. Jekyll then fails:
+  "Liquid Exception: Could not locate the included file 'practitioner-certificate-sequence.svg' in _includes".
+- Triggers: in -watch, the first build after local midnight ("Complete Build (changed: date)"; with #1461 it also
+  logs "Complete Build (the day changed since the last build)"). Also any other complete build after a
+  differential one: template, jar or command line changed, and so on.
+- On uz.dhp.core (9 diagrams in input/images-source/*.plantuml).
+
+CAUSE
+1. The template's ant target onGenerate.artifactList lists ${temp}/_includes/*.svg as pages BEFORE onGenerate.plantUml
+   writes them. So from the 2nd build of a temp folder on, the svgs are FetchedFiles (loaded by
+   PublisherGenerator.templateBeforeGenerate -> loadPrePage). RapidoOutputs records them as those pages' outputs
+   (_includes/X.svg and _includes/{en,ru,uz}/X.svg) in <vsCache>/.build-outputs.json.
+2. A complete build clears the temp folder first (Publisher.checkDependencies -> PublisherIGLoader.clearTempFolder).
+   The template then lists no svgs, and plantUml writes them again as no page's output.
+3. #1447 b5d73d56 changed RapidoOutputs.update() to read the old record even when every file is generated. The svgs
+   are reported "gone", and the gone loop in PublisherGenerator (~line 465 on #1447:
+   `for (String gone : change.getGone()) if (!isValidFile(gone)) delete`) removes them before Jekyll runs.
+   On master, update() only read the record for partial builds, so master doesn't have the bug.
+
+THE FIX (d1f9c352, ~12 lines of main code)
+- RapidoOutputs.forget(): Files.deleteIfExists(record). PublisherIGLoader.clearTempFolder() calls it at the end:
+  the record describes the temp folder, so it goes when the folder is cleared.
+- In the complete build, update() has no "before": nothing is gone and a fresh record is written, so the next build
+  is differential again. (Complete builds always have changeList == fileList, so update() doesn't return null.)
+- A failed delete throws and fails the build, on purpose: carrying on would bring the bug back silently. The next
+  build is then "Complete Build (after failure)", which retries.
+- The RapidoTracker state is already in temp/_rapido, so it goes with the temp folder. Only the outputs record lived
+  outside it.
+
+TESTS (both mutation-checked)
+- PublisherRapidoWatchTest.aCompleteBuildDoesntRemoveWhatTheTemplateScriptsWrote: goes through the real
+  checkDependencies/clearTempFolder.
+  - build 1 complete, the script writes temp/_includes/diagram.svg;
+  - build 2 differential, the svg is added as a page after checkDependencies (as loadPrePage does), with its
+    outputs;
+  - build 3 with execTime + 1 day -> "changed: date", complete, the script writes the svg again; asserts gone is empty;
+  - then asserts the next build is differential.
+  build(String, int daysLater) was added and shifts PublisherFields.getExecTime().
+- RapidoOutputsTest.afterTheTempFolderIsClearedNothingIsGone (unit).
+- Mutations, each fails the new test(s):
+  - M1 forget() made a no-op: both fail;
+  - M2 the forget() call removed from clearTempFolder: the watch test fails;
+  - M3 update() doesn't record when there is no earlier record: the watch test fails, along with many others.
+  Restored: RapidoOutputsTest 8/8 and PublisherRapidoWatchTest 8/8 pass. On the stack branch: 22 + 8 pass.
+- Not yet run: the full publisher core test suite on the branch (only these two classes were).
+
+REVIEW LOOP (pr-review-toolkit code-reviewer + silent-failure-hunter + pr-test-analyzer)
+- Round 1: no bugs.
+  - One confirmed test gap (assert that the next build is differential again): fixed in d1f9c352 before commit.
+  - Not acted on, out of scope: in AUTOBUILD/WEBSERVER mode vsCache can be a shared tmpdir/fhircache, so IGs share
+    .build-outputs.json. That was already so before this fix (from #1447/master). Moving the record into
+    temp/_rapido would avoid it, but it's a bigger change.
+- Round 2 (on the commit): code-reviewer clean, silent-failure-hunter clean. Nothing open.
+
+SCENARIOS (uz.dhp.core = HL7 Uzbekistan digital-health-ig, commit 2c39cd0)
+Common: java -Xmx10g -jar <publisher.jar> -ig . -tx https://tx.fhir.org -package-cache-folder <private cache> -rapido
+  [-watch]. Use a private package cache and a warm tx cache if you have one: without it, the first build makes ~175
+  $expand calls. A first build takes ~4-5 min, a differential ~3 min, a page rebuild ~15 s.
+Checks after each build:
+  - the "Rapido Mode: ..." lines;
+  - grep "Could not locate the included file" in the console;
+  - ls temp/pages/_includes/*.svg | wc -l (should be 9), and the {en,ru,uz} copies;
+  - output/en/workflow-lab.html contains "<svg".
+Faking the day change: there's no faketime. The build date comes from Calendar.getInstance() (RapidoTracker.buildDay
+  -> PublisherFields.execTime), and JVM options aren't part of Rapido's "command" hash (sun.java.command has only the
+  main jar and args). So:
+  - plain: run 3 with -Duser.timezone=<a zone whose date differs from today's>. Etc/GMT+12 or Etc/GMT-14 always
+    gives a different date from one of them.
+  - watch: launch with a custom zone -Duser.timezone=GMT+hh:mm (or GMT-hh:mm), chosen so the JVM's local clock reads
+    ~23:46 at launch, then the real clock crosses midnight.
+A) watch (main scenario): rm -rf output temp <vsCache>/.build-tracker.ini <vsCache>/.build-outputs.json.
+   1. Launch -rapido -watch with the zone above; wait for the first build (complete).
+   2. Edit an instance before local midnight, e.g. input/fsh/UZCoreObservation.fsh: the first
+      valueQuantity = 1xx 'mm[Hg]' -> 131 (differential; the svgs become pages, and {en,ru,uz} copies appear: 27).
+   3. After local 00:00:20, append a line to input/pagecontent/must-support.md -> complete build (changed: date).
+   4. Append another line -> it should be a Page Rebuild and finish.
+   Stop the JVM and its process group (it has the kept Jekyll in it).
+B) plain trio:
+   1. a fresh -rapido build;
+   2. append to must-support.md and run -rapido (differential);
+   3. run -rapido with -Duser.timezone set to the other day (complete, changed: date).
+   Restore the md edit after.
+
+RESULTS SO FAR
+- A on the bench stack WITHOUT the fix (master + #1447 #1456 #1458 #1460 #1461 #1462 #1465 #1466):
+  - after midnight: Complete Build (changed: date), 0 svgs left in temp/_includes, Jekyll and the kept Jekyll fail on
+    practitioner-certificate-sequence.svg;
+  - next edit: Complete Build (after failure), which finished (so the watcher did NOT stop rebuilding in this run;
+    the earlier "edits stop triggering rebuilds" wasn't reproduced).
+- A on the same stack WITH the fix: after midnight, Complete Build (changed: date), 9 svgs kept, Jekyll ok, output
+  file list unchanged; next edit: Page Rebuild (1 page changed), finished.
+- B on #1447 alone (50624908): run 3 = Complete Build (changed: date), 0 svgs, Jekyll fails, exit 1. Bug reproduced
+  without the rest of the stack.
+- B with the fix (d1f9c352) and B on master (42687809): NOT RUN (stopped for this handoff). Expected: fix ok;
+  master's run 3 is a complete build ("no changes" on master, as the date isn't in master's hash) with 9 svgs.
+- After a watch session, a plain -rapido ("Complete Build (changed: command)") was fine in both A runs. In those runs
+  the previous build was a complete or page build, so the record had no svg pages. To hit E's report, the build
+  before it has to be differential.
+
+REMAINING STEPS (in order)
+1. Build the jar from d1f9c352: mvn -DskipTests package -pl org.hl7.fhir.publisher.cli -am (core 7.0.5 from the pom).
+   Also a master jar if you want the master check.
+2. Run B with the fix jar: expect run 3 to be complete (changed: date), 9 svgs, Jekyll ok, and the output file list
+   equal to the fresh build's.
+3. Optionally run B on master to confirm it is unaffected.
+4. Run the full publisher core test suite on the branch.
+5. Fill in the TODO line of the draft below; then Vadim decides between pushing to #1447 and opening its own PR.
+   Don't push or open anything without his OK.
+
+DRAFT (also the commit/PR text if it goes on #1447)
+------------------------------------------------------------------------
+Branch: fix/plantuml-svgs-complete-build @ d1f9c352 (local, on top of #1447 head 50624908; not pushed)
+Recommendation: push d1f9c352 to #1447 (perf2/ws5-rapido-deps) as a fix commit. The bug only exists with #1447, so it doesn't need a PR of its own. The text below is for its description, or for the commit if it goes on #1447.
+
+Title: Rapido: forget the outputs record when the temp folder is cleared
+
+In `-rapido`, a complete build that comes after a differential one deletes the PlantUML svgs, and Jekyll fails with "Could not locate the included file 'X.svg'". In `-watch`, the first build after midnight hits it ("Complete Build (changed: date)"), and so does any other complete build (template, jar, command line changed).
+
+### Cause
+
+- The template's `onGenerate.artifactList` lists `temp/_includes/*.svg` as pages before `onGenerate.plantUml` writes them. So from the second build on, the svgs are pages, and `RapidoOutputs` records them as those pages' outputs (`.build-outputs.json` in the tx cache folder).
+- A complete build clears the temp folder first, so the template lists no svgs, and `plantUml` writes them again as no page's output.
+- #1447 made `RapidoOutputs.update()` diff against the old record even when every file is generated. The svgs come out as gone, and the clean-up deletes them before Jekyll runs. Master only reads the record in partial builds, so master isn't affected.
+
+### Fix
+
+- The record describes the temp folder, so `clearTempFolder()` now deletes it (`RapidoOutputs.forget()`). The complete build has no old record to diff against. It removes nothing and writes a new record, so the next build is differential again.
+- If the delete fails, the build fails. Carrying on would bring the bug back.
+
+Adds `PublisherRapidoWatchTest.aCompleteBuildDoesntRemoveWhatTheTemplateScriptsWrote` (day change, through `checkDependencies`) and `RapidoOutputsTest.afterTheTempFolderIsClearedNothingIsGone`. Both fail without the fix, and the existing tests pass.
+
+Checked on uz.dhp.core (9 PlantUML diagrams), `-rapido -watch`. The JVM time zone was set so that local midnight fell between the second and third build (it isn't part of Rapido's command hash). The run: first build, instance edit (differential), then after midnight a page edit and one more page edit.
+
+| After midnight | #1447 stack | with the fix |
+|---|---|---|
+| Build | Complete (changed: date) | Complete (changed: date) |
+| svgs in temp/_includes | 0 | 9 |
+| Jekyll | fails: practitioner-certificate-sequence.svg | ok |
+| Next page edit | Complete Build (after failure) | Page Rebuild |
+
+Plain `-rapido` on #1447 alone, with a fresh build, then a page edit (differential), then the next day: the third build is "Complete Build (changed: date)", leaves 0 svgs and Jekyll fails the same way. TODO: the same three runs with the fix, and on master.
+------------------------------------------------------------------------
+
+GOTCHAS
+- The bug needs a DIFFERENTIAL build before the complete one: the svgs only become pages, and get recorded, when the
+  template's artifactList finds them from the last build. A fresh first build is always safe.
+- Don't trust the output/ file list in watch mode after a failed build: #1458's staging keeps the old output, so
+  output/en/workflow-lab.html still had the diagram. Check temp/pages/_includes and the Jekyll lines.
+- -Duser.timezone doesn't change Rapido's "command" hash; the program args do. Keep the args identical between runs
+  that should be compared.
+- #1461 logs two complete-build lines after midnight (PageRebuild's "the day changed since the last build", then
+  RapidoTracker's "changed: date"); #1447 alone logs only the second.
+- When cherry-picking onto other rapido branches, PublisherRapidoWatchTest conflicts (its build() helper differs).
+  Port the test rather than union-merging.
+- uz.dhp.core needs ~10 GB of heap and ~7.6 GB of disk per bench copy (output + temp), so clean them between runs.

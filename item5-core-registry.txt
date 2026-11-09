@@ -1,0 +1,207 @@
+HANDOFF: round 3 item 5 - core: ImplementationGuideValidator keeps package-registry answers for 1 h
+====================================================================================================
+Written 2026-11-09 for a fresh agent with no context. Owner: Vadim Peretokin. Notes are .txt, no em dashes.
+Rules: terse commits, no "Claude-Session" footers, no model names, no force push. Do NOT open a PR: the result is a
+local branch plus a draft text, and Vadim decides on push/PR.
+
+1. REPO / BRANCH / COMMITS
+--------------------------
+Repo:   hapifhir/org.hl7.fhir.core (Vadim's fork: vadi2/org.hl7.fhir.core; the coordinator pushes the branch there)
+Branch: perf/ig-validator-registry-cache
+Base:   master at 4ea8d00521 ("Merge pull request #2846 from vadi2/perf/npm-index-one-transaction")
+Commits (oldest first):
+  3b45de010d  Keep registry answers for IG dependency checks for an hour   (the change + 16 tests)
+  984e4a97b8  Don't keep registry answers that can't be used               (review r1: keep predicate for version
+                                                                           lists without "versions" and unreadable qas.json)
+  91100d3df1  Don't keep registry answers whose entries can't be read      (review r2: catalog/version entries that
+                                                                           parse but can't be processed aren't kept)
+  71de93fde6  Test that kept answers aren't filtered lists                 (review r3: test-only)
+
+2. WHAT IT DOES AND WHY
+-----------------------
+Problem: ImplementationGuideValidator.checkDependency (org.hl7.fhir.validation, instance/type) runs for every
+dependsOn whenever the IG resource is validated. Each call builds a NEW FilesystemPackageCacheManager (so a new
+CIBuildClient, which downloads build.fhir.org/ig/qas.json, ~1.7 MB, again; its own 1 h interval never applies),
+calls pcm.getPackageId(uri) (local cache, then catalog ?pkgcanonical= search on packages2.fhir.org/packages.fhir.org,
+then the CI list), getPackageUrl, and for IGs marked for publication PackageClient.getVersions + getLatestVersion.
+Nothing is kept between calls or builds. The test IG uz.dhp.core has 3 dependsOn (hl7.terminology.r5 7.5.0,
+fhir.dicom 2025.2.20250411, hl7.fhir.uv.extensions.r5 5.4.0); the registries answer [] to pkgcanonical= for all
+three, so each falls through to qas.json.
+
+Change:
+- New org.hl7.fhir.utilities.npm.RegistryAnswerCache: url -> parsed answer, with a ttl, ConcurrentHashMap, injectable
+  clock (package-private ctor for tests). get(key, fetcher) and get(key, fetcher, keep): a kept answer younger than
+  the ttl is returned; otherwise fetch, and keep only if keep.test(value).
+- PackageClient(PackageServer, @Nullable RegistryAnswerCache): search() and getVersions() go through it. Processing
+  loops extracted to readCatalog/readVersions (unchanged logic); the keep predicate runs them on a scratch list and
+  rejects on RuntimeException (canRead). getVersions also requires a "versions" object (registries answer an unknown
+  package with 404, which throws and isn't kept).
+- CIBuildClient: withAnswers(cache) (package-private); updateFromCIServer fetches qas.json via the cache keyed
+  rootUrl + "/ig/qas.json", keep = canRead (readBuilds doesn't throw). Loop extracted to readBuilds, unchanged.
+- FilesystemPackageCacheManager.Builder: @With registryAnswerCache field (null = off, master behaviour); build() wires
+  it into the CIBuildClient and a client factory; both getLatestVersion overloads now use newPackageClient(server)
+  (new protected BasePackageCacheManager.newPackageClient) so they go through the factory.
+- ImplementationGuideValidator: private static final RegistryAnswerCache REGISTRY_ANSWERS (1 h, same as
+  CIBuildClient's interval), passed to the Builder and to PackageClient(primaryServer, ...).
+- Semantics (follows #2827's rule for tx failures): failures (IOException, error status, parse errors, wrong top-level
+  type) throw and are never kept; bodies that parse but can't be read are returned as on master but not kept; an
+  empty catalog [] IS an answer and is kept; the cache holds raw JSON, so exactMatch / milestones-only filtering by
+  one caller doesn't leak to the next.
+- Only the validation module has the validator, so no r5/standalone duplication is needed. No existing core cache fit
+  (CIBuildClient's interval is per instance; the package cache is for package content, not registry queries).
+
+3. TESTS
+--------
+org.hl7.fhir.utilities/src/test/java/org/hl7/fhir/utilities/npm/RegistryAnswerCacheTests.java, 21 tests, no network:
+a MockWebServer Dispatcher fake registry (/catalog?, /example.fhir.uv.dep, /example.fhir.uv.other, /ig/qas.json) with a
+volatile "down" flag (503) and swappable bodies; SSRF protection off in @BeforeAll. Covers ttl expiry, key separation,
+unusable/failed answers re-asked, shared vs unshared clients, empty search kept, failed search/version list re-asked,
+per-package lists, 404 re-asked, list without versions, unparseable body, CI list shared/failed/unreadable, catalog and
+version entries that can't be read, raw-vs-filtered (ballot version + exactMatch), pcm with and without the cache
+(both getLatestVersion overloads, withRegistryAnswerCache before withTestingCacheFolder).
+Mutation-checked: every test fails with its part reverted. Mutations run (all caught): no-ttl, never-keep,
+keep-ignored, search/versions/ci uncached, search/versions/ci keep failures, versions/ci/catalog keep unreadable,
+canRead always true, builder without factory, builder without ci client, getLatestVersion (both overloads) with a
+direct client, withTestingCacheFolder dropping the cache, versions key without id, filtered list cached (versions and
+search).
+Run: mvn -B -o -pl org.hl7.fhir.utilities test -Dtest='org.hl7.fhir.utilities.npm.**' \
+       -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true -Danimal.sniffer.skip=true
+  -> 112 tests, 0 failures, 1 skipped (pre-existing). Without -Danimal.sniffer.skip=true the offline run prints
+  animal-sniffer "Undefined reference" errors that are unrelated to this branch.
+
+4. REVIEW
+---------
+Reviewers each round: pr-review-toolkit code-reviewer, silent-failure-hunter, pr-test-analyzer. Nits dropped, each
+non-nit claim verified, confirmed ones fixed.
+  r1: unusable version list / unreadable qas.json were kept -> fixed (984e4a97b8); coverage for 2 ids and 404 added.
+  r2: catalog/version entries that parse but can't be processed (bad date, non-object entry) kept -> fixed (91100d3df1);
+      withers order + getLatestVersion(id, filter) tests added.
+  r3: test gap (cache must hold raw JSON, not filtered lists) -> test added (71de93fde6). Code review clean.
+  r4: all three clean.
+Accepted by design (say so in the PR text, don't re-fix):
+  - the static cache is shared by every validator in the process for up to 1 h (a newly published dependency version,
+    and wildcard resolution in loadPackage, can lag up to 1 h);
+  - memory held by the parsed qas.json (~1.7 MB JSON);
+  - malformed-but-parseable upstream data (qas.json entry without url, version entry without version) is kept like any
+    other answer for 1 h; master fails on it too, it just re-asks each build. Live qas.json has no such entries.
+  - with a cache set, build() wraps the default CIBuildClient via withAnswers (a custom subclass would be replaced);
+    keys are urls only (two servers with the same url but different auth would share answers). Both theoretical.
+Open findings: none.
+
+5. BENCH DESIGN (what was done; redo it on the cloud VM)
+--------------------------------------------------------
+Jars: build the publisher CLI from HL7/fhir-ig-publisher master (was 42687809) twice, against two core snapshots:
+  A = core master 4ea8d00521, B = this branch (the jars measured 984e4a97b8; later commits only change handling of
+  malformed bodies, so rebuild B from the branch head on the VM).
+  Core: set the poms to a unique version (e.g. sed 7.0.6-SNAPSHOT -> 7.0.6-r3igA-SNAPSHOT), then
+    mvn -B -T 4 install -DskipTests -Dmaven.javadoc.skip=true -Dmaven.source.skip=true -Djacoco.skip=true \
+        -pl org.hl7.fhir.validation,org.hl7.fhir.convertors,org.hl7.fhir.standalone -am
+    and restore the poms (git checkout -- .).
+  Publisher: mvn -B -T 4 -Dcore_version=<that version> -DskipTests -Dmaven.javadoc.skip=true package \
+        -pl org.hl7.fhir.publisher.cli -am ; jar = org.hl7.fhir.publisher.cli/target/org.hl7.fhir.publisher.cli-*-SNAPSHOT.jar
+  Check: `unzip -l` of jar B lists RegistryAnswerCache classes, jar A doesn't.
+IG: uzinfocom-org/digital-health-ig at 2c39cd0 ("Add 0.12.0 to package feed (#401)"), IG id uz.dhp.core. It needs
+  SUSHI (fsh-generated), the template and translations; a warm input-cache/txcache makes builds much shorter.
+Run (one watch session per jar, in the IG folder, network needed):
+  java -Xmx10g [JFR opts] -jar pub.jar -ig . -tx https://tx.fhir.org -package-cache-folder <private dir> -rapido -watch
+  JFR for request counts: -XX:FlightRecorderOptions:stackdepth=256
+    -XX:StartFlightRecording=filename=<out>/sockets.jfr,settings=sockets.jfc,dumponexit=true
+  sockets.jfc: jdk.SocketWrite enabled, stackTrace true, threshold 0 ms; jdk.SocketRead enabled, threshold 0 ms.
+Per session: first build, then edit + wait for the rebuild + check the edit shows in output/, twice, then restore
+  the file (third timed rebuild). Order of sessions A B B A (interleaved), medians over all timed rebuilds per side.
+  Log console lines with epoch timestamps (`| ts '%.s'`) to cut phases.
+  IMPORTANT, which edit: on current publisher master an instance-value edit (input/fsh/UZCoreObservation.fsh,
+  valueQuantity 1xx 'mm[Hg]') gives "Rapido Mode: Differential Build (2 files)" and does NOT validate the IG resource,
+  so checkDependency doesn't run and this change can't matter (verified: phase ~0.05 s, zero validator requests).
+  The edit that does validate it is the Title edit: in input/fsh/UZCoreAllergyIntolerance.fsh change
+  Title: "Example UZ Core AllergyIntolerance - Grass Pollen Allergy" -> "... t<n>" and
+  Description: "Example instance conforming to UZCoreAllergyIntolerance." -> "..., t<n>."; it gives "Rapido Mode:
+  Complete Build (all files)", ~255-280 s per build. Check output/en/AllergyIntolerance-example-grass-pollen-allergy.html.
+Metrics:
+  - phase "Validating Conformance Resources": time between that console line and "Check profiles & code systems"
+    (the IG validator's network calls sit inside it: 2.5-3.1 s per build on master);
+  - whole build time per rebuild;
+  - request count: `jfr print --json --stack-depth 256 --events jdk.SocketWrite sockets.jfr` (the default
+    --stack-depth 5 hides the caller!), keep events whose host is packages2.fhir.org / packages.fhir.org /
+    build.fhir.org and whose stack contains ImplementationGuideValidator, bucket by build using the timestamped
+    "Build FHIR IG from" / "=== File Changes Detected ===" lines. Socket writes ~ requests plus TLS handshake writes,
+    so report them as "socket writes", or count with an HTTP log instead. SocketRead has no stack and h2 reads happen on
+    OkHttp reader threads, so bytes can't be attributed this way.
+  - QA equality: compare output/qa.json (errs/warnings/hints) and the counts line of output/qa.txt between A and B
+    sessions; they must be identical.
+
+6. NUMBERS SO FAR (raw; only side A was measured before the item moved)
+-----------------------------------------------------------------------
+Machine: shared 16-thread box, pinned to 12 CPUs, load varied (load at start of each build in brackets).
+Session inst-s1-A (jar A, instance edits) - shows instance edits don't reach the validator on master:
+  build            s       load   Validating Conformance phase   IG-validator socket writes (pkgs2/pkgs/build)
+  first (complete) 283.4   2.85   17.28                           11 / 2 / 8
+  inst 1 (diff)    121.2   11.52   0.00                            0 / 0 / 0
+  inst 2 (diff)    150.1   12.54   0.00                            0 / 0 / 0
+  restore (diff)   124.1   2.76    0.00                            0 / 0 / 0
+Session t1-A (jar A, Title edits) - every build is complete:
+  build            s       load   Validating Conformance phase   IG-validator socket writes (pkgs2/pkgs/build)
+  first            252.9   2.47   16.12                           11 / 2 / 8
+  title 1          254.9   1.82   15.93                           11 / 2 / 2
+  title 2          282.2   2.95   15.49                           11 / 2 / 2
+  restore          266.5   2.98   15.96                           11 / 2 / 2
+  IG-validator network time per build (first to last such write): 3.07 / 2.47 / 2.61 / 3.00 s
+  QA (t1-A): errs 0, warnings 262, hints 8517, broken links 6.
+Expected for B (from the round-2 prototype f392d67d14 on an older publisher stack, not measured here): phase about
+-3 s per build that validates the IG, zero validator requests after the first build, QA identical.
+Side B: NOT measured yet.
+
+7. REMAINING STEPS (in order)
+-----------------------------
+ 1. Build jar A (core master 4ea8d00521) and jar B (branch head 71de93fde6) against publisher master, as in 5.
+ 2. Run 4 Title-edit watch sessions A B B A on uz.dhp.core @ 2c39cd0, fresh output/temp for each session, private
+    package cache, -tx https://tx.fhir.org. Optionally one inst session per side to show it's unaffected.
+ 3. Compute: median rebuild time per side, median "Validating Conformance Resources" phase, IG-validator socket writes
+    (or requests) per build per side, and confirm QA counts are identical.
+ 4. Fill the numbers into the draft (replace NREQ in the intro and the NUMBERS line with a table: master vs this PR -
+    rebuild median, Validating Conformance phase median, registry requests per Title rebuild, first build requests),
+    and say QA counts are the same. Keep the tone and template: symptom intro, ### Cause, ### Fix, one tests line,
+    numbers table.
+ 5. Don't push or open a PR; hand the draft back.
+
+8. DRAFT (current text)
+-----------------------
+Title: Keep registry answers for IG dependency checks for an hour
+Branch: perf/ig-validator-registry-cache (local, not pushed), base master 4ea8d00521, commits 3b45de010d 984e4a97b8 91100d3df1 71de93fde6
+
+In an IG Publisher watch session, every build that validates the ImplementationGuide resource (a complete build, or any rebuild after an edit that changes the IG resource, such as a page title) asks the package registries and build.fhir.org the same questions again for each `dependsOn`. On uz.dhp.core (3 dependencies) that costs 2.5-3.1 s of network time in each such build on master (NREQ requests), and the first build asks the same questions once per dependency.
+
+### Cause
+
+- `ImplementationGuideValidator.checkDependency` builds a new `FilesystemPackageCacheManager` for every dependency, so it also gets a new `CIBuildClient`, whose 1 h interval never applies: each one downloads `qas.json` again.
+- It then searches the catalog by canonical (packages2 and packages), lists the package's versions, and for IGs marked for publication asks for the latest version. None of it is kept between calls.
+
+### Fix
+
+- New `RegistryAnswerCache` in utilities/npm: answers kept by url for a ttl. `PackageClient` (catalog search, version list) and `CIBuildClient` (`qas.json`) use it when given one. `FilesystemPackageCacheManager.Builder.withRegistryAnswerCache` passes it to both, and `getLatestVersion` now goes through the client factory so it uses it too.
+- Only answers are kept. A request that fails (error status, timeout, no network, a body that doesn't parse) throws as before and the next caller asks again, as #2827 does for tx failures. A body that parses but can't be read (a version list without versions, entries that can't be read) is returned as on master but not kept. A catalog search that finds nothing is an answer; an unknown package is a 404, so it is asked again.
+- The cache holds the registry's JSON, not the filtered lists, so `exactMatch` or milestones-only calls don't change what the next caller gets.
+- Nothing changes unless a cache is given. Only `ImplementationGuideValidator` opts in, with a static cache and a 1 h ttl, the same as `CIBuildClient`'s interval. So for up to an hour a validator in the same process doesn't see a newly published version of a dependency.
+- The validator is only in the validation module, so there is no r5/standalone copy to change.
+
+Adds 21 tests in `RegistryAnswerCacheTests` against a fake registry (MockWebServer, no network), each checked to fail with its part of the change reverted; existing npm tests pass.
+
+NUMBERS
+
+9. GOTCHAS
+----------
+- Instance edits don't validate the IG resource on current publisher master (see 5); the round-2 "-3 s on every
+  rebuild" came from an older publisher stack. Measure with Title edits (complete builds) and say so in the PR.
+- `jfr print` defaults to --stack-depth 5: without --stack-depth 256 no event shows ImplementationGuideValidator.
+- The HTTP client retries once, and CIBuildClient retries once after 1 s: failure tests must keep the fake server down
+  for the whole call (flag), not fail a single request, and assert relative counts.
+- CIBuildClient stamps its query time even on failure (#2238, deliberate) - unchanged. Throwing inside the fetcher for
+  an unreadable qas.json left ciBuildInfo null and NPE'd in getPackageUrl, unlike master: hence the keep predicate
+  (return the value as master does, just don't keep it).
+- Lombok @With on the Builder needs the all-args constructor in field order (5 args incl. registryAnswerCache), and the
+  hand-written withXxxCacheFolder methods must pass the cache on.
+- PackageClient.search swallows IOException into an empty list and getVersions swallows Exception (pre-existing,
+  unchanged). search still lets a RuntimeException from a bad date propagate, as on master.
+- Offline Maven runs of org.hl7.fhir.utilities need -Danimal.sniffer.skip=true to avoid unrelated sniffer errors.
+- Each uz.dhp.core watch session writes ~7 GB to output/ + temp/ and wants a 10 GB heap: check free disk and RAM before
+  each session and delete output/temp between sessions.

@@ -1,0 +1,254 @@
+ITEM 2 (round 3) HANDOFF: watch-mode FSH tail - fhir-ig-publisher
+=================================================================
+
+REPO / BRANCH
+- Repo: github.com/HL7/fhir-ig-publisher (fork: github.com/vadi2/fhir-ig-publisher)
+- Branch: perf/watch-fsh-tail (the coordinator pushes it to vadi2; the PR branch name is vadi2/perf/watch-fsh-tail)
+- Base: 43229dad = head of vadi2/watch-page-rebuild (PR #1461, "watch page rebuild", not merged yet). PR to be opened on top of #1461.
+- Commits (one per part, oldest first), all under org.hl7.fhir.publisher.core:
+  28ee3fdc (a) Watch: every build of the day is dated at the day's first build, qa reports say when it ran
+  0fb2c6b9 (c) Watch: a complete build gets the last build's html check records and AI cache, compared by content
+  930d8f14 (b) Watch: a complete build has the kept Jekyll render what depends on the temp files whose content changed, in the staged output it left
+  557f93a1 (d) Watch: the AI step keeps its files while Jekyll runs and only writes the markdown that changed
+- A separate "weak edges" follow-up item must base on 28ee3fdc (part a), not on the branch head.
+- Rules: terse commit messages, no footers (no Claude-Session, no model names), no force push (new fixup commits; a local
+  autosquash before the first push is fine), no em dashes in any text. Do NOT open the PR: the draft goes to Vadim.
+
+WHAT AND WHY
+In `-rapido -watch`, a profile/instance (FSH) edit gives a complete build, and #1461's kept Jekyll and html check replay
+don't apply to it. Jekyll renders the whole site, the html checks go through all ~20 700 output files, and the AI step
+writes all its files. On uz.dhp.core that tail is >100 s of a 170-180 s rebuild, whatever the edit.
+Causes and fixes:
+(a) Every build stamps a new time (genDate in _data/fhir.json, canonical resources without date, page footers), so every
+    page/temp file changes. Fix: in -watch, every build of the day is dated at the day's first build (WatchSession pins
+    execTime/genDate; new day = new time). qa.txt/qa.json still carry the real run time (pf.setReportTime).
+(c) Html check records were keyed by object identity (context/specs/sources = new objects each complete build). Fix:
+    records carried to the next complete build and compared by content signature (HTMLInspector.recordSignature,
+    SpecMapManager.contentSignature: specs, linked specs, related IGs, sources, settings). Unreadable related IG gives
+    a unique "unknown <uuid>" signature (never matches) and is logged. If Jekyll can't write again a file a carried
+    record needs, HTMLInspector.OutputRewriteFailure (extends IOException) makes Publisher.completeBuild retry without
+    carried state (PageRebuild.dropped() -> carryOver returns empty state).
+(b) A complete build asked the kept Jekyll for a full `build` and cleared the staged output. Fix: staged output
+    (pf.outputDir = tempDir/.watch-output) kept; PublisherIGLoader.clearOutputUnlessKept() only deletes staged qa.json
+    and package.tgz; JekyllDriver tracks the temp sources it read (SHA-1, reused while stamp size:ino:ctime is the same),
+    and PublisherGenerator.changedSources asks Jekyll to `update` only the changed ones. New/removed/_data files fall back
+    to a full Jekyll build in the Ruby side. Full build (with log line "Rapido Mode: Jekyll renders the whole site
+    (<reason>)") when: template's whyOnCheckMaySeeOutput != null, staged output not kept, no kept state, html checks
+    not reusable, or what Jekyll last read is unknown (restarted/failed/stopped). A source scan failure logs and clears
+    tracking (JekyllDriver.rescan) instead of failing Jekyll.
+    The package.tgz delete matters: genCombinedPackage runs before package.tgz is written (pre-existing upstream bug, it
+    always errors in normal builds); with staging kept it found the stale package.tgz and spent +17-19 s.
+(d) Jekyll's Cleaner removes non-site files, so the AI step rewrote all of them. Fix: AIProcessor.Cache.keepOutputs moves
+    them to temp/.ai-outputs while Jekyll runs, putBackOutputs puts them back, only markdown/zips whose content changed are
+    written, files no longer made are removed (removeUnmade, failed deletes logged). keepAiOutputs skipped when the
+    template check may see output, catches IOException|RuntimeException. .ai-outputs, _rapido, full-ig.zip are untracked.
+Builds without -watch: unchanged (the new paths are all gated on watch state).
+
+TESTS
+- New: SpecMapManagerSignatureTest. Extended: JekyllDriverTest, WatchCompleteBuildJekyllTest, HtmlCheckReplayTest,
+  AIProcessorTest, WatchSessionTest, RebuildPagesFallbackTest, PageRebuildTest.
+- Full publisher.core suite at 557f93a1: 609 run, 0 failures, 1 skipped (pre-existing skip).
+  Run: mvn -T 4 -pl org.hl7.fhir.publisher.core test (needs Java 21+; Lombok annotation processing ON, so do not pass
+  -proc:none or getters go missing).
+- One test (sourceFilesThatCantBeScannedArentKnownButJekyllDidWhatItWasAsked) uses chmod 000 on a dir: disabled on
+  Windows and fails if run as root (cloud VMs often run as root - check, and if so run tests as a normal user or treat
+  that one failure as environment).
+- Mutation-checked: yes, 66 hand-written source mutations, each run against the relevant test classes; all killed except
+  b17 (equivalent). Mutation list (id + what it breaks):
+    a1 no same-day check;a2 never pinned;a3 no clone out;a4 fields not pinned;c1 identity signature;c2 specs ignored;c3 
+    urls ignored;c4 spm targets ignored;c5 LoadedFile not static;c6 carry incomplete;c7 carry no records;c8 ai carry no 
+    pages;b1 stamp not digest;b2 untracked not skipped;b3 destination not skipped;b4 jekyll cache not skipped;b5 update 
+    no refresh;b6 update no remove;b7 full no rescan;b8 removed not changed;b9 track reset kept;b10 build no 
+    baseline;b11 not running check;b12 gen no staged check;b13 gen no records check;b14 gen no template check;b15 
+    loader always clears;b16 loader keeps when not running;b17 stop keeps sources;b18 failure keeps sources;d1 page md 
+    not carried;d2 made not carried;d3 refresh by old key;d4 zip stamp not refreshed;d5 put back over jekyll file;d6 no 
+    removeUnmade new;d7 removeUnmade removes all;d8 content cleared never;d9 page md never cached;d10 made not recorded 
+    text;d11 made not recorded zip;d12 kept folder not deleted;r1 carry dropped state;r2 generator doesnt mark 
+    dropped;r3 retry always;r4 retry never;r5 no cause chain;r6 inspector plain IOException;r7 ai plain IOException;r8 
+    leftover not deleted;r9 ai folder tracked;r10 keep though check sees output;r11 unknown related ig matches;r12 
+    staged qa kept;r13 spm base2 ignored;r14 spm images ignored;r15 spm paths ignored;r16 no removeUnmade old;r17 
+    replay no fragment use;s1 rescan rethrows;s2 update scan uncaught;s3 ai keep catches only IOException;s4 records 
+    regardless of fresh;s5 no why-not log;s6 no unknown log;s7 staged package kept
+  (a = part a, c = c, b = b, d = d, r = review-round fixes, s = later silent-failure fixes). The harness was local; to
+  re-check, apply a mutation by string replace in the named source file and run the matching test class(es).
+
+REVIEW
+- Agents: pr-review-toolkit code-reviewer, silent-failure-hunter, pr-test-analyzer. Every claim verified before fixing.
+- Round 1: all confirmed findings fixed. Round 2: fixed (lastAi captured before runTool, why-not logging, rescan,
+  RuntimeException catch in keepAiOutputs, recordsForCheck only when fresh); rejected a claim about execTime/now().
+- Round 3: code-reviewer and test-analyzer clean; silent-failure's one low item (removeUnmade swallowed delete failures)
+  fixed with logging. Then the bench found the stale package.tgz combined-package defect; fixed (clearOutputUnlessKept
+  deletes staged package.tgz) with test + mutation s7. These last two fixes have NOT had their own review round.
+- Open, judged below threshold or out of scope (mention in PR only if asked):
+  * AIProcessor Binary markdown uses byte[] toString (pre-existing).
+  * genCombinedPackage never produces output in normal builds (pre-existing upstream; candidate for a separate issue).
+  * package.tgz date pinned per day in watch (speculative concern).
+  * Signature cases not individually tested: linkSpecs, related IG content, ig url/version.
+  * pf.setReportTime in the page-rebuild path untested.
+  * update() digests changed files twice (speed only).
+  * lastAi wiring only covered end-to-end, not by a unit test.
+
+BENCH DESIGN
+- IG: uz.dhp.core = github.com/Gulhayo05/digital-health-ig (commit 2c39cd0a used here), template "dhp" from the repo's
+  template/ folder; its Jekyll source is temp/pages. ~811 temp source files, ~20 700 output files, ~280 s first build.
+  Build only a throwaway copy of the IG, never a working checkout. Don't run _updatePublisher.sh / _genonce.sh.
+- Jars: base = 43229dad, branch = 557f93a1 (MUST rebuild: the branch1 numbers below are from 6c8b054f, i.e. before the
+  package.tgz fix). mvn -T 4 -DskipTests package; jar = org.hl7.fhir.publisher.cli/target/*-SNAPSHOT.jar (verify name).
+- Watch session command (in the IG copy, after rm -rf output temp input-cache/txcache/.build-tracker.ini
+  input-cache/txcache/.build-outputs.json):
+    IG_GATE_OFF=1 java -Xmx10g -jar <jar> -ig . -rapido -watch -tx https://tx.fhir.org -package-cache-folder <private dir>
+  (publisher threads <= 10; here pinned to 12 CPUs with taskset and nice -n 10; stamp every console line with epoch
+  seconds, e.g. | ts '%.s', so phases can be cut.)
+- Scenario per session: first build, then 3 edits each with a restore, 15 s of quiet log between builds, each build
+  timed from the edit until "Finished @" appears AND the edited text shows in output/ (60 s grace):
+    prof x3: input/fsh/UZCoreSpecimen.fsh, change `* status ^short = "... lifecycle status of the specimen` to
+             "Bench<n> lifecycle status..." -> check output/en/StructureDefinition-uz-core-specimen.html
+    restore-prof
+    inst x3: input/fsh/UZCoreObservation.fsh, first `valueQuantity = 1NN 'mm[Hg]'` -> 1(30+n)
+             -> check "value" : 13n in output/Observation-blood-pressure-example.json
+    restore-inst
+    md   x3: append "Benchmark marker <session>-<n>." to input/pagecontent/must-support.md -> output/en/must-support.html
+    restore-md
+  Record per build: seconds, load at start, and the "Rapido Mode: ..." line.
+- Interleave sessions: base1, branch1 done; next branch2, base2 (order alternated). Medians over the 3 reps x sessions.
+- Fresh reference: one complete non-watch, non-rapido build with the branch jar from clean output/temp:
+    IG_GATE_OFF=1 java -Xmx10g -jar <branch jar> -ig . -tx https://tx.fhir.org -package-cache-folder <private dir>
+- Output equality: snapshot output/ at session end (after the last restore) and after the fresh build with snap.py
+  (pasted below): per file relpath, size, raw SHA-1, masked SHA-1 (genDate/genDay from temp/pages/_data/fhir.json,
+  UUIDs and ISO dateTimes masked). Compare branch session vs fresh: expect no new/gone files and masked equal except
+  files with embedded timestamps not caught by the mask (xlsx, zips, tgz, package.db, qa*, list csv/json,
+  fragment-usage-analysis.csv, ai.zip) - for those, unzip/compare contents or explain. Also branch vs base session.
+- QA equality: qa.txt equal apart from the "Generated" line; qa.json counts (errs, warnings, hints, suppressed-hints,
+  suppressed-warnings) equal across base, branch and fresh.
+- Phases (from the stamped log, per build): pre-jekyll (edit -> "Run jekyll"), jekyll ("Run jekyll" -> "Jekyll done"),
+  package/list ("Jekyll done" -> "found N files"), html check ("found N files" -> "html check done"), zip
+  ("Build final .zip" -> "Finished"). Per-part shares: jekyll and html check deltas = (b)+(c), ai+list = (d), zip and
+  pre-jekyll differences from (a)/(b). Also grep the branch log for "temp files changed" counts and "html checks reused".
+
+snap.py:
+    #!/usr/bin/env python3
+    """snap.py <dir> <out.tsv> [skip-subdir ...]: per file: relpath, size, sha1(raw), sha1(masked)
+    masked = the build's genDate/genDay strings (read from <temp>/_data/fhir.json if found next to dir, or env GENDATES
+    '|'-separated) replaced, plus UUIDs and ISO dateTimes with time part."""
+    import hashlib, json, os, re, sys
+    root, out = sys.argv[1], sys.argv[2]
+    skip = set(sys.argv[3:])
+    gens = [g for g in os.environ.get('GENDATES', '').split('|') if g]
+    for cand in [os.path.join(root, '_data', 'fhir.json'), os.path.join(root, '..', '_data', 'fhir.json'),
+                 os.path.join(root, 'pages', '_data', 'fhir.json'), os.path.join(root, '..', 'temp', 'pages', '_data', 'fhir.json')]:
+        if os.path.exists(cand):
+            try:
+                d = json.load(open(cand, encoding='utf-8'))
+                gens += [d.get('genDate', ''), d.get('genDay', '')]
+                try:
+                    import datetime
+                    t = datetime.datetime.strptime(d.get('genDate', ''), '%a, %b %d, %Y %H:%M%z')
+                    gens.append(t.strftime('%Y-%m-%d %H:%M:%S %z'))
+                except Exception:
+                    pass
+                break
+            except Exception:
+                pass
+    gens = [g.encode() for g in gens if g]
+    UUID = re.compile(rb'[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}')
+    ISO = re.compile(rb'\d{4}-\d\d-\d\dT\d\d:\d\d(:\d\d(\.\d+)?)?([+-]\d\d:\d\d|Z)?')
+    with open(out, 'w') as o:
+        for dp, dn, fn in os.walk(root):
+            rel = os.path.relpath(dp, root)
+            dn[:] = [d for d in dn if os.path.normpath(os.path.join(rel, d)) not in skip]
+            for f in fn:
+                p = os.path.join(dp, f)
+                try:
+                    b = open(p, 'rb').read()
+                except Exception:
+                    continue
+                raw = hashlib.sha1(b).hexdigest()
+                m = b
+                for g in gens:
+                    m = m.replace(g, b'@GEN@')
+                m = ISO.sub(b'@ISO@', UUID.sub(b'@UUID@', m))
+                o.write(f"{os.path.normpath(os.path.join(rel, f))}\t{len(b)}\t{raw}\t{hashlib.sha1(m).hexdigest()}\n")
+
+NUMBERS SO FAR (uz.dhp.core, -rapido -watch, -Xmx10g, 12 CPUs, load at start 1.4-2.9; seconds edit -> output visible)
+step          base1    branch1 (6c8b054f, before package.tgz fix)
+first         280.8    279.1
+prof 1        179.05   133.17
+prof 2        178.25   119.21
+prof 3        183.94   113.61
+restore-prof  178.95   115.67
+inst 1        168.99   104.90
+inst 2        168.33   102.38
+inst 3        172.73   ~101.4
+restore-inst  171.48   142.85
+md            ~7.55    6.51 / 6.31
+restore-md    7.53     6.31
+Medians: prof 179.1 vs 119.2; inst 169.0 vs 102.4; md 7.55 vs 6.31.
+Phases base vs branch1 (s): pre-jekyll prof 55-56 vs 57-77 (inflated ~17-19 s by the now-fixed combined-package bug),
+  inst 46 vs 47-48 (restore-inst 87 outlier); jekyll 31 vs 0.3; package 34.3 vs 34.5; ai+list 5.6 vs 2.6;
+  html check 26 vs 3.6-6.2; zip 17.3 vs 7.8; tail ~121 vs ~55.
+Branch log: 68-187 temp files changed per build; html checks reused for 20590-20608 of 20681 files.
+QA: qa.txt identical apart from Generated; qa.json errs 0, warnings 262, hints 8518, suppressed-hints 53,
+  suppressed-warnings 683 on both.
+Output base1 vs branch1: 20695 files, none new/gone; masked equal 15328, raw equal 4771, changed 596 (554 xlsx + zips,
+  tgz, package.db, qa*, list csv/json, fragment-usage-analysis.csv, ai.zip). Fresh-build comparison NOT done yet.
+
+REMAINING STEPS (in order)
+1. Clone, check out perf/watch-fsh-tail @ 557f93a1, run the publisher.core test suite (expect 609/0 fail/1 skip).
+2. Build base jar (43229dad) and branch jar (557f93a1).
+3. Get the IG (repo above), make a bench copy; populate a private package cache (first build fetches it).
+4. Run sessions branch2 then base2 (scenario above); one heavy JVM at a time; clean output/ temp/ between sessions.
+   If the VM's CPU count differs, keep both jars on the same settings; absolute times will differ from the table above,
+   so compare base vs branch within the VM (re-run base too, which is why base2 is in the plan; ideally also a base1/
+   branch1 pair on the VM so all numbers come from one machine).
+5. Fresh complete build with the branch jar; snapshot; compare branch session vs fresh and vs base (output + QA).
+6. Phase shares per part.
+7. Fill "Measured: NUMBERS_TBD" in the draft with a short table (prof/inst/md medians base vs branch, % saved) and the
+   phase shares; keep the 1461-short style (short, plain, no em dashes).
+8. Optional: one review round (code-reviewer, silent-failure-hunter, pr-test-analyzer) on the last two fixes
+   (removeUnmade logging, staged package.tgz delete); fix confirmed findings as new commits, re-run mutation s7.
+9. Report back: commits, numbers table, review outcome, draft text; note the weak-edges follow-up bases on 28ee3fdc.
+   Do not open the PR.
+
+DRAFT PR TEXT (drafts/watch-fsh-tail.txt in the perf-work notes; current content):
+-----
+Branch: vadi2/perf/watch-fsh-tail (not pushed). Builds on #1461.
+
+Title: Watch mode: FSH edits reuse the kept Jekyll, the html checks and the AI step
+
+In `-rapido -watch`, a profile or instance edit gives a complete build, and #1461's kept Jekyll and html check replay don't apply to it. Jekyll renders the whole site again, the html checks go through every output file, and the AI step writes all its files. On uz.dhp.core that tail takes over 100 s of a 150-175 s rebuild, whatever the edit.
+
+### Cause
+
+- A complete build asks the kept Jekyll for a full `build`, and clears the staged output it could go on from.
+- Every build stamps a new time into `_data/fhir.json` (genDate), the canonical resources without a date and the page footers, so every page and most temp files change.
+- The html check records are keyed by object identity (context, specs, sources), which are new objects in every complete build.
+- Jekyll's cleaner removes the AI step's files, so the AI step writes them all again.
+
+### Fix
+
+- **Build time:** in `-watch`, every build of the day is dated at the day's first build; a new day gets a new time. qa.txt and qa.json still say when the build ran.
+- **Kept Jekyll:** a complete build keeps the staged output, and asks Jekyll to update only what depends on the temp files whose content changed (SHA-1, reused while the file's stamp is the same). New, removed or `_data` files, a stopped or failed Jekyll, or a template check that may look at the output give a full Jekyll build, with a log line that says why.
+- **Html checks:** the records are carried to the next complete build, and compared by what the check looks up (specs, linked specs, related IGs, sources, settings) instead of by object. If Jekyll can't write a file again that a carried record needs, the build is done again without them.
+- **AI step:** its files are moved aside while Jekyll runs and put back after, and only the markdown and zips whose content changed are written. Files it no longer makes are removed.
+- Builds without `-watch` are unchanged.
+
+Adds `SpecMapManagerSignatureTest` and tests in `JekyllDriverTest`, `WatchCompleteBuildJekyllTest`, `HtmlCheckReplayTest`, `AIProcessorTest`, `WatchSessionTest` and `RebuildPagesFallbackTest`; existing tests pass. Builds on #1461.
+
+Measured: NUMBERS_TBD
+-----
+
+GOTCHAS
+- Lombok: compiling/checking with -proc:none drops generated getters; keep annotation processing on.
+- Autosquash: fixups that touch a test file added in a later commit conflict; split the fixup so each hunk goes to the
+  commit that introduced the file.
+- genCombinedPackage runs before package.tgz exists (upstream bug): any kept stale package.tgz in staging silently costs
+  ~17-19 s per complete build. Covered now; watch for similar leftovers in tempDir/.watch-output.
+- The "unknown source" why-not log line is emitted twice per affected build (tests verify times(2)).
+- Shell scripts copied between dirs can lose the exec bit ("Permission denied" silently skipped the fresh build once).
+- A JVM can die mid-session (one invalid base1 run was discarded); check every session has all builds and "Finished @"
+  lines and that each edit's text showed in output before using its numbers.
+- Disk: each session leaves ~several GB in output/ and temp/ (+ .watch-output staging); delete between sessions.
+- RAM: -Xmx10g per JVM; run one bench JVM at a time.
+- Time-of-day: part (a) pins the date per day; a session crossing midnight gets a new date and a full re-render, so don't
+  run sessions across midnight.
+- tx.fhir.org latency varies; interleaving base/branch sessions is what keeps the comparison fair.

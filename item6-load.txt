@@ -1,0 +1,276 @@
+ITEM 6 HANDOFF - faster -rapido -watch rebuilds (load bundle)
+==============================================================
+Written 2026-11-09 for a fresh agent with no context. Everything needed is below; machine-specific paths in the
+original setup are mentioned only as background, not as requirements.
+
+1. REPO, BRANCH, BASE
+---------------------
+Repo: HL7/fhir-ig-publisher (Java, Maven; module org.hl7.fhir.publisher.core holds all changes).
+Branch: perf/watch-load (being pushed by the coordinator; NOT yet a PR - do not open one without Vadim's OK).
+Base: 50624908 "Rapido: don't take a FIFO for the file its name decodes to" = head of open PR #1447
+      (perf/rapido-dependencies, rapido dependency tracking). The branch builds on #1447, not on master.
+Core: built and tested against an HL7 core SNAPSHOT (originally a local 7.0.6-r2base-SNAPSHOT = core master
+      4ea8d00521 + a few open core PRs). Nothing in this branch needs core changes; current core master/release
+      should do (pass -Dcore_version=<ver> to Maven if the pom's version isn't available).
+
+Commits (oldest first):
+  72b8634d Watch: keep the package cache manager and #current template check across builds
+           - one FilesystemPackageCacheManager per watch session (PublisherIGLoader.sessionPcm; not when
+             -packages-folder loads packages into it each build); TemplateManager.CurrencyChecks remembers, for
+             an hour, which #current templates were checked against the server.
+  791d3b6e Watch: keep the rapido state in memory between builds
+           - RapidoTracker.StateMemo: the state a watch build saves is handed to the next build if state.json is
+             still the same file (path, size, mtime, fileKey); otherwise the file is read as before.
+  1837e24b Watch: run SUSHI alongside the start-up once it has run in the session
+           - new SushiAlongside (daemon thread, buffered log, join rethrows); PublisherIGLoader runs SUSHI on it
+             while the start-up continues; Publisher.build redoes the start-up on new fields if SUSHI changed the
+             IG resource.
+  90d373a9 Watch: review fixes - keep the start-up failure, new cache manager after a failed build, no state copies
+  dc35e158 Watch: test the start-up with SUSHI alongside end to end
+  fc50a79f Watch: a failed build counts even if its files can't be read; say why SUSHI is skipped in a restart
+  1c58e99c Watch: a restart's mark doesn't outlive its build
+Diff: 13 files, +1711 -58 (6 main files, 7 test files).
+
+2. WHAT IT DOES AND WHY
+-----------------------
+Goal: shorten every FSH-edit rebuild in `-rapido -watch` (measured on uz.dhp.core, a large FSH IG). Round-2
+investigation (prototype + JFR) estimated: SUSHI in parallel with start-up -2.6 s, rapido state in memory -0.9 s,
+template check + one package cache manager -0.55 s per rebuild.
+
+a) SUSHI alongside the start-up (PublisherIGLoader.initialize/initializeFromIg, SushiAlongside)
+   - Only in watch mode, after SUSHI has already run successfully in the session (WatchSession.sushiRanBefore),
+     when SUSHI can't be skipped, ig.ini has `ig` and no `module`, and the IG resource file exists.
+     First build, after a SUSHI failure, or without -watch: SUSHI runs first as before.
+   - startSushi() marks SUSHI pending; readIgBeforeSushi() reads the IG resource bytes before SUSHI can touch
+     them; the start-up parses the IG from those bytes. SUSHI is started (startPendingSushi) after the template's
+     onLoad, which in fhir2.base.template only reads input/*spreadsheet.xml.
+   - Until SUSHI is done the start-up must not read fsh-generated: template pre-process folders (preProcess) and
+     the resource/page folder checks (checkFoldersNowOrAfterSushi) are deferred; if any IG parameter (other than
+     path-resource/path-pages) points into fsh-generated, or auto-oid-root with the IG inside fsh-generated, the
+     start-up waits for SUSHI at once (startupReadsSushiOutput). path-expansion-params resolves from the IG
+     resource folder, everything else from the root.
+   - finishSushi(): join; on success WatchSession.sushiRan(); if the IG resource bytes changed -> restart flag,
+     Publisher.build calls resetForRebuild + newFields + initialize again (SUSHI is skipped then because
+     canSkipSushi is true right after sushiRan, so at most one restart); otherwise replays the deferred work and
+     puts folder-check errors where they would have been.
+   - Failures: sushiAfterFailure() - fatal errors (VirtualMachineError except StackOverflow, LinkageError) don't
+     wait; a pending SUSHI is run synchronously; a running one is joined. SUSHI's own failure becomes the
+     build's failure with the start-up failure as suppressed; a bookkeeping failure after SUSHI is added as
+     suppressed to the start-up failure. If SUSHI changed the IG, the failed start-up is redone (logged).
+   - SUSHI's log lines are buffered and logged on the start-up thread when it joins.
+b) Rapido state in memory (RapidoTracker.StateMemo, Publisher.checkDependencies creates one per watch session).
+   recall() hands the object over once and forgets it (no copies, to save heap); save() writes the file then
+   remembers. Without -watch nothing changes.
+c) One package cache manager per session (new one after a failed build, so a failed CI-build-list fetch is
+   retried - CIBuildClient marks the hourly fetch as done even when it fails) and #current template currency
+   checks remembered for an hour per session.
+Without -watch behaviour is unchanged, except the folder checks now run after processTemplateTranslations instead
+of before (no effect on the outcome).
+
+3. TESTS
+--------
+New/changed test classes (org.hl7.fhir.publisher.core/src/test/java/org/hl7/fhir/igtools/...):
+  publisher/PublisherIGLoaderSushiAlongsideTest (23) - step-level: race test
+     theStartUpDoesntSeeFshGeneratedUntilSushiHasFinished (stand-in SUSHI empties fsh-generated and blocks),
+     deferral, early wait for parameters, oid, restart, failure paths, fatal errors don't wait.
+  publisher/PublisherIGLoaderStartUpTest (3) - runs the real initialize(): IG declares fhirVersion 1.4.0 so the
+     start-up stops (no packages needed) right after SUSHI started; in-place `#template` with a pre-process entry.
+     Checks: failed start-up waits for SUSHI; restart when SUSHI changed the IG (and the restart log); SUSHI
+     failure is the build's and the next build doesn't re-join the old thread; next build runs alongside again.
+  publisher/SushiAlongsideTest (4), publisher/RapidoStateMemoTest (10), publisher/PublisherRapidoWatchTest (+3),
+  publisher/PublisherIGLoaderSessionPcmTest (4), templates/TemplateCurrencyChecksTest (5).
+Full publisher.core suite: 519 tests, 0 failures, 2 skipped (at 1c58e99c).
+Mutation-checked: 40 hand-written mutations (each removes/inverts one guard or call), all caught. Known gaps
+(only reachable on a start-up that succeeds, which needs real packages; covered only by the bench output check):
+  dropping finishSushi() after initializeFromIg, checkFoldersNowOrAfterSushi -> checkFolders, preProcess ->
+  handlePreProcess, the early `if (restart) return` after startPendingSushi, newFields() on restart in
+  Publisher.build.
+Run one class: mvn -B -o -pl org.hl7.fhir.publisher.core -Dtest=PublisherIGLoaderStartUpTest
+  -Dsurefire.failIfNoSpecifiedTests=false -Djacoco.skip=true test   (JDK 21)
+
+4. REVIEW
+---------
+Process: pr-review-toolkit code-reviewer + silent-failure-hunter + pr-test-analyzer on the diff; drop nits;
+verify each claim; fix confirmed ones; repeat until clean.
+Round 1: fixed - session cache manager kept a failed CI fetch for 1 h; bookkeeping IOException masked the
+  start-up failure; memo deep copies cost heap; pendingSushi could leak to the next build; test gaps.
+Round 2: no finding >= 80 confidence. Fixed: failed-build flag independent of reading the watched files; wiring
+  test (dc35e158); misleading "SUSHI not run again" log in the restart; restart mark could carry over.
+Accepted / not fixed (mention in PR if asked):
+  - #current templates are re-checked hourly in watch mode (a failed check also waits an hour).
+  - SUSHI and the publisher may install the same package into the shared package cache at the same time (SUSHI
+    ignores the cache's lock files); before, they ran one after the other. Low risk; ig-watch uses a private cache.
+  - An IG-changing edit (e.g. Title/Description of an IG-listed instance) pays for a second start-up.
+Round 3 (on fc50a79f..1c58e99c, small) has not been run - do one quick round.
+
+5. BENCH DESIGN
+---------------
+IG: uz.dhp.core, the DHP UZ Core IG (https://github.com/uzinfocom-org/digital-health-ig; the bench copy was at commit 2c39cd0 "Add 0.12.0 to
+    package feed (#401)"). FSH, ~811 files, template
+fhir2.base.template#current, ig.ini `ig = fsh-generated/resources/ImplementationGuide-uz.dhp.core.json`).
+Jars: base = 50624908 (#1447 head), branch = perf/watch-load head; both built the same way:
+  mvn -B -q -T 4 -DskipTests -Dmaven.javadoc.skip=true package -pl org.hl7.fhir.publisher.cli -am
+  then take org.hl7.fhir.publisher.cli/target/org.hl7.fhir.publisher.cli-*-SNAPSHOT.jar
+Session (one per jar, interleaved base/branch; ideally ABBA): on a clean copy of the IG (rm -rf output temp
+  input-cache/txcache/.build-tracker.ini input-cache/txcache/.build-outputs.json), run
+    IG_GATE_OFF=1 SUSHI_INCREMENTAL=1 java -Xmx10g -jar <jar> -ig . -tx https://tx.fhir.org \
+      -package-cache-folder <private cache> -rapido -watch  2>&1 | ts '%.s' > watch.log
+  (every log line stamped with epoch seconds). Pin CPUs if the machine is shared.
+  Wait for the first build ("Finished @"), then 15 s of quiet log, then edits, each followed by waiting for
+  "Finished @" and for the edited text to show in output/ (max 60 s more):
+    prof x3  input/fsh/UZCoreSpecimen.fsh: `* status ^short = "..."` -> "Bench<n> lifecycle status of the specimen..."
+             (visible in output/en/StructureDefinition-uz-core-specimen.html)
+    restore-prof (put the original file back, timed too)
+    inst x3  input/fsh/UZCoreObservation.fsh: first `valueQuantity = 1xx 'mm[Hg]'` -> 13<n>
+             (visible in output/Observation-blood-pressure-example.json as "value": 13<n>)
+    restore-inst
+    title x1 input/fsh/UZCoreAllergyIntolerance.fsh: Title "...Grass Pollen Allergy t<n>" + Description
+             "..., t<n>." - changes the IG resource, so on the branch it exercises the restart path (log
+             "Sushi: it changed the IG resource, so the start-up is done again").
+    restore-title
+  Record per build: edit -> visible output seconds (times.tsv) and the window.
+  Output snapshots: tar of output/ (no .zip/.tgz) after build 0 (complete) and after the last restore build
+  (same sources), then compare with cmp.py; also compare QA counts (output/qa.json errs/warnings/hints) between
+  base and branch builds of the same sources.
+  The original driver also ran the full test suite first and gated each session on >= 14G free RAM and >= 8G
+  free disk (each session writes several GB of output/temp; delete output/ and temp/ after each session).
+
+win.py (window = "=== File Changes Detected ===" -> first "Generating Narratives"; total from times.tsv;
+flags A = SUSHI ran alongside, R = start-up redone):
+#!/usr/bin/env python3
+"""win.py <raw/session>...: per build, change detected -> 'Generating Narratives' (window), and edit -> output (times.tsv);
+then medians per step kind per session"""
+import sys, re, statistics as st, os
+for d in sys.argv[1:]:
+    log = open(os.path.join(d, 'watch.log'), errors='replace').read().splitlines()
+    det = []; cur = None
+    for l in log:
+        t, _, m = l.partition(' ')
+        try: t = float(t)
+        except ValueError: continue
+        if m.startswith('=== File Changes Detected ==='):
+            cur = {'det': t}; det.append(cur)
+        elif cur is not None and m.startswith('Generating Narratives') and 'narr' not in cur:
+            cur['narr'] = t
+        elif cur is not None and 'start-up is done again' in m:
+            cur['restart'] = True
+        elif cur is not None and 'running alongside the start-up' in m:
+            cur['along'] = True
+    rows = [l.split('\t') for l in open(os.path.join(d, 'times.tsv')).read().splitlines()[1:]]
+    kinds = {}
+    print('==', os.path.basename(d.rstrip('/')))
+    for r in rows:
+        bi = int(r[5]);
+        if bi == 0: print('  first build %.1f' % float(r[3])); continue
+        b = det[bi - 1] if bi - 1 < len(det) else {}
+        w = b.get('narr', float('nan')) - b.get('det', float('nan'))
+        flags = ('A' if b.get('along') else '') + ('R' if b.get('restart') else '')
+        print('  %-14s %2s window %6.2f total %7s %s load %s' % (r[1] + r[2], flags, w, r[3], r[4], r[6]))
+        k = re.sub(r'restore-.*', 'restore', r[1])
+        try: kinds.setdefault(k, []).append((w, float(r[3])))
+        except ValueError: pass
+    for k, v in kinds.items():
+        print('  median %-8s n=%d window %.2f total %.1f' % (k, len(v), st.median(x[0] for x in v), st.median(x[1] for x in v)))
+
+cmp.py (normalized-hash compare of two output snapshots, timestamps stripped from text files):
+#!/usr/bin/env python3
+"""cmp.py <a.tar.zst> <b.tar.zst> [n]: output/ files that differ after removing timestamps, missing, extra"""
+import sys, tarfile, subprocess, hashlib, re, io, collections
+TS = [re.compile(p) for p in [
+    rb'\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:?\d{2})?',
+    rb'\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,? \d{1,2} (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{4},? \d{1,2}:\d{2}(:\d{2})?( ?[+-]\d{4}| [A-Z]{2,5})?',
+    rb'\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)[a-z]*,? (Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]* \d{1,2},? \d{4},? \d{1,2}:\d{2}(:\d{2})?( ?[+-]\d{4}| [A-Z]{2,5})?',
+    rb'\d{1,2}/\d{1,2}/\d{2,4},? \d{1,2}:\d{2}( ?[AP]M)?',
+    rb'\d{14}', rb'\d{8}T\d{6}', rb'\b1[6-9]\d{11}\b',
+    rb'\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}', rb'\d{2}:\d{2}:\d{2}\.\d{3}']]
+TEXT = ('.html', '.htm', '.json', '.xml', '.js', '.txt', '.csv', '.ttl', '.md', '.tsv', '.xhtml', '.css', '.svg', '.ini', '.yml')
+def man(f):
+    m = {}
+    p = subprocess.Popen(['zstd', '-dcq', f], stdout=subprocess.PIPE)
+    with tarfile.open(fileobj=p.stdout, mode='r|') as t:
+        for e in t:
+            if not e.isfile(): continue
+            b = t.extractfile(e).read()
+            if e.name.lower().endswith(TEXT):
+                for r in TS: b = r.sub(b'TS', b)
+            m[e.name] = hashlib.sha1(b).hexdigest()
+    return m
+a, b = man(sys.argv[1]), man(sys.argv[2]); n = int(sys.argv[3]) if len(sys.argv) > 3 else 60
+diff = sorted(p for p in a if p in b and a[p] != b[p]); miss = sorted(set(a) - set(b)); extra = sorted(set(b) - set(a))
+print('files a %d b %d  differ %d missing %d extra %d' % (len(a), len(b), len(diff), len(miss), len(extra)))
+for p in diff[:n]: print('differ', p)
+for p in miss[:n]: print('missing', p)
+for p in extra[:n]: print('extra', p)
+
+Expected noise (round-2 finding): two complete builds of the same source on the base jar already differ in ~41
+files (png, json lists, csv, qa files, pack, package.db, xlsx, qa-txservers.html Use Count); judge the branch by
+"no differences beyond that noise", ideally comparing against the same snapshot pair taken on the base jar.
+
+6. NUMBERS SO FAR
+-----------------
+Only a partial BASE session (jar 50624908) ran before the move; no branch session yet. Load 1.2-2.5, 12 pinned CPUs.
+  first build 278.3 s
+  prof1/2/3   window 14.26 / 13.72 / 13.63 s   total 163.0 / 163.6 / 160.3 s   (median window 13.72, total 163.0)
+  restore-prof window 13.22 total 157.1
+  inst1       window 12.64 total 155.3
+Round-2 prototype estimate for this bundle: about -4 s on the window (SUSHI ~4.2 s overlapping the start-up,
+-0.9 s state, -0.55 s cache/template), totals ~-4 s (noise on totals is a few seconds; use medians).
+
+7. REMAINING STEPS (in order)
+-----------------------------
+ 1. Build base (50624908) and branch jars; run interleaved sessions (base, branch, branch, base if time) with the
+    scenario above.
+ 2. win.py on each session; medians per kind (prof, inst; first build; title once each).
+ 3. Check the branch log shows "Sushi: running alongside the start-up" on prof/inst builds and the restart line
+    on the title build, and that every edit was visible (no MISSING/FAILED).
+ 4. cmp.py: branch build-0 vs branch last-restore snapshot, and the same on base; equal apart from the known noise.
+    QA counts equal between base and branch.
+ 5. One more quick review round (code-reviewer, silent-failure-hunter, pr-test-analyzer) on the last commits;
+    fix confirmed findings with new commits (no force push, no amend).
+ 6. Fill TESTS_PLACEHOLDER and NUMBERS_PLACEHOLDER in the draft below (table like: Rebuild after | base | this
+    branch, rows First build / Profile edit window / Profile edit total / Instance edit window / Instance total /
+    Title edit (1 run)); say it builds on #1447. Keep the draft concise; no em dashes.
+ 7. Show the draft and branch to Vadim; push/open only on his OK.
+
+8. DRAFT (drafts/watch-load.txt as of handoff)
+----------------------------------------------
+Title: Watch: start rebuilds faster (SUSHI alongside the start-up, kept rapido state, one package cache manager)
+Branch: perf/watch-load (local, not pushed), base #1447 head 50624908 (perf/rapido-dependencies), commits 72b8634d 791d3b6e 1837e24b 90d373a9 dc35e158 fc50a79f 1c58e99c
+
+In `-rapido -watch`, every rebuild after an FSH edit first runs SUSHI, and only then starts the publisher's start-up (template, IG resource, package cache, rapido state). On uz.dhp.core that is about 4 s of SUSHI followed by several seconds of start-up work that doesn't need SUSHI's output, plus work that is the same in every build of a session.
+
+### Cause
+
+- The start-up waits for SUSHI, though most of it (template, IG parameters, package cache, tx cache) doesn't read fsh-generated.
+- Each build reads and parses the rapido `state.json` that the previous build of the same JVM has just written.
+- Each build makes a new package cache manager, which fetches the CI build list again, and checks each `#current` template against the server again.
+
+### Fix
+
+- **SUSHI alongside:** once SUSHI has run in the session, a rebuild starts SUSHI on a thread when the template's onLoad has run, and the start-up goes on. The start-up doesn't read fsh-generated until SUSHI is done: the IG resource is read before SUSHI starts, the template's pre-process folders and the resource/page folder checks wait for SUSHI, and if an IG parameter names a file in fsh-generated the start-up waits for SUSHI at once. If SUSHI changed the IG resource, the start-up is done again on new fields (SUSHI isn't run again). SUSHI's log lines are logged when the start-up waits for it; its failure is the build's, with a start-up failure kept as suppressed. Not used for the first build, after a failed SUSHI, with a `module`, or without an `ig` in ig.ini.
+- **Rapido state:** the state a watch build saves is kept in memory and handed to the next build, once, if `state.json` is still the same file (name, size, modified time, file key); otherwise the file is read.
+- **Package cache manager:** one per watch session (a new one after a failed build, so a failed CI list fetch is retried); `#current` templates are checked against the server once an hour in a session instead of every build.
+- Builds without `-watch` are unchanged, apart from the folder checks running after the template translations instead of before them.
+
+TESTS_PLACEHOLDER
+
+NUMBERS_PLACEHOLDER
+
+9. GOTCHAS
+----------
+- canSkipSushi() is true for the rest of a build once sushiRan() is called; tests that want SUSHI to run in a
+  second build must edit an input/fsh file between sushiRan() and the next startBuild().
+- Test helpers: build IG parameters with org.hl7.fhir.model.core types:
+  def.addParameter().setCode(new Coding().setCode(code)).setValue(value) (no addParameter(String,String)).
+- Publisher.build() asks loader.takeRestart() only after the first initialize(); don't call takeRestart() in a
+  test after the redone start-up or it hides a carried-over restart mark.
+- PublisherIGLoaderStartUpTest relies on the start-up throwing "Unable to support version '1.4.0'" right after
+  SUSHI starts; if the publisher's version check moves earlier, the test needs another stop point.
+- WatchSession.buildFailed() snapshotting can't really throw (unreadable files are skipped), so the "failed even if
+  files can't be read" ordering isn't unit-testable; the flag itself is.
+- A watch session runs 30+ min (first build ~280 s, each FSH rebuild ~160 s). Watch RAM (-Xmx10g JVM) and disk.
+- On a shared machine the bench lock queue was the main delay; on a dedicated VM run sessions back to back.
+- The `title` edit changes the IG resource: expect the branch to redo the start-up there (slightly slower on that
+  one build than an edit that doesn't), not a bug.
+- If -watch is merged together with #1461 (watch page rebuilds), Publisher.newFields() needs
+  pageRebuild.setPf(pf) as well.
