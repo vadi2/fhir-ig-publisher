@@ -353,6 +353,11 @@ public class WatchSession {
     return false;
   }
 
+  /** whether SUSHI has run in this session, and finished properly the last time it ran */
+  public boolean sushiRanBefore() {
+    return sushiInputs != null;
+  }
+
   /**
    * SUSHI ran successfully at the start of this build. What it generated is part of the build's sources from now on,
    * not a change that needs another build

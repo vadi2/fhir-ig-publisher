@@ -168,6 +168,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   private PublisherIGLoader loader;
   private PublisherProcessor processor;
   private PublisherGenerator generator;
+  // what the command line set, that a build adds to (see resetForRebuild)
+  private List<String> cliNoNarratives;
+  private List<String> cliNoValidate;
   // in watch mode, the Rapido state the last build saved, for the next build of the session (else null)
   private RapidoTracker.StateMemo rapidoState;
 
@@ -200,8 +203,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     // in watch mode, what a module's pre-processing wrote in input, in any build so far
     Set<Path> moduleOutputs = new HashSet<>();
     // settings that a build adds to: each build starts again from what the command line said
-    List<String> cliNoNarratives = new ArrayList<>(settings.getNoNarratives());
-    List<String> cliNoValidate = new ArrayList<>(settings.getNoValidate());
+    cliNoNarratives = new ArrayList<>(settings.getNoNarratives());
+    cliNoValidate = new ArrayList<>(settings.getNoValidate());
     try {
       if (settings.isWatchMode()) {
         watchRoot = watchRoot(rootDir);
@@ -290,6 +293,17 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * Puts back the state that a build changes outside PublisherFields to what a fresh start has, so that a rebuild
    * in watch mode doesn't see what the previous build did
    */
+  private void newFields() {
+    pf = new PublisherFields();
+    loader.setPf(pf);
+    processor.setPf(pf);
+    generator.setPf(pf);
+    pf.resolver = this;
+    setLogger(this);
+
+    pf.tt = new TimeTracker();
+  }
+
   void resetForRebuild(List<String> cliNoNarratives, List<String> cliNoValidate) {
     settings.getNoNarratives().clear();
     settings.getNoNarratives().addAll(cliNoNarratives);
@@ -301,15 +315,14 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   }
 
   private void build(String rootDir) throws Exception {
-    pf = new PublisherFields();
-    loader.setPf(pf);
-    processor.setPf(pf);
-    generator.setPf(pf);
-    pf.resolver = this;
-    setLogger(this);
-
-    pf.tt = new TimeTracker();
+    newFields();
     loader.initialize();
+    if (loader.takeRestart()) {
+      // SUSHI, run alongside the start-up, changed the IG resource the start-up had read: it's done again
+      resetForRebuild(cliNoNarratives, cliNoValidate);
+      newFields();
+      loader.initialize();
+    }
     if (pf.validator != null) {
       pf.validator.setTracker(this);
     }

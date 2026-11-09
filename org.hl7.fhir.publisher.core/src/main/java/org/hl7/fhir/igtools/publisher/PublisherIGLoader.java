@@ -92,6 +92,7 @@ import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
@@ -132,6 +133,32 @@ public class PublisherIGLoader extends PublisherBase {
   private FilesystemPackageCacheManager sessionPcm;
   // in watch mode, when the #current templates were last checked against their CI builds
   private final TemplateManager.CurrencyChecks templateChecks = new TemplateManager.CurrencyChecks();
+
+  // In watch mode, once SUSHI has run in the session, a rebuild's start-up doesn't wait for it to finish. SUSHI starts
+  // once the template's onLoad has run, and runs alongside the rest of the start-up, which reads nothing that SUSHI
+  // writes (fsh-generated) until SUSHI has finished: the IG resource is read before SUSHI starts, and compared with
+  // what SUSHI wrote once it has finished (if it changed, the start-up is done again); and which of the resource, page
+  // and pre-process folders exist is checked once SUSHI has finished. A start-up that would read anything else from
+  // fsh-generated (from the IG's parameters) waits for SUSHI straight away
+  // the folder SUSHI is to run on, alongside the start-up, once the template's onLoad has run (else null)
+  private File pendingSushi;
+  // SUSHI, running alongside the start-up (else null)
+  private SushiAlongside sushi;
+  // where SUSHI writes, while it's pending or running
+  private Path sushiOutput;
+  // the IG resource, as the start-up read it before SUSHI started (else null)
+  private byte[] igRead;
+  // the template's pre-process folders, to check once SUSHI has finished
+  private final List<JsonObject> deferredPreProcess = new ArrayList<>();
+  // whether which resource and page folders exist is to be checked once SUSHI has finished, and where in pf.errors
+  // what that reports goes
+  private boolean foldersDeferred;
+  private int foldersErrorsAt;
+  // SUSHI changed the IG resource the start-up had read: the start-up is to be done again (SUSHI has run for this
+  // build, so the watch session skips it)
+  private boolean restart;
+  // what runs SUSHI on a folder (tests replace it)
+  java.util.function.Function<File, SushiAlongside.Runner> sushiRunner = folder -> logger -> new FSHRunner(logger).runFsh(folder, settings.getMode());
 
   public PublisherIGLoader(PublisherSettings settings) {
     super(settings);
@@ -182,12 +209,12 @@ public class PublisherIGLoader extends PublisherBase {
       }
       File fsh = new File(Utilities.path(focusDir(), "fsh"));
       if (fsh.exists() && fsh.isDirectory() && !settings.isNoSushi()) {
-        runSushi(fsh);
+        startSushi(fsh);
         pf.isSushi = true;
       } else {
         File fsh2 = new File(Utilities.path(focusDir(), "input", "fsh"));
         if (fsh2.exists() && fsh2.isDirectory() && !settings.isNoSushi()) {
-          runSushi(fsh);
+          startSushi(fsh);
           pf.isSushi = true;
         }
       }
@@ -195,7 +222,18 @@ public class PublisherIGLoader extends PublisherBase {
     IniFile ini = checkNewIg();
     if (ini != null) {
       pf.newIg = true;
-      initializeFromIg(ini);
+      try {
+        initializeFromIg(ini);
+        finishSushi();
+      } catch (Exception | Error e) {
+        sushiAfterFailure(e);
+        if (!restart) {
+          throw e;
+        }
+      }
+      if (restart) {
+        return;
+      }
     } else if (isTemplate()) {
       initializeTemplate();
     } else if (pf.rootDir == null) {
@@ -213,7 +251,7 @@ public class PublisherIGLoader extends PublisherBase {
     }
     try {
       prescanSushiConfig(focusDir());
-      new FSHRunner(this).runFsh(new File(FileUtilities.getDirectoryForFile(fsh.getAbsolutePath())), settings.getMode());
+      sushiRunner.apply(new File(FileUtilities.getDirectoryForFile(fsh.getAbsolutePath()))).run(this);
     } catch (Exception | Error e) {
       if (watchSession != null) {
         try {
@@ -227,6 +265,218 @@ public class PublisherIGLoader extends PublisherBase {
     if (watchSession != null) {
       watchSession.sushiRan();
     }
+  }
+
+  /** runs SUSHI, or has it run alongside the start-up (see pendingSushi) */
+  void startSushi(File fsh) throws Exception {
+    if (canRunSushiAlongside()) {
+      // (what an earlier build left, if its start-up was done again, isn't this build's)
+      deferredPreProcess.clear();
+      foldersDeferred = false;
+      pendingSushi = fsh;
+      sushiOutput = Paths.get(FileUtilities.getDirectoryForFile(fsh.getAbsolutePath()), "fsh-generated").toAbsolutePath().normalize();
+    } else {
+      runSushi(fsh);
+    }
+  }
+
+  /**
+   * In a watch session, once SUSHI has run properly (so the packages it needs are there), unless it can be skipped or a
+   * module pre-processes the IG (it can do anything); the IG resource has to be there to be read before SUSHI starts
+   */
+  boolean canRunSushiAlongside() throws IOException {
+    if (watchSession == null || !watchSession.sushiRanBefore() || watchSession.canSkipSushi()) {
+      return false;
+    }
+    IniFile ini = checkNewIg();
+    if (ini == null || ini.getStringProperty("IG", "ig") == null || ini.getStringProperty("IG", "module") != null) {
+      return false;
+    }
+    return new File(Utilities.path(FileUtilities.getDirectoryForFile(ini.getFileName()), ini.getStringProperty("IG", "ig"))).isFile();
+  }
+
+  /**
+   * If SUSHI is to run alongside the start-up, it will write the IG resource again: it's read now, and compared with
+   * what SUSHI wrote once it has finished
+   */
+  void readIgBeforeSushi() throws IOException {
+    if (pendingSushi != null) {
+      igRead = FileUtilities.fileToBytes(pf.igName);
+    }
+  }
+
+  /** once the template's onLoad has run: SUSHI starts, if it is to run alongside the rest of the start-up */
+  void startPendingSushi() throws Exception {
+    if (pendingSushi == null) {
+      return;
+    }
+    File folder = new File(FileUtilities.getDirectoryForFile(pendingSushi.getAbsolutePath()));
+    pendingSushi = null;
+    try {
+      prescanSushiConfig(focusDir());
+    } catch (Exception | Error e) {
+      sushiFailed(e);
+      throw e;
+    }
+    log("Sushi: running alongside the start-up");
+    sushi = new SushiAlongside(sushiRunner.apply(folder));
+    sushi.start();
+    if (startupReadsSushiOutput()) {
+      log("Sushi: the IG's parameters name files in " + sushiOutput + ", so the start-up waits for it");
+      finishSushi();
+    }
+  }
+
+  /**
+   * Whether the start-up reads, from what the IG's parameters name, a file or folder that SUSHI writes (the resource and
+   * page folders aren't read: which of them exist is checked once SUSHI has finished)
+   */
+  boolean startupReadsSushiOutput() {
+    Path root = Paths.get(pf.rootDir).toAbsolutePath().normalize();
+    Path igFolder = Paths.get(pf.igName).toAbsolutePath().normalize().getParent();
+    for (ImplementationGuide.ImplementationGuideDefinitionParameterComponent p : pf.sourceIg.getDefinition().getParameterList()) {
+      String code = p.getCode() == null ? null : p.getCode().getCode();
+      if ("path-resource".equals(code) || "path-pages".equals(code) || p.getValue() == null) {
+        continue;
+      }
+      if ("auto-oid-root".equals(code) && igFolder.startsWith(sushiOutput)) {
+        return true; // oids.ini, next to the IG resource
+      }
+      // the expansion parameters are found from the IG resource's folder, the rest from the root
+      if (isIn("path-expansion-params".equals(code) ? igFolder : root, p.getValue(), sushiOutput)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  private static boolean isIn(Path base, String value, Path folder) {
+    try {
+      return base.resolve(value.endsWith("*") ? value.substring(0, value.length() - 1) : value).normalize().startsWith(folder);
+    } catch (InvalidPathException e) {
+      return false; // not a path
+    }
+  }
+
+  /** the template's pre-process folder pp: checked now, or once SUSHI has finished if it is to run alongside */
+  void preProcess(JsonObject pp) throws Exception {
+    if (pendingSushi != null || sushi != null) {
+      deferredPreProcess.add(pp);
+    } else {
+      handlePreProcess(pp, pf.rootDir);
+    }
+  }
+
+  /** which resource and page folders exist: checked now, or once SUSHI has finished if it is running */
+  void checkFoldersNowOrAfterSushi() throws Exception {
+    if (sushi != null) {
+      foldersDeferred = true;
+      foldersErrorsAt = pf.errors.size();
+    } else {
+      checkFolders();
+    }
+  }
+
+  /**
+   * Waits for SUSHI, if it is running alongside the start-up. Then, if it changed the IG resource, the start-up is to
+   * be done again; if not, what was left until it had finished is done
+   */
+  void finishSushi() throws Exception {
+    if (sushi == null) {
+      return;
+    }
+    SushiAlongside s = sushi;
+    sushi = null;
+    try {
+      s.join(this::log);
+    } catch (Exception | Error e) {
+      sushiFailed(e);
+      throw e;
+    }
+    if (watchSession != null) {
+      watchSession.sushiRan();
+    }
+    if (igChanged()) {
+      log("Sushi: it changed the IG resource, so the start-up is done again");
+      restart = true;
+      return;
+    }
+    for (JsonObject pp : deferredPreProcess) {
+      handlePreProcess(pp, pf.rootDir);
+    }
+    deferredPreProcess.clear();
+    if (foldersDeferred) {
+      foldersDeferred = false;
+      // what it reports goes where it would have, had the folders been checked when SUSHI wasn't running
+      int before = pf.errors.size();
+      checkFolders();
+      List<ValidationMessage> reported = new ArrayList<>(pf.errors.subList(before, pf.errors.size()));
+      pf.errors.subList(before, pf.errors.size()).clear();
+      pf.errors.addAll(foldersErrorsAt, reported);
+    }
+  }
+
+  private boolean igChanged() throws IOException {
+    byte[] read = igRead;
+    igRead = null;
+    File f = new File(pf.igName);
+    return read != null && !Arrays.equals(read, f.isFile() ? FileUtilities.fileToBytes(f) : null);
+  }
+
+  /**
+   * The start-up failed while SUSHI was to run, or was running, alongside it. It may have failed on what SUSHI was
+   * about to write: SUSHI finishes (if it fails, that is the failure), and if it changed the IG resource, the start-up is
+   * done again. Otherwise the start-up fails as it did
+   */
+  void sushiAfterFailure(Throwable failure) throws Exception {
+    deferredPreProcess.clear();
+    foldersDeferred = false;
+    if (BuildFailures.isFatal(failure)) {
+      pendingSushi = null;
+      sushi = null;
+      igRead = null;
+      return;
+    }
+    try {
+      if (pendingSushi != null) {
+        File fsh = pendingSushi;
+        pendingSushi = null;
+        runSushi(fsh);
+        if (igChanged()) {
+          log("Sushi: it changed the IG resource, so the start-up is done again (it failed: " + failure.getMessage() + ")");
+          restart = true;
+        }
+      } else if (sushi != null) {
+        finishSushi();
+        if (restart) {
+          log("(the start-up had failed: " + failure.getMessage() + ")");
+        }
+      }
+    } catch (Exception | Error e) {
+      igRead = null;
+      if (e != failure) {
+        e.addSuppressed(failure);
+      }
+      throw e;
+    }
+    igRead = null;
+  }
+
+  private void sushiFailed(Throwable e) {
+    if (watchSession != null) {
+      try {
+        watchSession.sushiFailed();
+      } catch (IOException e2) {
+        e.addSuppressed(e2);
+      }
+    }
+  }
+
+  /** true once, when the start-up is to be done again (on new PublisherFields) */
+  public boolean takeRestart() {
+    boolean res = restart;
+    restart = false;
+    return res;
   }
 
   /** in watch mode, the same one for every build (unless packages are loaded from a folder into it in each build) */
@@ -364,19 +614,20 @@ public class PublisherIGLoader extends PublisherBase {
       }
     }
     pf.igName = Utilities.path(pf.repoRoot, ini.getStringProperty("IG", "ig"));
+    readIgBeforeSushi();
     try {
       try {
-        pf.sourceIg = (ImplementationGuide) VersionConvertorFactory_50_N.convertResource(org.hl7.fhir.r5.formats.FormatUtilities.loadFileTight(pf.igName));
+        pf.sourceIg = (ImplementationGuide) VersionConvertorFactory_50_N.convertResource(igRead != null ? org.hl7.fhir.r5.formats.FormatUtilities.loadFileTight(new ByteArrayInputStream(igRead)) : org.hl7.fhir.r5.formats.FormatUtilities.loadFileTight(pf.igName));
         boolean isR5 = false;
         for (Enumeration<Enumerations.FHIRVersion> v : pf.sourceIg.getFhirVersionList()) {
           isR5 = isR5 || VersionUtilities.isR5Plus(v.getCode());
         }
         if (!isR5) {
-          pf.sourceIg = (ImplementationGuide) VersionConvertorFactory_40_N.convertResource(FormatUtilities.loadFile(pf.igName));
+          pf.sourceIg = (ImplementationGuide) VersionConvertorFactory_40_N.convertResource(loadIgR4());
         }
       } catch (Exception e) {
         log("Unable to load IG as an r5 IG - try R4 ("+e.getMessage()+")");
-        pf.sourceIg = (ImplementationGuide) VersionConvertorFactory_40_N.convertResource(FormatUtilities.loadFile(pf.igName));
+        pf.sourceIg = (ImplementationGuide) VersionConvertorFactory_40_N.convertResource(loadIgR4());
       }
     } catch (Exception e) {
       throw new Exception("Error Parsing File "+ pf.igName +": "+e.getMessage(), e);
@@ -406,7 +657,7 @@ public class PublisherIGLoader extends PublisherBase {
 
     if (pf.template.hasPreProcess()) {
       for (JsonElement e : pf.template.getPreProcess()) {
-        handlePreProcess((JsonObject)e, pf.rootDir);
+        preProcess((JsonObject)e);
       }
     }
     pf.branchName = ini.getStringProperty("dev", "branch");
@@ -414,6 +665,10 @@ public class PublisherIGLoader extends PublisherBase {
     Map<String, List<ValidationMessage>> messages = new HashMap<String, List<ValidationMessage>>();
     pf.sourceIg = pf.template.onLoadEvent(pf.sourceIg, messages);
     checkOutcomes(messages);
+    startPendingSushi();
+    if (restart) {
+      return;
+    }
     // ok, loaded. Now we start loading settings out of the IG
     pf.version = processVersion(pf.sourceIg.getFhirVersionList().get(0).asStringValue()); // todo: support multiple versions
 //    if (VersionUtilities.isR2Ver(pf.version) || VersionUtilities.isR2Ver(pf.version)) {
@@ -1056,38 +1311,8 @@ public class PublisherIGLoader extends PublisherBase {
         pf.vsCache = Utilities.path(System.getProperty("user.home"), "fhircache");
     }
 
-    logDebugMessage(LogCategory.INIT, "Check folders");
-    List<String> extraDirs = new ArrayList<String>();
-    for (String s : pf.resourceDirs) {
-      if (s.endsWith(File.separator+"*")) {
-        logDebugMessage(LogCategory.INIT, "Scan Source: "+s);
-        scanDirectories(FileUtilities.getDirectoryForFile(s), extraDirs);
-
-      }
-    }
-    pf.resourceDirs.addAll(extraDirs);
-
-    List<String> missingDirs = new ArrayList<String>();
-    for (String s : pf.resourceDirs) {
-      logDebugMessage(LogCategory.INIT, "Source: "+s);
-      if (s.endsWith(File.separator+"*")) {
-        missingDirs.add(s);
-
-      }
-      if (!checkDir(s, true))
-        missingDirs.add(s);
-    }
-    pf.resourceDirs.removeAll(missingDirs);
     pf.template.processTemplateTranslations(pf.defaultTranslationLang, pf.translationLangs);
-
-    missingDirs.clear();
-    for (String s : pf.pagesDirs) {
-      logDebugMessage(LogCategory.INIT, "Pages: "+s);
-      if (!checkDir(s, true))
-        missingDirs.add(s);
-    }
-    pf.pagesDirs.removeAll(missingDirs);
-    checkPageResourceDirOverlap();
+    checkFoldersNowOrAfterSushi();
 
     logDebugMessage(LogCategory.INIT, "Output: "+ pf.outputDir);
     forceDir(pf.outputDir);
@@ -1556,6 +1781,46 @@ public class PublisherIGLoader extends PublisherBase {
         }
       }
     }
+  }
+
+  /** the resource and page folders that don't exist are dropped */
+  private void checkFolders() throws Exception {
+    logDebugMessage(LogCategory.INIT, "Check folders");
+    List<String> extraDirs = new ArrayList<String>();
+    for (String s : pf.resourceDirs) {
+      if (s.endsWith(File.separator+"*")) {
+        logDebugMessage(LogCategory.INIT, "Scan Source: "+s);
+        scanDirectories(FileUtilities.getDirectoryForFile(s), extraDirs);
+
+      }
+    }
+    pf.resourceDirs.addAll(extraDirs);
+
+    List<String> missingDirs = new ArrayList<String>();
+    for (String s : pf.resourceDirs) {
+      logDebugMessage(LogCategory.INIT, "Source: "+s);
+      if (s.endsWith(File.separator+"*")) {
+        missingDirs.add(s);
+
+      }
+      if (!checkDir(s, true))
+        missingDirs.add(s);
+    }
+    pf.resourceDirs.removeAll(missingDirs);
+
+    missingDirs.clear();
+    for (String s : pf.pagesDirs) {
+      logDebugMessage(LogCategory.INIT, "Pages: "+s);
+      if (!checkDir(s, true))
+        missingDirs.add(s);
+    }
+    pf.pagesDirs.removeAll(missingDirs);
+    checkPageResourceDirOverlap();
+  }
+
+  /** the IG resource, for R4 */
+  private org.hl7.fhir.r4.model.Resource loadIgR4() throws IOException {
+    return igRead != null ? FormatUtilities.loadFile(new ByteArrayInputStream(igRead)) : FormatUtilities.loadFile(pf.igName);
   }
 
   void handlePreProcess(JsonObject pp, String root) throws Exception {
