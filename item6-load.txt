@@ -1,0 +1,50 @@
+perf/watch-load@99da808 (vadi2/fhir-ig-publisher), base 50624908 (#1447 head)
+Status: bench pending (VM has 15 GB): the memory cgroup OOM-killed the -Xmx10g publisher (11.9 GB RSS) when Jekyll
+  started in the first build of the warm-up session. No timings taken; none invented.
+Tests: org.hl7.fhir.publisher.core full suite at 99da808: 520 run, 1 failure, 4 skipped. The failure is
+  GitUtilitiesTests.testGetGitSource[4] (expects the SSH URL, gets https), which fails the same way at base 50624908 on
+  this VM: environment, not ours. Of the skips, 1 is new: aStartUpFailureIsntHiddenByWhatFailsAfterSushi skips where the
+  file can't be made unreadable (root here, Windows); it runs on non-root Linux/macOS.
+  At 1c58e99 that test failed here as root (setReadable(false) doesn't stop root reading the file), so it was fixed.
+New tests are mutation-checked: theNextBuildRunsSushiAlongsideAgainWhenItDidntChangeTheIgResource fails with
+  `doneAgain = true` in takeRestart (no test caught that mutation before).
+Review this session (code-reviewer, silent-failure-hunter, pr-test-analyzer on 50624908..HEAD, focus fc50a79..):
+  round 1: confirmed + fixed: the takeRestart/doneAgain test gap above; the unreadable-file test fails instead of
+    skipping on Windows (setReadable(false) returns false). Not confirmed: "an Error from afterSushi hides the start-up
+    failure": sushiAfterFailure clears the deferred pre-process and folder checks first, so afterSushi only runs
+    sushiRan + igChanged there (checked with a probe test, which passed with the Error never thrown; probe dropped).
+    code-reviewer: nothing >= 70.
+  round 2 (on the new commits): confirmed: the test comment claimed Publisher.build calls takeRestart after a failed
+    start-up; reworded (99da808, comment only). Nothing else.
+New commits: 55c0fcf, 2a06eb4 (tests), 99da808 (test comment). Pushed with plain git push.
+
+Bench setup left ready on the VM (lost with it): driver.py per the handoff (clean copy, ts-stamped watch.log,
+  prof x3 / restore / inst x3 / restore / title / restore, visibility checks, snapshots, qa.json copies), win.py and
+  cmp.py recreated from the handoff text. Needs a machine with >= ~16 GB free for the JVM plus Jekyll/SUSHI.
+
+Remaining: bench (base 50624908 vs 99da808, interleaved ABBA, steps 1-4 of the handoff), fill NUMBERS below, show
+  Vadim. Do not open a PR without his OK.
+
+=== DRAFT ===
+Title: Watch: start rebuilds faster (SUSHI alongside the start-up, kept rapido state, one package cache manager)
+
+Builds on #1447 (perf/rapido-dependencies).
+
+In `-rapido -watch`, every rebuild after an FSH edit first runs SUSHI, and only then starts the publisher's start-up (template, IG resource, package cache, rapido state). On uz.dhp.core that is about 4 s of SUSHI followed by several seconds of start-up work that doesn't need SUSHI's output, plus work that is the same in every build of a session.
+
+### Cause
+
+- The start-up waits for SUSHI, though most of it (template, IG parameters, package cache, tx cache) doesn't read fsh-generated.
+- Each build reads and parses the rapido `state.json` that the previous build of the same JVM has just written.
+- Each build makes a new package cache manager, which fetches the CI build list again, and checks each `#current` template against the server again.
+
+### Fix
+
+- **SUSHI alongside:** once SUSHI has run in the session, a rebuild starts SUSHI on a thread when the template's onLoad has run, and the start-up goes on. The start-up doesn't read fsh-generated until SUSHI is done: the IG resource is read before SUSHI starts, the template's pre-process folders and the resource/page folder checks wait for SUSHI, and if an IG parameter names a file in fsh-generated the start-up waits for SUSHI at once. If SUSHI changed the IG resource, the start-up is done again on new fields (SUSHI isn't run again). SUSHI's log lines are logged when the start-up waits for it; its failure is the build's, with a start-up failure kept as suppressed. Not used for the first build, after a failed SUSHI, with a `module`, or without an `ig` in ig.ini.
+- **Rapido state:** the state a watch build saves is kept in memory and handed to the next build, once, if `state.json` is still the same file (name, size, modified time, file key); otherwise the file is read.
+- **Package cache manager:** one per watch session (a new one after a failed build, so a failed CI list fetch is retried); `#current` templates are checked against the server once an hour in a session instead of every build.
+- Builds without `-watch` are unchanged, apart from the folder checks running after the template translations instead of before them.
+
+Tests: 7 new or extended test classes (52 tests: SUSHI alongside step by step and through the real start-up, restart, failure paths, state memo, session cache manager, template checks); publisher.core suite passes apart from an environment-only GitUtilitiesTests case that fails on the base too.
+
+NUMBERS: bench pending (VM has 15 GB). Table to fill: Rebuild after | base | this branch; rows First build / Profile edit window / Profile edit total / Instance edit window / Instance edit total / Title edit (1 run).
