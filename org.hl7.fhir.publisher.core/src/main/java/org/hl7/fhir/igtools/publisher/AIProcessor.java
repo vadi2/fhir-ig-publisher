@@ -19,6 +19,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.FileTime;
@@ -52,22 +54,36 @@ public class AIProcessor {
     private final Map<Boolean, List<LoadedResource>> resources = new HashMap<>();
     // the title and markdown of a page
     private final Map<String, String[]> pages = new HashMap<>();
-    // the markdown of a resource (they're from the package)
-    private final Map<String, String> resourceMarkdown = new HashMap<>();
+    // the markdown of a resource's page, by resourceKey() (what's from the package is added: see resourceContent)
+    private final Map<String, String> resourcePageMarkdown = new HashMap<>();
+    // the markdown of what's in the package for a resource, by its type and id
+    private final Map<String, String> resourceContent = new HashMap<>();
     // the zips the runs wrote: what each holds (a digest), and the file's stamp when it was written (see AiZip)
     private final Map<String, String[]> zips = new HashMap<>();
     private Set<String> fresh;
     private HTMLInspector.OutputRewriter rewriter;
     private final Set<String> written = new HashSet<>();
+    // the files the run makes (by absolute path), whether it writes them or they already have what it makes; until
+    // the next run starts, the files the last run made
+    private final Set<String> made = new HashSet<>();
+    // while Jekyll runs: the folder the files the last run made are moved to (see keepOutputs()), and where each one
+    // is in it; and the zips among them that were as the last run wrote them
+    private Path keptFolder;
+    private final Map<String, Path> kept = new HashMap<>();
+    private final Set<String> zipsAsWritten = new HashSet<>();
+    // the files that putBackOutputs() put back, until the run has removed those it no longer makes
+    private final Set<String> putBack = new HashSet<>();
 
     /**
-     * Watch mode, for the next build: a cache with what this one worked out from the pages and the zips it wrote, but
-     * not what it took from the package or the build (the rewriter holds the whole build)
+     * Watch mode, for the next build: a cache with what this one worked out from the pages and the zips it wrote, and
+     * which files it made, but not what it took from the package or the build (the rewriter holds the whole build)
      */
     public Cache carryOver() {
       Cache res = new Cache();
       res.pages.putAll(pages);
+      res.resourcePageMarkdown.putAll(resourcePageMarkdown);
       res.zips.putAll(zips);
+      res.made.addAll(made);
       return res;
     }
 
@@ -79,6 +95,102 @@ public class AIProcessor {
       this.fresh = fresh;
       this.rewriter = rewriter;
       written.clear();
+      made.clear();
+    }
+
+    /**
+     * Watch mode, before Jekyll runs: Jekyll removes the output files that aren't the site's, as `jekyll build` does,
+     * and so the files the last run made; they are moved to folder (made anew: on the same file system as the output,
+     * and not where Jekyll reads or writes) meanwhile, so that putBackOutputs() can put them back, and the next run
+     * only writes those whose content changes. If that fails, what was moved is put back
+     */
+    public void keepOutputs(Path folder) throws IOException {
+      putBackOutputs();
+      putBack.clear();
+      // (what a session that was stopped while Jekyll ran left there)
+      delete(folder);
+      if (made.isEmpty()) {
+        return;
+      }
+      keptFolder = Files.createDirectories(folder);
+      try {
+        for (String f : made) {
+          Path p = Paths.get(f);
+          if (Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS)) {
+            String[] zip = zips.get(f);
+            boolean asWritten = zip != null && zip[1].equals(stamp(f));
+            Path to = keptFolder.resolve(Integer.toString(kept.size()));
+            Files.move(p, to);
+            kept.put(f, to);
+            if (asWritten) {
+              zipsAsWritten.add(f);
+            }
+          }
+        }
+      } catch (IOException | RuntimeException e) {
+        putBackOutputs();
+        throw e;
+      }
+    }
+
+    /**
+     * Watch mode, after Jekyll has run: puts back the files that keepOutputs() moved, where Jekyll hasn't written a
+     * file of the site meanwhile, or removed the folder. Those it can't put back are written again by the run, if it
+     * makes them; the run removes those it put back that it no longer makes
+     */
+    public void putBackOutputs() {
+      if (keptFolder == null) {
+        return;
+      }
+      for (Map.Entry<String, Path> e : kept.entrySet()) {
+        Path p = Paths.get(e.getKey());
+        try {
+          if (Files.isDirectory(p.getParent()) && !Files.exists(p, LinkOption.NOFOLLOW_LINKS)) {
+            Files.move(e.getValue(), p);
+            putBack.add(e.getKey());
+            if (zipsAsWritten.contains(e.getKey())) {
+              // (a move changes the inode change time)
+              String stamp = stamp(e.getKey());
+              String[] zip = zips.get(e.getKey());
+              if (stamp != null && zip != null) {
+                zips.put(e.getKey(), new String[] {zip[0], stamp});
+              }
+            }
+          }
+        } catch (IOException ex) {
+          // then the run writes it again
+          System.out.println("Unable to put back " + p + ": " + ex.getMessage());
+        }
+      }
+      kept.clear();
+      zipsAsWritten.clear();
+      delete(keptFolder);
+      keptFolder = null;
+    }
+
+    private static void delete(Path folder) {
+      if (!Files.exists(folder, LinkOption.NOFOLLOW_LINKS)) {
+        return;
+      }
+      try (java.util.stream.Stream<Path> files = Files.walk(folder)) {
+        files.sorted(Comparator.reverseOrder()).forEach(f -> f.toFile().delete());
+      } catch (IOException | java.io.UncheckedIOException e) {
+        // reported below
+      }
+      if (Files.exists(folder, LinkOption.NOFOLLOW_LINKS)) {
+        System.out.println("Unable to delete " + folder);
+      }
+    }
+
+    /** After a run: removes the files that putBackOutputs() put back that the run doesn't make any more */
+    private void removeUnmade() {
+      for (String f : putBack) {
+        if (!made.contains(f) && !new File(f).delete() && new File(f).exists()) {
+          // (as when Jekyll can't remove a file that isn't the site's)
+          System.out.println("Unable to delete " + f + ", which the AI step no longer makes");
+        }
+      }
+      putBack.clear();
     }
 
     /**
@@ -103,7 +215,7 @@ public class AIProcessor {
       }
       Set<String> unknown = rewriter == null ? new HashSet<>(paths) : rewriter.rewrite(paths);
       if (!unknown.isEmpty()) {
-        throw new IOException("Jekyll can't write " + unknown.iterator().next() + " again");
+        throw new HTMLInspector.OutputRewriteFailure("Jekyll can't write " + unknown.iterator().next() + " again");
       }
       fresh.addAll(paths);
       written.addAll(paths);
@@ -129,7 +241,7 @@ public class AIProcessor {
       cache.npm = readPackage(pf);
       cache.packageStamp = stamp;
       cache.resources.clear();
-      cache.resourceMarkdown.clear();
+      cache.resourceContent.clear();
     }
     return cache.npm;
   }
@@ -146,6 +258,13 @@ public class AIProcessor {
     }
   }
 
+  /** A file the run makes (watch mode: see Cache.made) */
+  private void made(String path) {
+    if (cache != null) {
+      cache.made.add(new File(path).getAbsolutePath());
+    }
+  }
+
   /**
    * Writes a file the run makes; in watch mode only if what it holds is different, so that the steps after this only
    * redo the files that changed
@@ -156,6 +275,7 @@ public class AIProcessor {
       return;
     }
     if (cache != null) {
+      made(path);
       File f = new File(path);
       byte[] bytes = content.getBytes(StandardCharsets.UTF_8);
       if (f.isFile() && f.length() == bytes.length && Arrays.equals(Files.readAllBytes(f.toPath()), bytes)) {
@@ -214,6 +334,7 @@ public class AIProcessor {
         }
         return;
       }
+      made(target);
       String digest = digest();
       String[] last = cache.zips.remove(target);
       if (last != null && last[0].equals(digest) && last[1].equals(stamp(target))) {
@@ -289,7 +410,7 @@ public class AIProcessor {
     Map<String, Page> byName = byName(pages);
     for (LoadedResource r : resources) {
       Page p = byName.get(r.filename);
-      if (p != null && !cache.isFresh(p.f) && !files.contains(p.f) && !cache.resourceMarkdown.containsKey(resourceKey(r, p))) {
+      if (p != null && !cache.isFresh(p.f) && !files.contains(p.f) && !cache.resourcePageMarkdown.containsKey(resourceKey(r, p))) {
         files.add(p.f);
       }
     }
@@ -324,6 +445,9 @@ public class AIProcessor {
       llms = llms.replace("](", "](" + langs.get(0) + "/");
       writeText(llms, Utilities.path(rootDir, "llms.txt"));
     }
+    if (cache != null) {
+      cache.removeUnmade();
+    }
   }
 
   /**
@@ -334,6 +458,9 @@ public class AIProcessor {
   public void processOldTemplates() throws IOException {
     NpmPackage npm = loadPackage();
     processFolderOld(new File(rootDir), npm);
+    if (cache != null) {
+      cache.removeUnmade();
+    }
   }
 
   public void processFolderNew(File dir, NpmPackage npm, String lang) throws IOException {
@@ -599,14 +726,7 @@ public class AIProcessor {
   private int produceMDForResource(StringBuilder llms, LoadedResource r, Page p, File dir, AiZip zip, boolean newML, File target) throws IOException {
 //    System.out.println("Processing "+p.f.getAbsolutePath());
     try {
-      String key = cache == null ? null : resourceKey(r, p);
-      String md = key == null || (p != null && cache.isFresh(p.f)) ? null : cache.resourceMarkdown.get(key);
-      if (md == null) {
-        md = resourceMarkdown(r, p);
-        if (key != null) {
-          cache.resourceMarkdown.put(key, md);
-        }
-      }
+      String md = resourceMarkdown(r, p);
       if (r.filename == null) {
         r.filename = tail(r.resource.asString("resourceType")) + "-" + r.resource.asString("id") + ".html";
       }
@@ -628,7 +748,31 @@ public class AIProcessor {
     }
   }
 
+  /**
+   * The markdown of a resource: what its page shows (in watch mode, kept while Jekyll hasn't written the page again),
+   * and what's in the package (kept while the package is the same)
+   */
   private String resourceMarkdown(LoadedResource r, Page p) throws IOException {
+    String key = cache == null || p == null ? null : resourceKey(r, p);
+    String md = key == null || cache.isFresh(p.f) ? null : cache.resourcePageMarkdown.get(key);
+    if (md == null) {
+      md = pageMarkdown(r, p);
+      if (key != null) {
+        cache.resourcePageMarkdown.put(key, md);
+      }
+    }
+    String id = r.resource.asString("resourceType") + "/" + r.resource.asString("id");
+    String content = cache == null ? null : cache.resourceContent.get(id);
+    if (content == null) {
+      content = contentMarkdown(r);
+      if (cache != null) {
+        cache.resourceContent.put(id, content);
+      }
+    }
+    return md + content;
+  }
+
+  private String pageMarkdown(LoadedResource r, Page p) throws IOException {
     String md;
     if (p != null) {
       XhtmlNode xhtml = new XhtmlParser().setMustBeWellFormed(false).parse(p.f, "html");
@@ -653,6 +797,12 @@ public class AIProcessor {
     } else {
       md = "# Resource " + r.name + "\r\n\r\n";
     }
+    return md;
+  }
+
+  /** The markdown of what's in the package for a resource */
+  private String contentMarkdown(LoadedResource r) {
+    String md = "";
     if ("Binary".equals(r.resource.asString("resourceType"))) {
       if (isText(r.resource.asString("contentType"))) {
         md = md + "\r\n\r\n## Resource Binary Content\r\n\r\n" +

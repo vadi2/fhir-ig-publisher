@@ -775,6 +775,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     // a complete build in watch mode: what the last build's html checks found (if Jekyll leaves the output files it
     // doesn't write again as that build left them, the checks need it, however this build's state is kept)
     HtmlCheckRecords lastChecks = replay == null && pageRebuild != null ? pageRebuild.getHtmlRecords() : null;
+    // and the AI step's cache: if the state stops being kept after Jekyll, the AI step still needs it, for the files
+    // it put back after Jekyll and no longer makes, and the output files Jekyll didn't write again
+    AIProcessor.Cache lastAi = replay != null ? replay.getAiCache() : pageRebuild != null ? pageRebuild.getAiCache() : null;
     boolean jekyllOk;
     // the output files that are new since the last build or rebuild (null: all of them)
     Set<String> fresh;
@@ -935,7 +938,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     PageRebuild kept = replay != null ? replay : pageRebuild;
     HTMLInspector.OutputRewriter rewriter = files -> rewriteOutputs(replay, files);
     if (!settings.isGenerationOff()) {
-      AIProcessor.Cache aiCache = kept == null ? null : kept.getAiCache();
+      AIProcessor.Cache aiCache = lastAi;
       if (aiCache != null) {
         aiCache.prepare(fresh, rewriter);
       }
@@ -4696,6 +4699,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     List<String> changedSources = replay == null ? changedSources(temp, out) : null;
     MyFilterHandler filter = new MyFilterHandler();
     JekyllDriver.Result res;
+    AIProcessor.Cache ai = keepAiOutputs(replay != null ? replay : pageRebuild, out);
     try {
       if (changedSources != null) {
         log("Run jekyll: render the pages that depend on the " + changedSources.size() + " temp " + (changedSources.size() == 1 ? "file" : "files")
@@ -4739,6 +4743,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       log("Jekyll (kept running) has failed (" + e.getMessage() + "), so running it as usual");
       jekyllDriver.stop();
       return String.valueOf(e.getMessage());
+    } finally {
+      if (ai != null) {
+        ai.putBackOutputs();
+      }
     }
     tts.end();
     if (!res.isOk()) {
@@ -4803,9 +4811,33 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /**
+   * Watch mode, before the Jekyll that's kept running runs: keeps aside the files the last AI step made (see
+   * AIProcessor.Cache.keepOutputs()), in AI_OUTPUTS_KEPT in the temp folder; returns the cache to put them back after,
+   * or null if there's none (or they can't be kept: then the AI step writes them again). Not if the template's check
+   * may look at the output, which it does before the AI step, as Jekyll left it
+   */
+  AIProcessor.Cache keepAiOutputs(PageRebuild state, String out) {
+    AIProcessor.Cache ai = state == null || settings.isGenerationOff() ? null : state.getAiCache();
+    if (ai == null || (pf.template != null && pf.template.whyOnCheckMaySeeOutput(out) != null)) {
+      return null;
+    }
+    try {
+      ai.keepOutputs(Paths.get(pf.tempDir, AI_OUTPUTS_KEPT));
+      return ai;
+    } catch (IOException | RuntimeException e) {
+      log("Unable to keep the AI step's files while Jekyll runs, so they are written again (" + e.getMessage() + ")");
+      return null;
+    }
+  }
+
+  // where the AI step's files are kept while Jekyll runs, in the temp folder (Jekyll doesn't read a folder whose name
+  // starts with a dot)
+  static final String AI_OUTPUTS_KEPT = ".ai-outputs";
+
   // the files that each build writes to the temp folder after Jekyll has run, and Jekyll doesn't read: Rapido's state
-  // (see RapidoTracker) and the final zip (see finishGenerate())
-  static final List<String> UNTRACKED_TEMP = Collections.unmodifiableList(Arrays.asList("_rapido", "full-ig.zip"));
+  // (see RapidoTracker) and the final zip (see finishGenerate()); and the AI step's files kept while Jekyll runs
+  static final List<String> UNTRACKED_TEMP = Collections.unmodifiableList(Arrays.asList("_rapido", "full-ig.zip", AI_OUTPUTS_KEPT));
 
   /**
    * Watch mode, before Jekyll writes these output files (relative to out) again for the template's check: moves aside
