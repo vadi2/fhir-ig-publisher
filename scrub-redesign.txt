@@ -1,0 +1,228 @@
+SCRUB REDESIGN - round 3 notes (core #2856 v2, publisher scrub PR, publisher #1465 v2)
+
+core      vadi2/org.hl7.fhir.core   fix/expand-cache-scrub     @ 0932bd07  (on hapifhir master ba7189b6ae)
+publisher vadi2/fhir-ig-publisher   fix/rapido-scrub-tx-cache  @ 45d847b   (on #1447's 50624908)
+publisher vadi2/fhir-ig-publisher   perf/expansion-pages-tx-cache-v2 @ dc35f79c (unchanged; #1465's head)
+
+STATUS: bench pending (VM has 15 GB). Code, tests and review are done; the agreed proof (a VS dependency edit now
+gives the correct expansion) is done on a small FSH IG (see PROOF). DHP timing numbers still need a bigger machine.
+Nothing was posted upstream and no PR was opened or edited.
+
+TESTS
+- core: TerminologyCacheTests 88/88 in r5 and 88/88 in standalone (Scrub: 8 tests each).
+  Mutation-checked in both modules, all killed: the 8 mutants from the brief (rechecked M1 and M8 here) plus 5 new:
+  disk pass off, recreated cache skipped (holdsFile ignored), JSON escape handling off,
+  merge filter applied to fresh memory entries, disk-pass count dropped.
+- publisher: all Rapido* test classes pass (RapidoDependencyAnalyserTest 20, RapidoTxCacheScrubTest 8,
+  RapidoTrackerTest 9, RapidoTrackerResourcesTest 4, RapidoOutputsTest 7, RapidoTxFailuresTest 6,
+  RapidoFileNamesTest 7 with 1 skip that was already there).
+  Mutation-checked, killed: the 8 from the brief plus 2 new (?fhir_vs strip off in resolveReference,
+  txUrls dropped after tx failures).
+- PublisherRapidoWatchTest (integration, not run before 5af87955): 7/7 pass on 45d847b.
+- Full module suites: core r5 6676 + 144 (two surefire executions) run, 0 failures, 12 skipped; standalone 8554
+  run, 0 failures, 14 skipped. publisher.core 478 run, 1 failure, 3 skipped: GitUtilitiesTests.testGetGitSource[4]
+  (expects git@github.com:..., gets https://...). It fails the same way on base 50624908, so it is the VM's git
+  config, not ours.
+
+REVIEW (code-reviewer, silent-failure-hunter, pr-test-analyzer roles; general-purpose agents, read-only)
+Round 1 on e2b9a9fa + 5af87955, confirmed and fixed:
+- removeCS drops a local CodeSystem's named cache from memory during load (PublisherIGLoader clearTSCache), before
+  the scrub. scrub() only walked caches in memory, so that file kept the scrubbed entries, and the first save of the
+  next session merged them back into memory. Fixed in core fc457326 (scrubFilesNotInMemory + NamedCache.holdsFile).
+- A ValueSet including cs?fhir_vs=... of a local CodeSystem had no edge to the CodeSystem, so it was not rebuilt or
+  scrubbed when the CodeSystem changed. Fixed in publisher 5b5ec15.
+- Test gaps: escaped quote before the url, a fresh answer for a scrubbed url surviving a merge, txUrls after a build
+  with tx failures. Tests added (core fc457326, publisher 45d847b).
+Round 1, not fixed (documented as limits): test data factories expand before the scrub (same cause as limit a);
+  external ValueSets on a supplemented code system.
+Round 2 on the new commits: code reviewer found nothing confirmed. Silent-failure/test round: the disk pass counted
+  entries whose write failed, and its count was untested. Fixed in 0932bd07 (count only written files; test asserts
+  the count). Dropped: holdsFile going stale under another process or eviction (the cache is dirty and saved again),
+  a missing folder returning 0 silently (nit).
+
+BENCH (DHP timing A/B): pending (VM has 15 GB; its cgroup limit is 14.0 GB)
+- A -Xmx10g publisher plus Jekyll doesn't fit: a plain DHP build at -Xmx10g was OOM-killed (java 11.8 GB RSS +
+  jekyll 1.9 GB). Rapido -watch builds at -Xmx8g (java 9.4 GB + jekyll 3.7 GB peak) were killed too, and at
+  -Xmx7g/-Xmx7600m the JVM ran out of heap (in PublisherGenerator.generate / "Checking Output HTML").
+- So no DHP timings, tx-request counts or output comparisons, and none are extrapolated. Holds A and B from the
+  brief still need a 16+ GB machine; scripts are the brief's design (one seeded tx cache, vs,vs,prof edits).
+- Done on DHP: a plain master build at -Xmx7g as the seed, QA errors 0, warnings 268, hints 9365.
+- The old #2856 content-key stack can't be rebuilt as the brief describes: core da6dd62517 is not on the fork
+  (fix/expand-cache-key-content's head is 298ad452), and the brief's publisher jar for it isn't named.
+
+PROOF: a ValueSet dependency edit gives the correct expansion (small FSH IG, -Xmx4g, real tx.fhir.org)
+IG: VS A = three enumerated SNOMED CT codes plus the valueset-supplement extension to a local SNOMED supplement
+(DHP BloodGroupVS's shape, which makes core send the whole VS to the server and cache it by url|version);
+VS B = include codes from valueset VS A. Both at version 0.1.0, never bumped. Each run starts from the same tx
+cache, seeded by a plain master build. Edit vs1 removes 112144000 from VS A; vs2 puts it back. Counted:
+occurrences of 112144000 in the rendered expansion fragments (temp/pages/_includes/ValueSet-vs-X-expansion.xhtml)
+and in output/en/ValueSet-vs-b.html.
+  jars: master = #1447 (50624908) + #1465 (dc35f79c) on core ba7189b6ae;
+        new    = the same + fix/rapido-scrub-tx-cache 45d847b on core fix/expand-cache-scrub 0932bd07
+
+  build            VS A has 112144000  expansion A  expansion B / page B  QA e/w/h   scrub log
+  master initial   yes                 5            5 / 5                 1/5/17     -
+  master vs1       no                  5 (stale)    5 / 5 (stale)         1/5/17     -
+  master vs2       yes                 5            5 / 5                 1/5/17     -
+  new initial      yes                 5            5 / 5                 1/5/17     removed 1 entries for 3 urls
+  new vs1          no                  0            0 / 0                 1/5/17     removed 2 entries for 2 urls
+  new vs2          yes                 5            5 / 5                 1/5/17     removed 1 entries for 2 urls
+  fresh build of the vs1 content, empty cache: 0 / 0, QA 1/5/17
+- new vs1's VS A and VS B expansion fragments are identical to the fresh build's; the full pages differ only in a
+  timestamp. Master vs1 keeps the old expansion for both the edited VS and the VS that includes it, with QA
+  counts unchanged, so nothing flags it.
+- The one QA error in every build is the test IG's missing suppressed-messages file.
+
+
+######################################################################
+# DRAFT 1: core #2856 v2
+######################################################################
+
+=== Title ===
+Add TerminologyCache.scrub() to drop the cached answers for changed ValueSets and CodeSystems
+
+=== Body ===
+The tx cache keys a ValueSet that has a url and a version by url|version. An IG's ValueSets keep their version while they are edited, so the cache keeps answering with the old expansion and the old validate-code results. This keeps the url|version keys and adds a way for the caller, which knows what changed, to remove those answers.
+
+### Cause
+
+The cache key of a ValueSet with a url and version doesn't change when its content, or the content of what it includes, changes.
+
+### Fix
+
+`scrub(Collection<String> urls)` removes every entry whose request names one of the urls: expansions for any options and language, validate-code results against the ValueSet, and expansion, validate-code and subsumes results that name the url as a code system, an implicit value set (url?fhir_vs...) or an included ValueSet.
+- It works on every named cache, in memory and in the cache files (saved straight away). That includes cache files whose cache isn't in memory, such as the ones removeCS drops for an IG's own CodeSystems.
+- A url matches a whole url, with or without a |version. A url that only starts with it doesn't match.
+- The expansion parameters (after "profile") are not looked at: they are the same for every request in a run, and they name code systems (system-version) that would match everything.
+- A merge with the file on disk later in the session leaves out the disk's entries for the scrubbed urls, so a file without a nonce doesn't bring them back. Answers fetched after the scrub are kept.
+- An expansion keyed by url|version doesn't name what it includes, so the caller passes the ValueSets that depend on what changed too. The publisher works that out from its dependency tracing (HL7/fhir-ig-publisher#<new>).
+
+The same change is made in r5 and standalone. The #2827 handling of transient failures in store() is unchanged.
+
+Tests: TerminologyCacheTests.Scrub in both modules: every kind of entry for a ValueSet and for a CodeSystem is removed in memory and on disk; prefix-similar urls, urls in the expansion parameters and in a display are kept; a quote before the url; a |version is ignored; a persistent entry whose key a transient entry took over; no resurrection through a merge, while a fresh answer survives it; a file whose cache removeCS dropped; a memory-only cache.
+
+Numbers: the end-to-end proof is in HL7/fhir-ig-publisher#<new> (an edited ValueSet and the ValueSet that includes it now render the same expansion as a fresh build). Timings on uz.dhp.core: pending.
+
+Replaces the content keys of the earlier version of this PR.
+
+######################################################################
+# DRAFT 2: publisher, new PR from fix/rapido-scrub-tx-cache
+######################################################################
+
+=== Title ===
+Scrub the tx cache for the ValueSets and CodeSystems a build may have changed
+
+=== Body ===
+The tx cache keys a ValueSet by url|version, and an IG's ValueSets keep their version while they are edited. After an edit, rapido and -watch rebuilds keep using the old expansion and the old validate-code answers. They render the old expansion page and miss or report the wrong binding errors until the cache is deleted.
+
+### Cause
+
+Nothing removes a cached answer when the ValueSet, or something it depends on, changes without a version change.
+
+### Fix
+
+Before anything validates or expands against the cache, the publisher removes the cached answers for every ValueSet and CodeSystem that may have changed. It uses TerminologyCache.scrub() from hapifhir/org.hl7.fhir.core#<new>.
+- A rapido build scrubs every VS and CS it rebuilds. Rebuilding is decided by the dependency closure from #1447, so the scrub covers a VS that includes or excludes a changed VS, a VS on a changed local CS (also through an implicit `cs?fhir_vs=...` value set), and a CS whose local supplement changed.
+- Core sends every local supplement of a CS along with its expansions and validations, so a supplement is now an implied edge in RapidoDependencyAnalyser.closure().
+- Unchanged VSs and CSs keep their entries.
+- A url the IG defined in the last build and no longer does (deleted, or its url changed) is scrubbed too. The rapido state keeps the list, also after a build with tx failures.
+- A build with nothing to compare against scrubs the url of every local VS and CS: a plain build, a rapido build with no state, and a build after a package change.
+- The log shows how many entries were removed and how long it took.
+
+Contains #1447's commits; review only the last four.
+
+### Limits
+- load() runs before the dependency check, so two things in it can still read an old answer for a changed VS: the snapshot step's required-binding check ("Binding X is not a subset of binding Y", only for a profile whose snapshot is regenerated), and test data factories. Fixing it means moving the dependency analysis before loadConformance1.
+- An external CS that a local supplement extends (e.g. SNOMED CT) is scrubbed only in rapido builds where the supplement changed, not in every plain build, which would drop all SNOMED CT answers on every build. An external ValueSet on such a CS is not scrubbed.
+- The list of last-build urls is saved only when a build gets that far. A url changed to Y, a crash, then a change away from Y leaves Y unscrubbed.
+- A dependency package that changes without changing its version is not scrubbed.
+
+Tests: RapidoTxCacheScrubTest (8: VS, CS and supplement edits scrub them and their dependants, nothing changed keeps all, a plain build scrubs all local urls, renamed and deleted urls, deleted after a build with tx failures); RapidoDependencyAnalyserTest (supplement edges, a VS on an implicit value set of a local CS). Each new test was checked by breaking the code it covers.
+
+Proof (small FSH IG, VS B includes VS A, VS A edited without a version bump, -rapido -watch, same seeded tx cache):
+
+| build | 112144000 in VS A | expansion of VS A | expansion of VS B |
+|---|---|---|---|
+| master, after removing it | no | still listed (stale) | still listed (stale) |
+| this PR, after removing it | no | gone | gone |
+| fresh build, empty cache | no | gone | gone |
+
+The expansions with this PR are identical to the fresh build's, and QA counts are the same in all three. Timings on uz.dhp.core: pending (needs a machine that fits a 10 GB publisher plus Jekyll).
+
+######################################################################
+# DRAFT 3: publisher #1465 v2 (body only; no code change, head stays dc35f79c)
+######################################################################
+
+=== Body (replaces the current one) ===
+Since #1363 the expansion page of each ValueSet is generated without the tx cache, so every build sends all of them to the tx server again.
+
+### Cause
+
+#1363 replaced `ExpansionOptions.cacheNoHeirarchy()` with `new ExpansionOptions().withHierarchical(true)` to get the hierarchy back. `cacheOk` defaults to false, so the cache was dropped too.
+
+### Fix
+
+- Add `withCacheOk(true)`.
+- The page code clears the compose and text of the ValueSet it renders, which is now the cached object, so it renders from a copy.
+
+Depends on #<scrub PR> and hapifhir/org.hl7.fhir.core#<new>: every VS a build may have changed has its cache entries removed first, so an edited ValueSet doesn't show its old expansion. Without them, this change makes that stale page visible (see the proof below). The pages of unchanged ValueSets come from the cache in rapido and -watch rebuilds; a plain or complete build scrubs the IG's own ValueSets anyway.
+
+No new tests: one call site, checked by editing a ValueSet without a version bump in a -watch session.
+
+Proof (small FSH IG, VS B includes VS A, VS A edited without a version bump, -rapido -watch, same seeded tx cache):
+
+| build | 112144000 in VS A | expansion of VS A | expansion of VS B |
+|---|---|---|---|
+| master (with this commit), after removing it | no | still listed (stale) | still listed (stale) |
+| with the scrub PRs, after removing it | no | gone | gone |
+| fresh build, empty cache | no | gone | gone |
+
+The expansions with the scrub PRs are identical to the fresh build's, and QA counts are the same in all three. Timings on uz.dhp.core: pending (needs a machine that fits a 10 GB publisher plus Jekyll).
+
+######################################################################
+# REPLY TO GRAHAME (Vadim posts it; one line per point)
+######################################################################
+
+Redone your way: keys stay url|version, and a ValueSet rapido decides to rebuild has its tx-cache entries scrubbed first.
+- Scrub: TerminologyCache.scrub(urls) drops every entry naming the url (all expansion options, validate-code, subsumes) in every NamedCache, in memory and on disk.
+- Closure: included and excluded VSs, local CodeSystems (also via cs?fhir_vs) and supplements, from #1447's dependency tracing.
+- No baseline: plain builds, stateless or complete rapido builds scrub every local VS and CS url.
+- Timing: it runs in checkDependencies, before validation; the snapshot binding check in load() still runs earlier, listed as a limit.
+- Proof: in a -watch session, removing a code from VS A (no version bump) left master rendering the old expansion of VS A and of VS B, which includes it; with the scrub both match a fresh build.
+PRs: core hapifhir/org.hl7.fhir.core#<new>, publisher HL7/fhir-ig-publisher#<new>; #1465 now depends on them.
+
+######################################################################
+# STEPS FOR VADIM: update #2856 and #1465 without a force push
+######################################################################
+
+0. Review the three branches above. Nothing upstream has been touched.
+
+#2856 (head hapifhir PR from vadi2:fix/expand-cache-key-content), recommended option A:
+  A1. Open a new PR: base hapifhir/org.hl7.fhir.core master, head vadi2:fix/expand-cache-scrub. Title and body: DRAFT 1.
+  A2. Comment on #2856 "Superseded by #<new>, which keeps url|version keys and scrubs instead" and close it.
+  No push needed: fix/expand-cache-scrub is already on the fork and is a fast-forward of upstream master ba7189b6ae.
+Option B (keep #2856's number), in a fresh clone of vadi2/org.hl7.fhir.core:
+  git fetch https://github.com/hapifhir/org.hl7.fhir.core master:upstream-master
+  git checkout -b tmp-scrub origin/fix/expand-cache-scrub
+  git rebase upstream-master            # only needed if master moved past ba7189b6ae; tmp-scrub is local, so safe
+  git checkout -b key-content origin/fix/expand-cache-key-content
+  git merge -s ours upstream-master -m "Merge master"
+  git read-tree -u --reset tmp-scrub
+  git commit -m "Scrub changed ValueSets instead of keying expansions by content"
+  git diff upstream-master HEAD --stat  # must equal tmp-scrub's diff: 4 files
+  git push origin key-content:fix/expand-cache-key-content   # plain push, fast-forward
+  Then retitle #2856 and replace its body with DRAFT 1.
+
+Publisher scrub PR:
+  Branch vadi2:fix/rapido-scrub-tx-cache is already pushed. It sits on #1447's branch, and a PR in HL7 can't target a
+  fork branch, so either (recommended) wait for #1447 to merge, then open the PR against HL7 master (the diff shrinks to
+  the last four commits), or open it now as a draft against HL7 master with DRAFT 2, which says it contains #1447's
+  commits. It needs the core PR released and the publisher's core_version bumped before it can compile on CI.
+
+#1465:
+  Nothing to push: its head dc35f79c is already the v2 commit.
+  Once the core and publisher scrub PRs exist, fill <new> and <scrub PR> in DRAFT 3, replace #1465's body, and post the
+  reply above on whichever PR Grahame commented on.
+  Option: drop #1465 instead; its gain is mainly in rapido and -watch rebuilds now.
+
+Fold the scrub into #1447? Recommendation: no. It needs an unreleased core API, so it would block #1447.
