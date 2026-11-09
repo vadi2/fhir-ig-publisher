@@ -152,7 +152,8 @@ class PublisherIGLoaderStartUpTest {
   @Test
   void theNextBuildRunsSushiAlongsideAgainWhenItDidntChangeTheIgResource() throws Exception {
     assertThrows(Error.class, this::initialize);
-    assertFalse(loader.takeRestart()); // as Publisher.build asks after the first start-up
+    // Publisher.build asks this after a start-up that returned (this one can't): a start-up that succeeded
+    assertFalse(loader.takeRestart());
 
     Files.writeString(dir.resolve("input").resolve("fsh").resolve("a.fsh"), "Profile: B");
     session.startBuild();
