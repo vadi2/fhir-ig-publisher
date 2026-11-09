@@ -150,6 +150,19 @@ class PublisherIGLoaderStartUpTest {
   }
 
   @Test
+  void theNextBuildRunsSushiAlongsideAgainWhenItDidntChangeTheIgResource() throws Exception {
+    assertThrows(Error.class, this::initialize);
+    assertFalse(loader.takeRestart()); // as Publisher.build asks after the first start-up
+
+    Files.writeString(dir.resolve("input").resolve("fsh").resolve("a.fsh"), "Profile: B");
+    session.startBuild();
+    newFields();
+    assertThrows(Error.class, this::initialize);
+    assertEquals(2, runs.get());
+    assertEquals(2, logged.stream().filter("Sushi: running alongside the start-up"::equals).count(), logged.toString());
+  }
+
+  @Test
   void aStartUpIsDoneAgainWhenSushiAlongsideItChangedTheIgResource() throws Exception {
     igWritten = ig("B");
     initialize(); // its failure was on the IG resource that SUSHI changed

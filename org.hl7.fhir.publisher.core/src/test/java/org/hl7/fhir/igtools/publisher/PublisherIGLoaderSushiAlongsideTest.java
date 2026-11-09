@@ -1,12 +1,12 @@
 package org.hl7.fhir.igtools.publisher;
 
-import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.IOException;
@@ -252,8 +252,7 @@ class PublisherIGLoaderSushiAlongsideTest {
     while (!finished) {
       Thread.sleep(10);
     }
-    assertTrue(igFile.toFile().setReadable(false));
-    assumeFalse(Files.isReadable(igFile), "root can still read it");
+    assumeTrue(igFile.toFile().setReadable(false) && !Files.isReadable(igFile), "can't make it unreadable here (Windows/root)");
 
     loader.sushiAfterFailure(startUp);
 
