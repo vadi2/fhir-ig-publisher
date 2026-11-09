@@ -106,6 +106,8 @@ public class RapidoTracker {
   private Map<String, FileResult> results = new HashMap<>();
   private final Map<FetchedFile, FileNode> nodes = new IdentityHashMap<>();
   private JsonObject oldFiles;
+  /** the urls of the IG's ValueSets and CodeSystems in the last build, whatever this build decides */
+  private final Set<String> oldTxUrls = new TreeSet<>();
   private final JsonObject newFiles = new JsonObject();
   private final Map<String, String> global = new TreeMap<>();
   /** path (relative to the IG folder) to content hash, for the files behind global "other-files" */
@@ -158,6 +160,9 @@ public class RapidoTracker {
     String noAnalysis = analyseDependencies();
 
     JsonObject old = loadState();
+    if (old != null) {
+      oldTxUrls.addAll(old.getStrings("txUrls"));
+    }
     reason = failure;
     if (reason == null) {
       reason = noAnalysis;
@@ -341,19 +346,31 @@ public class RapidoTracker {
    *
    * <p>A complete build has nothing to compare with: every ValueSet and CodeSystem the IG defines. Otherwise, those in
    * the files validated again because they changed or something they depend on did (an included or excluded
-   * ValueSet, a CodeSystem, a supplement), and the code systems that those supplements add to.
+   * ValueSet, a CodeSystem, a supplement), and the code systems that those supplements add to. Either way, the urls
+   * the last build's ValueSets and CodeSystems had that none has now.
    */
   public Set<String> txCacheUrlsToScrub() {
+    Set<String> res;
     if (complete) {
-      return terminologyUrls(pf.fileList, false);
+      res = terminologyUrls(pf.fileList, false);
+    } else {
+      List<FetchedFile> files = new ArrayList<>();
+      for (FetchedFile f : pf.fileList) {
+        if (!validationClean.contains(f)) {
+          files.add(f);
+        }
+      }
+      res = terminologyUrls(files, true);
     }
-    List<FetchedFile> files = new ArrayList<>();
-    for (FetchedFile f : pf.fileList) {
-      if (!validationClean.contains(f)) {
-        files.add(f);
+    // a url the IG no longer defines (the resource was deleted, or its url changed): what was cached while the IG
+    // defined it is no longer what the server would say
+    Set<String> now = terminologyUrls(pf.fileList, false);
+    for (String u : oldTxUrls) {
+      if (!now.contains(u)) {
+        res.add(u);
       }
     }
-    return terminologyUrls(files, true);
+    return res;
   }
 
   /**
@@ -943,6 +960,12 @@ public class RapidoTracker {
     state.add("version", STATE_VERSION);
     File sf = new File(stateFile);
     FileUtilities.createDirectory(sf.getParent());
+    JsonArray txUrls = new JsonArray();
+    for (String u : terminologyUrls(pf.fileList, false)) {
+      txUrls.add(u);
+    }
+    // kept even when nothing else is, so that the next build still knows which urls disappeared
+    state.add("txUrls", txUrls);
     int txFailures = txFailures();
     if (txFailures > 0) {
       // what the build made from those calls isn't what the server would have said, so none of it can be reused

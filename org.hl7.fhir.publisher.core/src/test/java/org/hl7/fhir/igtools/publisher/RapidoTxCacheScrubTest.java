@@ -40,7 +40,7 @@ import org.junit.jupiter.api.io.TempDir;
  * while they're edited. So before a build expands or validates anything, what the cache holds for the ValueSets and
  * CodeSystems that may have changed is removed: in a differential build, the ones validated again (they changed, or
  * an included ValueSet, a CodeSystem or a supplement they use did); in a complete build or a build without -rapido,
- * all of the IG's own.
+ * all of the IG's own. Both also remove the urls the IG defined in the last build and no longer does.
  *
  * <p>A -watch rebuild runs the same checkDependencies with a new context, whose cache is read again from disk, so these
  * cover it too; the scrub on disk is tested in core's TerminologyCacheTests.
@@ -95,6 +95,14 @@ class RapidoTxCacheScrubTest {
 
   private void edit(String file, String name, String value) {
     ig.get(file).add(new String[] {name, value});
+  }
+
+  private void set(String file, String name, String value) {
+    for (String[] c : ig.get(file)) {
+      if (c[0].equals(name)) {
+        c[1] = value;
+      }
+    }
   }
 
   private void fillCache() {
@@ -160,6 +168,29 @@ class RapidoTxCacheScrubTest {
 
     // vs-sct doesn't name the supplement, but core sends it with every expansion and validation that uses SNOMED CT
     assertEquals(allBut(SUPP, SCT, VS_SCT), cached());
+  }
+
+  @Test
+  void theOldUrlOfACodeSystemWhoseUrlChangedIsScrubbed() throws Exception {
+    firstBuild();
+    set("CodeSystem-cs-a.json", "url", CS_A+"-new");
+
+    PublisherFields pf = build(true);
+
+    assertFalse(pf.rapido.isCompleteBuild(), pf.rapido.getReason());
+    // what was cached for cs-a while the IG defined it isn't what the server says now
+    assertEquals(allBut(CS_A, VS_A, VS_B), cached());
+  }
+
+  @Test
+  void theUrlOfADeletedValueSetIsScrubbed() throws Exception {
+    firstBuild();
+    ig.remove("ValueSet-vs-other.json");
+
+    PublisherFields pf = build(true);
+
+    assertTrue(pf.rapido.isCompleteBuild());
+    assertEquals(Set.of(SCT, EXTERNAL_VS, VS_A+"x"), cached());
   }
 
   @Test
