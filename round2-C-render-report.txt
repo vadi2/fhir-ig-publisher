@@ -1,0 +1,284 @@
+ROUND 2 - AREA C: RENDERING AND GENERATION IN DIFFERENTIAL REBUILDS (uz.dhp.core)
+==================================================================================
+Agent C, 2026-11-09. Research + local prototypes only. Nothing pushed.
+
+Setup for every number below (unless marked "base JFR"):
+  - Bench copy ~/Programs/dhp-bench/worktree6 (NVMe, not tmpfs), one-shot `-rapido` builds (not -watch),
+    -tx https://tx.fhir.org, java 25, -Xmx10g, taskset 12 cpus, nice 10, private package cache, all builds in
+    one hold of bench.lock per sequence, load rule applied (load at start is logged per run, table in part 3).
+  - prof edit = UZCoreSpecimen `* status ^short` text change (193 of 811 files rendered, 183 validated).
+    inst edit = UZCoreObservation blood-pressure example valueQuantity 120 -> 133 (112 rendered, 97 validated).
+    A "restore" build undoes the edit, so it re-renders the same set and counts as a prof- or inst-sized build.
+  - C = jar 881ff027 (base + R2Stats instrumentation only). P = prototypes on (proto3.jar, see part 3).
+  - None of the A/B builds ran across midnight (all started 2026-11-09 01:04 or later).
+
+----------------------------------------------------------------------------------
+1. WHERE THE TIME GOES (seconds, C jar, median of 4 prof-sized / 4 inst-sized runs)
+----------------------------------------------------------------------------------
+Wall: prof-sized 172.5 (171.2-173.4), inst-sized 159.1 (158.5-161.0), first build 282.1.
+
+Area C phases                                  prof    inst   first   notes
+  narratives (all 811 files, every build)       6.4     6.5     6.6   clean files: 5.3 prof / 5.9 inst
+  native outputs (all 811 files, every build)  10.1    10.0    10.9   clean files: 8.6 prof / 9.3 inst
+  constants + views + summary-before            2.7     2.7     2.6
+  run template (templateBeforeGenerate)         2.0     2.0     1.8
+  html loop                                    12.1     4.8    63.6
+    - null-language pass                        2.9     0.9    22.3
+    - en + ru + uz passes                       6.4     1.2    38.3
+    - replay of clean files                     2.8     2.7     -     readExpansion ~1.1, canReplay/fileHash ~0.7
+  spreadsheets                                  2.4     1.4     4.4
+  summaries after (Generate Summaries)          3.3     3.3     3.8   ~1.6 s of it is network (see below)
+  post-Jekyll package + zips                   15-17   15-17   19.9
+    - combined package + package-combined.tgz   4.7     4.7     5.0   genCombinedPackage ~3.2 CPU
+      + install of #dev
+    - generateZips                             10.3-11.8         11.9 expansions ~7.4, definitions zips +
+                                                                       validator.pack + csv/xlsx/sch zips ~4
+  TOTAL area C                                  ~55     ~47    ~114
+Outside C (for scale): validation 6-10 (B), Jekyll 25 (D), html check + AI + full-ig.zip ~65 (D),
+loading/SUSHI ~16 (A).
+
+Over-rendering (question 1). Measured on the clean pair 00-first-C -> 01-prof-C (same jar, same flags):
+  - prof: 193 files rendered = 94 "always processed" + 1 changed + 88 "something it depends on changed" + 10
+    "render only". html phase: 14,532 file writes, 250 changed bytes (1.7 %); 27,331 fragments, 234 changed.
+  - By file (html + sheets ms):
+      identical output                           158 files    0.5 s
+      only the .xlsx differs (zip timestamps)     21 files    7.2 s  (17 depends-on SDs + 4 render-only SDs)
+      differs only by the build-time date          6 files    2.4 s  (condition, observation, servicerequest,
+                                                                       episodeofcare, ...: no ^date in FSH)
+      real change                                 ~8 files    0.7 s  (specimen SD itself 0.18 s + direct users)
+    So about 10 of the 11 s spent rendering in a prof rebuild produce nothing new.
+  - The edges that cause it (from r2c-dirty.tsv chains): SD -> SD chains through targetProfile, followed
+    transitively. E.g. adverse-event -> observation -> specimen; allergy-intolerance -> encounter -> observation ->
+    specimen; examples -> their profile -> ... -> specimen. Rendering A needs only the identity of B for a
+    targetProfile link (url, version, name/title, web path), never B's element shorts. Same edge kinds B calls
+    "weak" for validation (B idea 2 keeps the full closure for the render hash).
+  - inst: 16 render-only users of the transaction Bundle (5 CodeSystems, Patient x2, Practitioner, Organization,
+    Location, Condition, HealthcareService, SDs encounter, episodeofcare, observation), ~2.3 s. The three SDs
+    (1.1 s) changed only their .xlsx. The other files' diffs are polluted by the C/P switch in my sequence, so I
+    only claim the SD part as measured.
+  - "Always processed" (94 pages + md) costs only 0.04 s of html except the IG resource (0.24-0.28 s).
+
+Cost per fragment type (question 2, r2c-frag.tsv; first build / prof rebuild, ms):
+  ValueSet.expansion (null pass)         16,267 / small   458 fragments; the null pass pays it, not en/ru/uz
+  CodeSystem.content (lang + null)        8,803 / -
+  StructureDefinition.eview (all)         7,241 / 2,228   0 changed in prof rebuild
+  ValueSet.expansion (lang)               5,492 / -
+  Resource.json-html (all)                4,263 / 446     largest bytes: 650 MB written in a first build
+  Resource.html (all)                     3,571 / -
+  Cross.dependency-table (3 langs)        2,688 / 2,232   every build, 0 changed; mostly package-list.json fetches
+  StructureDefinition.snapshot* (all)    ~3,300 / ~1,500
+  StructureDefinition.xref (all)          1,051 / 613     0 changed
+  Cross.ip-statements (3 langs)             298 / 281-459 every build, 0 changed
+
+Global outputs regenerated on every build (question 3):
+  - Generate Summaries: 15,234 writes, 0 changed bytes in every rebuild I measured. 3.3 s.
+  - Cross.dependency-table / -short / -nontech, globals-table: 2.2 s, identical. JFR: the time is
+    DependencyRenderer.fetchPackageList (terminology.hl7.org, fhir.org, hl7.org package-list.json, ~1.3 s) plus
+    StructureDefinitionRenderer.references -> packages2.fhir.org (1.0 s, in the html phase). One-shot cost;
+    in -watch pf.fetchedPackageLists may survive (not measured).
+  - expansions.json (157 MB) + .xml (200 MB) + 2 zips: ~7.4 s. Identical apart from `date`/`timestamp`/
+    `identifier` unless an expansion changed. It holds each ValueSet once per language pass (229 ValueSets x 4 =
+    ~916 entries in a C build: null, en, ru, uz copies with the same fullUrl).
+  - combined package, definitions zips, validator.pack, csv/excel/schematron zips: ~8.7 s together, rebuilt
+    from scratch (D lists the same, as "package step"). ~3.7 s of the JFR samples are native Deflater.
+  - temp/pages/_rapido/state.json: 192 MB written every build; 123 MB of it is the journaled expansions.
+  - Native outputs: 4,332 json files / 763 MB written into temp every build.
+  - package.tgz: 518 of 780 entries change bytes between two builds; after blanking dates only package.json,
+    other/spec.internals and the edited SD differ.
+
+Date churn (root cause of most "changed" bytes): PublisherIGLoader.java:4977 stamps pf.getExecTime() as `date` on
+every canonical with no date. In DHP that includes the specimen, condition, observation SDs and many CodeSystems
+and ValueSets. 515 of 718 en/*.json native files differ between two consecutive builds only by it. It also defeats
+any byte-level reuse key (my first expansions key never matched because of it). RapidoTracker already hashes
+the stamped date as "(build date)" and keeps the day in the global key (RapidoTracker.java:627). That is why the
+first build after midnight is a complete build by design. D found the Jekyll side of the watch failure that
+follows (D report section 4). The same date problem is why D's tail can't become incremental.
+
+Threads (question 4): narratives, native, html, sheets and summaries all run on the main thread (0.7-0.85 cores
+in JFR). Native outputs parallelise cleanly (prototype: 10.1 -> 4.2 s, output equal apart from dates). Parallel
+html per file or per language would need per-thread copies of pf.expansions, trackedFragments, otherFilesRun,
+the npm adders, the db and R2-style counters. It is a big refactor (estimate only). The post-Jekyll zips (10-12 s)
+run while nothing else does, and they do not need Jekyll's output (idea 3).
+
+Write time and #1458 staging (question 5): checkMakeFile compares before writing and is cheap: first build 71,208
+html-phase writes (1.76 GB) took 1.03 s, a prof rebuild 14,532 writes (0.44 GB) 0.15 s. Writing is not where the
+time goes; generating the bytes is. My runs are one-shot, so no .watch-output staging happens and I could not see
+duplicate writes from #1458. D measured the sync: it writes 12,486 and byte-compares 8,212 files per FSH build.
+Most of those writes are date churn.
+
+----------------------------------------------------------------------------------
+2. RANKED IDEAS
+----------------------------------------------------------------------------------
+Seconds are per differential rebuild (prof / inst) unless noted. "measured" = A/B in part 3, "est" = derived
+from phase timings, not built.
+
+1. Render hash with weak edges (identity only for targetProfile / Reference / narrative links)    PUBLISHER
+   What: the same strong/weak split B prototyped for the validation hash (B idea 2), applied to the render
+     closure. A file is re-rendered when it changed, or something on its strong closure changed, or the identity
+     (key, url, version, name, title, web path, type) of a weak target changed. "Render only" users
+     (something that refers to it changed) are keyed the same way, on the identity of the referrer.
+   Saved: prof ~-9 to -10 s html + sheets (est from measured per-file times: 10.1 of 11.0 s of re-rendered work had
+     no real output change); inst ~-1 to -2 s (the 3 SDs among the render-only users are 1.1 s). Grows with IG size.
+   Risk: medium. Renderers that read deeper into a referenced profile would go stale: obligations, "uses"
+     lists, inherited must-support, tooltips. Mitigation: same resolve()/conformsTo() safety rule as B, plus an
+     A/B check that the output equals a complete build on a few edit kinds (my analyze.py/ov.py do this).
+   Effort: medium (RapidoDependencyAnalyser/RapidoTracker; B's code can be shared). Overlap: B, #1447.
+
+2. Stable build time inside a rapido session                                                       PUBLISHER
+   What: in a differential build, stamp the date, genDate and lastUpdated from the build that produced the state
+     (stored in state.json) instead of now. The day is already in the global key, so the value is always from
+     the same day.
+   Saved: 0 s by itself. It makes 515 native json files, ~518 package entries, every expansion, the dated SD
+     headers and (D) all ~8,900 html footers byte-stable. Without it ideas 4, 6 and 8 need date-blind keys, and D's
+     incremental tail cannot work.
+   Risk: low. Pages show the session's first build time; "same as a complete build apart from timestamps" holds.
+   Effort: small. Overlap: D (genDate), E.
+
+3. Run generateZips while Jekyll runs                                                              PUBLISHER
+   What: generateZips (examples/definitions zips, expansions.json/.xml + zips, validator.pack and its copy,
+     csv/excel/sch zips) reads only resources and the spec file, not Jekyll's output. Build the spec file before
+     Jekyll, run generateZips on a worker thread while Jekyll runs, write to a staging folder and move the files
+     into output/ after Jekyll (Jekyll may clean its destination). package.tgz and the combined package have to
+     stay after Jekyll: templateOnCheck (after Jekyll) adds messages that go into validation-summary.json and
+     validation-oo.json inside package.tgz, and the combined package is made from package.tgz.
+   Saved: est -10 to -12 s every build, first build included (generateZips is 10.3-11.9 s, and Jekyll leaves the
+     JVM idle for 25 s). Moving the template check earlier would add the 4.7 s package step, but the check
+     may read the output.
+   Risk: medium-low. Output bytes are unchanged. A failed Jekyll has to discard the staged files. The worker
+     needs the context read-only (validator.pack composes resources). Effort: medium. Overlap: D (package step).
+
+4. Expansions: reuse the files when no expansion changed, and don't parse journal expansions     PUBLISHER
+   What: -Dr2c.expreuse. Replay keeps journal expansions as strings. generateExpansions hashes them (skipping
+     date/timestamp/identifier values, proto4) and keeps expansions.json/.xml/.zips when the key matches.
+   Saved: measured -1.4 s in the html loop (replay overhead 2.8 -> 1.4 s). The write skip is est -7 s per rebuild
+     with no expansion change (prof and inst both): C spends ~7.4 s writing them, and proto4's check should cost
+     well under 1 s (one pass over ~120 MB of chars, est). Not measured in a build: proto3's SHA-256 key never
+     matched (the date problem) and its check cost 1.4-1.5 s. proto4's date-blind 2x64-bit key passed a unit check
+     (a date/timestamp/identifier-only change gives the same key, a code change or a display "date" doesn't).
+     Its p4 build sequence waited ~1 h for bench.lock and never ran, so I cancelled it.
+   Risk: low-medium. The kept file has the older dates for re-rendered ValueSets, as html replay already does.
+     With idea 2 the key would not need to skip anything.
+   Effort: small (done as a prototype). Further, upstream question: expansions.json repeats each ValueSet once per
+     language pass (null/en/ru/uz copies, same fullUrl). One copy per ValueSet would cut it to a quarter
+     (est -5 s of the 7.4 s on every build). That changes the output, so it needs Grahame's call.
+
+5. Native outputs on a thread pool                                                                 PUBLISHER
+   What: -Dr2c.nativepar=10: generateNativeOutputs for all files on N threads, db rows and npm adds in file order.
+   Saved: measured -5.9 s per rebuild (native 10.1 -> 4.2 s prof, 10.0 -> 4.1 s inst), -6.5 s first build.
+   Risk: medium-low. Output check: all 780 package.tgz entries equal a C complete build after blanking dates
+     (the one missing entry, openapi.json, comes from idea 7 or 10). Shared caches in the element model /
+     context must be thread-safe; the 5 P builds ran clean. Effort: small-medium.
+
+6. Replay narratives and native outputs for clean files                                           PUBLISHER
+   What: files whose strong closure is clean (validation-clean) keep last build's narrative and native outputs
+     (journal the generated text divs, or skip the native write when the content hash is unchanged).
+   Saved: est -14 s sequential (narratives 5.3-5.9 s + native 8.6-9.3 s on clean files), or about -9 s on top of
+     idea 5. Includes convertToElement (3.7 s of the narrative phase).
+   Risk: medium-high. Narratives feed validation, db rows, npm entries and the combined package. Needs idea 2,
+     or stale dates in native files. Effort: large.
+
+7. Skip the null-language html pass (newML)                                                       PUBLISHER
+   What: -Dr2c.nonull: the null pass only writes the unsuffixed redirects.
+   Saved: measured -2.4 s prof, -0.75 s inst, -18.5 s first build (null pass 22.3 -> 3.8 s).
+   Risk: HIGH as prototyped. P builds lose output/DHPCapabilityStatement.openapi.json and its package.tgz entry
+     (6 broken links). openapi is only registered when lang == null, and prune (idea 10) doesn't whitelist it
+     either; I did not separate the two. It removes the null copy from expansions.json, and the
+     unsuffixed fragments change. A product decision; it needs the openapi registration moved to the default
+     language pass. Effort: small once agreed.
+
+8. Reuse summaries and Cross fragments in differential builds                                     PUBLISHER
+   What: key generateSummaryOutputsAfter (3.3 s, 0 of 15,234 writes changed) and the dependency/globals/ip
+     fragments (2.5 s) on a hash of the summary inputs (identity of all resources + lang), and cache
+     package-list.json per day.
+   Saved: est -3 to -5 s per one-shot rebuild (less in -watch if the package lists stay in memory).
+   Risk: low-medium (the summary input set must be complete). Effort: medium.
+
+9. Memoise TerminologyCache.definitionDigest per ValueSet                                          CORE
+   Saved: base JFR -1.4 s prof html, -4.4 s first build (B sees the same frame, 2.7 CPU s).
+   Risk: low if invalidated on resource change. Effort: small. Overlap: B.
+
+10. Fragment pruning (-Dr2c.prune) with a scan of the IG's literal includes                        PUBLISHER
+   Saved: measured about -0.8 to -1.3 s per prof rebuild (en+ru+uz 6.3-6.8 -> 5.5 s), -5.9 s first build.
+     23,086 of 52,927 fragment groups skipped on a first build.
+   Risk: medium. Template.wantGenerateFragment's whitelist (the upstream rapido pruning disabled by 0f53f940) has
+     no non-fragment outputs (openapi, swagger, ...), so it drops those as well. Effort: small. Product decision.
+
+11. Cheaper replay checks                                                                          PUBLISHER
+   canReplay/fileHash re-hashes every output on disk (~0.7 s per rebuild); size + mtime from the journal would do
+   (est -0.5 s). state.json stores each expansion 4x (123 of 192 MB); one copy per ValueSet by hash (est -1 s
+   write/read, not measured).
+
+12. Faster deflate for the big non-html zips                                                      PUBLISHER/CORE
+   expansions.*.zip, definitions zips and validator.pack: ~3.7 s of native Deflater samples per build.
+   Deflater.BEST_SPEED est -2 s; the zip bytes change but not the content. Moot for expansions if 4 holds.
+
+Order I'd take them in: 2 (enabler, small), 5 (measured), 4 (small, half measured), 1 (largest render win, shares B's
+code), 3 (largest wall win, with D), then 8, 9. Ideas 7 and 10 need an upstream decision first. 6 only after 2.
+
+----------------------------------------------------------------------------------
+3. PROTOTYPES, METHOD, RAW NUMBERS
+----------------------------------------------------------------------------------
+Branch investigate/r2-C-instr in ~/Programs/perf-work/worktree28 (local only):
+  881ff027 r2c: instrumentation (R2Stats io/fragment/file/phase timings; r2c-dirty.tsv reference chains)
+  a5d435d8 -Dr2c.nativepar=N, -Dr2c.nonull=true
+  8626035d -Dr2c.prune=true (template patterns + literal includes found under input/ and template/)
+  c40c6b44 -Dr2c.expreuse=true (journal expansions kept as strings; expansions.* kept when the key matches)
+  a65d237e expreuse key skips date/timestamp/identifier values, cheaper 2x64-bit hash (proto4)
+Jars: proto3.jar (used for the A/B, now deleted) = instr.jar + javac-patched classes of a5d435d8..c40c6b44;
+  proto4.jar = proto3 + a65d237e (same flags).
+P flags: -Dr2c.nativepar=10 -Dr2c.nonull=true -Dr2c.prune=true -Dr2c.expreuse=true.
+
+Method: C-render/seq2.sh (and seq3.sh for p4) runs a list of steps in one lock hold, interleaving C and P. After
+each build it writes a temp/ manifest (path, size, written-this-build, sha1), output/ manifests for first/restore,
+copies the r2c dumps, r2c-dirty.tsv, qa.json and package.tgz. Tools:
+  analyze.py / ov.py   over-rendering: per re-rendered file, changed outputs vs the previous build, by reason
+  outcmp.py            output/ manifest comparison by kind
+  pkgcmp.py            package.tgz entries after blanking dates
+  JfrPhases.java       (full-build/proto) JFR by publisher phase; jfr print for socket reads
+Raw data: C-render/raw/ab (A/B), raw/ab/*.r2c/r2c-{phases,frag,files,io}.tsv,
+raw/ab/an-01.txt, raw/ab/*.rendered.tsv, JFRs 10-prof-C-jfr.jfr and 12-inst-C-jfr.jfr.
+
+A/B sequence raw/ab (load = 1-min load at start):
+  build              load  wall s   html   native  sheets  narr  zips/exp/pack (post-Jekyll after install)
+  00-first-C         2.75  282.1   63.6   10.9    4.4     6.6   11.9   (SUSHI full + 19 s package fetches)
+  01-prof-C          2.71  172.7   11.8   10.2    2.4     6.3   11.8
+  02-restore-P       2.83  162.1    7.3    4.2    2.1     6.3   13.2   (expreuse key missed: +1.5 s check)
+  03-prof-C          2.97  173.4   12.4   10.1    2.3     6.6   11.8
+  04-restore-P       2.92  162.3    7.3    4.2    2.1     7.0   13.2
+  05-inst-C          2.21  161.0    4.9   10.0    1.4     6.3   11.6
+  06-restore-P       2.71  155.9    3.1    4.1    1.5     6.6   13.1
+  07-inst-C          1.74  159.4    4.9   10.0    1.4     6.5   11.6
+  08-restore-P       1.71  153.2    2.9    4.0    1.3     6.2   13.2
+  09-first-P         1.87  203.3   38.5    4.4    4.0     6.3   11.3   (SUSHI incremental, no fetches)
+  10-prof-C-jfr      1.95  171.2   12.6   10.1    2.3     6.3   10.3
+  11-restore-C-jfr   1.63  172.3   11.8   10.4    2.5     6.5   10.3
+  12-inst-C-jfr      2.08  158.8    4.7   10.0    1.4     6.5   10.4
+  13-restore-C-jfr   1.63  158.5    4.5   10.0    1.4     6.4   10.3
+  Medians: prof-sized C 172.5 vs P 162.2 = -10.3 s; inst-sized C 159.1 vs P 154.6 = -4.5 s (P still paid the
+  1.5 s missed-key check). First build: generate phases -31.5 s (html -25.1, native -6.5). The 79 s wall
+  difference also contains SUSHI and package-fetch noise that has nothing to do with P.
+  html lang passes (null / en / ru / uz, ms): 01-prof-C 2715/1967/2258/2086, 02-restore-P 383/2214/1704/1612,
+  05-inst-C 833/382/482/415, 06-restore-P 118/888/337/318, first C 22330/12740/12881/12637, first P
+  3776/10974/10252/11138.
+
+expreuse follow-up (proto4): not run. The sequence (restore:P prof:P restore:P) waited about 1 h for
+bench.lock behind A and D, and I cancelled it. Command to rerun, from C-render/:
+  JOPTS_P="-Dr2c.nativepar=10 -Dr2c.nonull=true -Dr2c.prune=true -Dr2c.expreuse=true" \
+    bash ./seq3.sh p4 jars/proto4.jar restore:P prof:P restore:P
+  The 2nd and 3rd builds should log "r2c expreuse: the N expansions are unchanged, expansions.* kept".
+
+Output equivalence:
+  - package.tgz 00-first-C vs 09-first-P: 780 vs 779 entries; after blanking dates only package.json and
+    spec.internals differ (dates in other formats). Missing in P: openapi/DHPCapabilityStatement.openapi.json
+    (idea 7/10). 00-first-C vs 01-prof-C: same plus the edited specimen SD.
+  - output/ 00-first-C vs restore-P builds: the same openapi.json missing, everything else present. Content
+    differences are dominated by the build date and genDate (hashes only, no content diff possible).
+  - qa: Errors 0 and Warnings 262 in every C and P build (Info 8517-8519). Broken Links: 0 in C, 6 in P. All
+    6 are the two links per language (en/ru/uz CapabilityStatement page) to the missing openapi.json.
+  - 09-first-P output/ has 144 fewer files than 00-first-C: openapi.json plus 143 tbl_bck*.png table-background
+    images (root and en/ru/uz). Nothing links to those images (no broken link), so they are unused
+    leftovers of the pruned or skipped fragments. Harmless, but the file set differs from a complete build.
+
+Cleanup done: state.json copies (2.3 GB), most package.tgz copies, proto3.jar and worktree28 target/ dirs
+deleted. Kept: C-render/jars/instr.jar (C) and proto4.jar (P + date-blind key), 461 MB, for the p4 rerun; raw/
+309 MB. worktree6 output/ and temp/ hold the state of build 13 (restore, C jar).

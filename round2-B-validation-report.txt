@@ -1,0 +1,242 @@
+ROUND 2 - AREA B: VALIDATION AND TERMINOLOGY IN DIFFERENTIAL (-rapido -watch) REBUILDS
+Agent B, 2026-11-08/09. IG: uz.dhp.core (DHP), bench copy ~/Programs/dhp-bench/worktree5.
+Base stack: round2/base (publisher 45f904d8, core da6dd62517).
+
+SHORT VERSION
+  Three prototypes, measured together in one lock hold (A/B, same bench, same warm tx cache):
+    prof rebuild 164.1 s -> 158.4 s median (-5.7 s), inst rebuild 152.3 s -> 145.6 s median (-6.7 s),
+    with QA output identical to base for every step compared.
+  1. Memoise the package-registry answers in ImplementationGuideValidator (core): -3.1 to -3.9 s per rebuild, both
+     edit kinds. Base re-asks packages2/packages.fhir.org and re-downloads build.fhir.org's ig list for every
+     dependsOn in every rebuild, because the IG resource is always re-validated.
+  2. "Weak" edges in the Rapido validation hash (publisher): a profile edit re-validates 27 resources instead of 90.
+     It saves about 1.0-1.3 s of validation in this IG. The saving grows with the number of examples that only
+     reference resources of the edited profile.
+  3. One tree walk for validateSD's extension-usage counts (publisher): -0.8 s per rebuild, any edit kind.
+     Trivial, and no risk.
+
+==========================================================================================================
+1. WHERE THE TIME GOES (seconds per rebuild, base jar)
+==========================================================================================================
+Sources:
+  - phase deltas from watch.log of the setup agent's base-timed session and of my ab1-base session;
+  - JFR of A's s1-base session (build 2 = prof, build 5 = inst), analysed with tools/JfrPhase.java. That tool gives
+    main-thread CPU samples per phase, socket reads, and main-thread park/monitor waits with the first org.hl7 frame;
+  - -Dproto.valTiming per-resource validation times (PROTO-VAL lines).
+
+Rebuild totals (ab1-base):
+  prof: 164.1 / 169.6 / 160.7 s. 193 of 811 files rendered, 183 validated, 90 of 718 validations redone.
+  inst: 151.2 / 153.4 s. 112 rendered, 97 validated, 4 of 718 redone.
+  Area B is about 9 s of a prof rebuild and about 7 s of an inst rebuild.
+
+                                             prof (s)          inst (s)       what
+  Validating Conformance Resources (wall)    4.9-6.2           4.4-5.0        SD/VS/CS/IG resources of changeList
+    of it: the ImplementationGuide resource  3.2-4.6           4.3-4.9        always dirty, so validated every time
+      network waits (main thread, JFR)       ~3.0              ~2.8           IG dependency checks, see below
+      CPU (JFR)                              ~1.0              ~1.0           InstanceValidator on the IG resource
+    of it: the other changed conformance res ~1.2              ~0             SDs pulled in by the closure
+  Validating Resources (instances)           0.38-0.62         0.09-0.10
+  validateSD loop (after validation)         0.85-0.91         0.87-0.90      countUsages walks all 811 resources
+                                                                              once PER extension SD (13 here)
+  TerminologyCache load (Core Package phase) 0.74              0.80           every rebuild re-parses 71 MB txcache
+  expand-cache key building, render phases   2.7 CPU           1.15 CPU       generateExpandToken -> definitionDigest
+                                                                              (composeString of VS + dependency CSs;
+                                                                              from #2856). Mostly in C's phases.
+  TerminologyCache.hashJson                  0.57              0.18
+  TerminologyCache save                      ~0 (no samples)   ~0
+  tx round trips (main thread waits)         0.40 (3 calls)    0.27 (2 calls)
+  validator / ValidationServices setup       ~0 (no samples)   ~0             InstanceValidator.<init> never sampled
+  FHIRPath / slicing inside validation       0.25 / 0.13       0.04 / 0.07    negligible
+  Rapido decision (Tracker + Analyser CPU)   1.8               1.8            (dependency analysis; overlaps A)
+
+IG dependency checks (core ImplementationGuideValidator.checkDependency):
+  The IG has three dependsOn: hl7.terminology.r5, fhir.dicom and hl7.fhir.uv.extensions.r5. For each one, every
+  rebuild calls pcm.getPackageId, getPackageUrl, PackageClient.getVersions and getLatestVersion, each time with a
+  NEW user-cache FilesystemPackageCacheManager. That new manager has a fresh CIBuildClient, which downloads the
+  build.fhir.org ig list again.
+  JFR main thread, prof build: packages2.fhir.org 1.75 s (32 reads) + packages.fhir.org 0.13 s (12) +
+  CIBuildClient.updateFromCIServer 0.97 s + 0.13 s park = ~3.0 s.
+  inst build: 1.53 + 0.10 + 1.03 + 0.13 = ~2.8 s.
+  The tail is much worse than the median: one base-timed inst rebuild spent 27.8 s in this phase on a registry
+  stall.
+
+tx requests in a warm rebuild:
+  - inst and title: 2 requests. GET /metadata and POST $cache-control?mode=start. They come from connecting a
+    fresh TerminologyClientContext every rebuild, and cost 0.27 s.
+  - prof: 3 requests. The extra one is CodeSystem/$validate-code for the unknown system
+    http://example.org/fhir/CodeSystem/lab-report-type (0.13 s). #2847's unknown-system memo lives in the per-build
+    context, so every rebuild that re-validates that resource asks again.
+  - No $expand in warm rebuilds. A first build on the seed cache makes 46 $expand calls: that is the
+    include-cache-supplement bug, which another agent owns.
+
+Which resources get re-validated, and is the set minimal?
+  inst edit (Observation/blood-pressure-example): 4 validations:
+    - the instance itself;
+    - Bundle/example-transaction-bundle and Bundle/example-transaction-response;
+    - the IG resource.
+    This is minimal, apart from the IG resource, which is always dirty.
+  prof edit (UZCoreSpecimen ^short): 90 validations. This is not minimal.
+    - The closure follows every IG string transitively, including Reference.reference in instances and
+      ElementDefinition.type.targetProfile. That pulls in the SDs that merely target Specimen (Observation,
+      DiagnosticReport, ServiceRequest, Group, ...), then every example of those SDs, and so on.
+    - Validating a reference needs the target to exist with the right type and nothing more.
+      ValidationServices.policyForReference returns CHECK_EXISTS_AND_TYPE, or CHECK_TYPE_IF_EXISTS in Bundles.
+      The exception is a resolve() or conformsTo() in a constraint or discriminator of the profile being used.
+    - Measured with the weak-edge prototype: 27 validations (closure.py offline says 26 + the SD itself; the
+      publisher agrees with closure.py's current rule on all 718 files).
+    - Dropped: 64 validations worth 1.3 s in base (19 SDs, 7 ServiceRequest, 6 Condition, 5 Task, ...).
+    - Kept: 6 profiles have resolve()/conformsTo in their snapshot (diagnostic-report, encounter, observation,
+      procedure, provenance, socioeconomic-observation), so the safety rule keeps them and their examples.
+
+Parallel validation: after ideas 1-3, a prof rebuild has about 0.9 s of non-IG validation CPU left (an inst rebuild
+has about 0.1 s). Running it on several threads would save under 0.6 s. It is not worth the risk: InstanceValidator
+state (setExample, fetcher flags), the order of statusWarnings and the Rapido record order all assume one thread.
+
+==========================================================================================================
+2. RANKED IDEAS
+==========================================================================================================
+Seconds are per watch rebuild, from the ab1 A/B sessions (medians) unless marked EST.
+
+1. Memoise the package-registry answers used by ImplementationGuideValidator   CORE   (prototype f392d67d14)
+   What: one static user-cache pcm instead of a new FilesystemPackageCacheManager per dependency. Cache "id|uri",
+     "url|pkg", "versions|pkg" (empty answers are not cached) and "latest|pkg" in a static map with a 1 h TTL,
+     shared across the watch session's rebuilds.
+   Saved: Validating Conformance Resources prof 4.9-6.2 -> 1.41-1.48 s and inst 4.4-5.0 -> 0.98-1.00 s. IG resource
+     validation 3.2-4.9 s -> 0.72-0.97 s. Net -3.1 to -3.9 s on every non-page rebuild, and it removes the network
+     tail (the 27.8 s stall seen once). This line also includes idea 2's share for prof (about 1 s).
+   Risk: low. The messages depend only on registry state; a new version published mid-session shows up within the
+     TTL. Message text unchanged: QA identical. An alternative with no TTL question is to skip the network checks
+     when the IG's dependsOn list is unchanged since the last build of the session (publisher side).
+   Effort: small (about 50 lines). Overlap: E (network in rebuilds), A (pcm construction).
+
+2. Weak edges in the Rapido validation hash                                     PUBLISHER (prototype b0a8f677)
+   What: in RapidoDependencyAnalyser, the validation hash follows only "strong" edges transitively:
+     - profile claims (meta.profile, found profiles, exampleUri/test claims);
+     - baseDefinition, bindings, type.profile, and all other strings.
+   For "weak" edges, the hash includes only the target's identity: key, file, url, version, and type for SDs.
+   The weak edges are:
+     - Reference.reference in instances;
+     - ElementDefinition.type.targetProfile;
+     - xhtml narrative text.
+   Safety rule: if the resource itself or anything on its strong closure has resolve() or conformsTo( in an
+   expression/path/xpath (snapshot included), the full hash is used. The render hash still uses the full closure,
+   so the render set is unchanged.
+   Saved: prof re-validations 90 -> 27; the 64 dropped validations cost 1.3 s in base. Measured effect inside the
+     Conformance and Validating Resources phases: about -1.0 to -1.3 s (it can't be separated exactly from idea 1 in
+     the same jar). inst is unchanged (already minimal). The gain grows with IG size: one profile edit re-validates
+     every example of every profile that targets it.
+   Risk: medium-low. What could break: a validator check that reads target content outside
+     resolve()/conformsTo(), or another policy than CHECK_EXISTS_AND_TYPE for some paths. Examples are
+     CHECK_VALID for contained resources (those are inside the same resource) and Bundle entries (same file).
+     The edge list should be reviewed against InstanceValidator.checkReference. Evidence: QA output identical to
+     base for prof1, prof2, inst, restore-inst and the first build (qa.txt diff after removing timestamps).
+   Effort: medium (about 140 lines including the scan changes, plus tests in PublisherRapidoWatchTest).
+
+3. Count extension usages in one walk                                           PUBLISHER (prototype 775e09e2)
+   What: validateSD -> countUsages(url) walked every element of every resource once per extension SD. Replace it
+     with one walk that builds url -> count, rebuilt at the start of the validateSD loop.
+   Saved: the "reused N of M" phase 0.85-0.91 -> 0.07-0.09 s, so -0.8 s per rebuild of any kind (and on the first
+     build too). It grows as extensions x elements.
+   Risk: none; same counts by construction. QA identical. Effort: trivial.
+
+4. Keep the IG resource's validation when nothing it depends on changed         PUBLISHER   EST 0.7-1.0 s
+   What: the IG resource is in alwaysDirty, so it is validated every rebuild. After idea 1 it still costs
+     0.72-0.97 s CPU. If the IG element hash, the dependsOn list and the set of IG files are unchanged, its messages
+     can be replayed like any other reused validation.
+   Risk: medium. IG validation looks at the whole resource inventory, so its key must include that inventory (it
+     changes when files are added or removed). Effort: small-medium.
+
+5. Reuse the TerminologyCache between watch rebuilds                            CORE + PUBLISHER   EST 0.75 s
+   What: each rebuild builds a new context, and TerminologyCache.load re-parses every entry (0.74-0.80 s CPU). Hand
+     the NamedCaches to the next build's cache when each file's nonce/length on disk is unchanged (the nonce
+     machinery already exists). Also keep #2847's unknown-system memo across rebuilds (saves the prof $validate-code,
+     0.13 s).
+   Risk: low if keyed on the disk nonce. Effort: medium (lifecycle across PublisherFields). Overlap: A (context
+     loading), E.
+
+6. Keep the terminology client across rebuilds                                  CORE + PUBLISHER   EST 0.27 s
+   What: skip GET /metadata and $cache-control?mode=start when reconnecting to the same server inside a watch
+     session. Risk: low (the capabilities are already cached on disk with a TTL). Small gain.
+
+7. Cheaper expand-cache keys (definitionDigest)                                 CORE (prototype a5e7145105)
+   What: JFR shows 1.1-2.7 s CPU per rebuild in generateExpandToken -> definitionDigest (composeString of the VS
+     essence plus every dependency CS essence, for each expandVS call). That cost was added by #2856. The prototype
+     memoises the essence JSON per resource object, guarded by a cheap stamp, for one build.
+   Measured: render phases only 0.3-0.5 s faster (inside noise), so the identity key probably misses. expandVS
+     often gets copies of the ValueSet, so each call brings a new object. A content-keyed memo, or a digest stored
+     on the CanonicalResource when it is loaded, is needed to get the JFR number. Not proven; the time is in C's
+     phases (narratives, HTML), so it overlaps C. Risk: medium (stale key = wrong expansion reused).
+
+8. Parallel per-resource validation                                             PUBLISHER   EST < 0.6 s
+   Not recommended for watch rebuilds after ideas 1-3 (see section 1). For the first build (16.5 s of validation)
+   it may pay off, but that is E's area.
+
+Other things seen (overlaps and bugs, not B's area):
+  - Midnight: the watcher forced "Rapido Mode: Complete Build (the day changed since the last build)". Inside the
+    running watch session, that complete build failed in Jekyll: "Could not locate the included file
+    'practitioner-certificate-sequence.svg'" (raw/ab1-proto-a/watch.log). After that, edits got no more rebuilds.
+    A complete rebuild inside a watch session seems to lose generated includes (C or D, or whoever owns the
+    watch loop).
+  - watch-session.sh/b-session.sh JFR=1 dumps per build fail silently: /usr/lib/jvm/java-25-openjdk-amd64/bin has
+    no jcmd. Only session.jfr is written, at exit. JfrPhase.java cuts it per build from the watch.log times, so it
+    still works. ~/Programs/jdk-21/bin/jcmd would probably attach.
+  - The "Errors: ... Broken Links" phase (D) was 1.5-4.5 s shorter in the proto session's prof rebuilds. That is not
+    explained by these prototypes, so I treat it as noise.
+  - The first-build comparison in ab1 is confounded: base ran first and filled the txcache (46 $expand calls);
+    proto then made only 2, and its SUSHI cache was warm. No first-build savings are claimed.
+
+==========================================================================================================
+3. PROTOTYPES, METHOD, RAW NUMBERS
+==========================================================================================================
+Branches (local, never pushed):
+  publisher ~/Programs/perf-work/worktree27, investigate/r2-B-validation (from investigate/r2-base 45f904d8):
+    e8eac492  Proto: dump the Rapido dependency inputs (-Dproto.rapidoGraph)    instrumentation only
+    ea52b9f0  Proto: per-resource validation timing (-Dproto.valTiming)         instrumentation only
+    b0a8f677  Proto: weak edges for the validation hash (-Dproto.weakEdges)     idea 2, off by default
+    775e09e2  Proto: count extension usages in one walk for validateSD          idea 3, on (-Dproto.noExtCountMemo off)
+  core ~/Programs/core-worktrees/worktree12, investigate/r2-B-validation (from investigate/r2-base da6dd62517):
+    f392d67d14  Proto: keep the package registry's answers about IG dependencies for an hour   idea 1, always on
+    a5e7145105  Proto: memo the essence JSON in expand cache keys per build                    idea 7, on (-Dproto.noDigestMemo off)
+  Jars in B-validation/jars/ (patched single classes into the base jar with javac --release 17 + jar uf; lombok
+  as processor for core classes; core version string untouched, ~/.m2 untouched):
+    p3.jar = base + instrumentation (the A/B "base"); p6.jar = p3 + ideas 1, 2, 3, 7 (the A/B "proto").
+  Tools (B-validation/tools):
+    - b-session.sh: watch-session.sh copy; also keeps qa.json/qa.txt per build; NOLOCK=1; load gate < 3, max 120 s.
+    - b-ab.sh: several sessions in ONE lock hold.
+    - phasecmp.py: phase table per build.
+    - JfrPhase.java: JFR per phase, socket and park attribution.
+    - closure.py: offline closure, current rule vs weak edges, from a graph dump.
+    - weaktest/: unit check of the weak hash.
+
+Method: one bench-lock hold (23:31-00:36). Sessions ab1-base (p3) and ab1-proto (p6, -Dproto.weakEdges=1) ran on
+worktree5 with steps prof,prof,inst; both had a warm tx cache. The proto session crossed midnight: the forced
+complete build failed in Jekyll (see above), so I stopped it and ran ab1-proto-b (p6, inst,inst) in the same lock
+hold. Load at each run start is in times.tsv (1.4-2.3). QA was compared with
+  diff of qa.txt after removing the "Generated"/"IG Publisher Version" lines and clock times.
+
+Raw (phasecmp.py; columns: total, Core Package, Narratives, Conformance validation, Validating Resources,
+validateSD phase, Native, HTML, combined package | validations redone, PROTO-VAL sum s, IG resource s, load):
+  ab1-base
+  first1          261.3  1.84 6.58 16.27 1.57  nan 12.08 63.70 20.19 | 16.52 3.97 load 1.16
+  prof1           164.1  1.05 5.86  6.22 0.38 0.91 10.93 10.42 16.39 | 90  6.51 4.62 load 1.76
+  prof2           169.6  0.98 6.03  5.37 0.62 0.85 10.90 10.71 16.51 | 90  5.90 3.85 load 1.74
+  restore-prof1   160.7  0.99 5.99  4.89 0.38 0.85 10.92 10.76 16.43 | 90  5.19 3.22 load 1.70
+  inst1           151.2  0.97 5.72  4.36 0.09 0.87 10.81  4.28 16.37 |  4  4.42 4.34 load 1.99
+  restore-inst1   153.4  1.00 6.26  4.95 0.10 0.90 10.94  4.11 16.55 |  4  5.00 4.91 load 2.01
+  ab1-proto-a (prof)
+  first1          227.5  1.82 6.19 15.18 0.75  nan 11.35 52.32 19.81 | 15.45 3.50 load 2.19  (confounded, see above)
+  prof1           157.6  1.30 5.85  1.41 0.27 0.07 11.06 10.15 16.52 | 27  1.62 0.75 load 2.25
+  prof2           159.2  1.23 5.57  1.48 0.27 0.09 11.18 10.40 16.58 | 27  1.69 0.72 load 1.72
+  ab1-proto-b (inst)
+  first1          224.2  1.79 6.16 16.59 0.77  nan 11.92 52.50 16.71 | 16.86 4.57 load 0.20
+  inst1           146.6  1.07 5.43  1.00 0.09 0.08 11.08  3.93 16.55 |  4  1.05 0.97 load 1.93
+  inst2           145.6  1.20 5.69  0.99 0.09 0.08 11.25  4.09 16.39 |  4  1.04 0.96 load 1.41
+  restore-inst1   144.8  1.06 5.67  0.98 0.09 0.08 11.11  4.14 16.36 |  4  1.03 0.95 load 2.09
+QA: base vs proto identical for first1, prof1, prof2, inst1, restore-inst1. Base restore-prof is identical to base
+  first1. base prof vs first differs only by the 2 expected "Unused translation" hints for the edited ^short.
+tx per rebuild (txlog-NN.html): base and proto both send metadata + $cache-control, plus $validate-code on prof.
+Raw files: B-validation/raw/ab1-base, ab1-proto-a, ab1-proto-b (watch.log, times.tsv, qa-*.txt/json, txlog-*.html);
+  JFR splits of A's s1-base in raw/A-s1-base-b2.txt (prof) and raw/A-s1-base-b5.txt (inst);
+  graph dumps graph/g.1794177374817.* (base prof1) and graph/w.1794178498061.* (proto prof1).
+Cleanup done: p1, p2, p4, p5 jars and class dirs removed, worktree27 target/ removed, worktree5 output/ and temp/
+  removed, extra graph dumps removed. p3.jar and p6.jar (231 MB each) are kept for re-runs; delete when done.
