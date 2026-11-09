@@ -163,7 +163,16 @@ class PublisherIGLoaderStartUpTest {
     assertEquals(1, runs.get());
     assertTrue(logged.contains("Sushi: not run again - it ran alongside the start-up that is being done again"), logged.toString());
     assertEquals("B", pf.sourceIg.getTitle());
-    assertFalse(loader.takeRestart());
+
+    // the next build, after an edit, runs SUSHI alongside its start-up again (Publisher.build asks for a restart only
+    // after the first start-up, so nothing else clears the restart's mark)
+    Files.writeString(dir.resolve("input").resolve("fsh").resolve("a.fsh"), "Profile: B");
+    session.startBuild();
+    newFields();
+    igWritten = ig("B");
+    assertThrows(Error.class, this::initialize);
+    assertEquals(2, runs.get());
+    assertEquals(2, logged.stream().filter("Sushi: running alongside the start-up"::equals).count());
   }
 
   @Test

@@ -170,6 +170,8 @@ public class PublisherIGLoader extends PublisherBase {
   public void initialize() throws Exception {
     additionalResources.clear(); // in watch mode, this loader runs once per build
     pendingSushi = null; // (a build that failed before its start-up began may have left it)
+    boolean again = doneAgain;
+    doneAgain = false;
     pf.pcm = packageCacheManager();
     log("Build FHIR IG from "+ settings.getConfigFile());
     if (settings.getMode() == PublisherUtils.IGBuildMode.PUBLICATION)
@@ -212,12 +214,12 @@ public class PublisherIGLoader extends PublisherBase {
       }
       File fsh = new File(Utilities.path(focusDir(), "fsh"));
       if (fsh.exists() && fsh.isDirectory() && !settings.isNoSushi()) {
-        startSushi(fsh);
+        startSushi(fsh, again);
         pf.isSushi = true;
       } else {
         File fsh2 = new File(Utilities.path(focusDir(), "input", "fsh"));
         if (fsh2.exists() && fsh2.isDirectory() && !settings.isNoSushi()) {
-          startSushi(fsh);
+          startSushi(fsh, again);
           pf.isSushi = true;
         }
       }
@@ -276,8 +278,11 @@ public class PublisherIGLoader extends PublisherBase {
 
   /** runs SUSHI, or has it run alongside the start-up (see pendingSushi) */
   void startSushi(File fsh) throws Exception {
-    boolean again = doneAgain;
-    doneAgain = false;
+    startSushi(fsh, false);
+  }
+
+  /** again: this start-up is the one done again, as SUSHI, alongside the first, changed the IG resource */
+  private void startSushi(File fsh, boolean again) throws Exception {
     if (again) {
       runSushi(fsh, true);
     } else if (canRunSushiAlongside()) {
