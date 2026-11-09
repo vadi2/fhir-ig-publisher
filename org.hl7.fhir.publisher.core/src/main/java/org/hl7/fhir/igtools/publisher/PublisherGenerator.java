@@ -4836,8 +4836,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   static final String AI_OUTPUTS_KEPT = ".ai-outputs";
 
   // the files that each build writes to the temp folder after Jekyll has run, and Jekyll doesn't read: Rapido's state
-  // (see RapidoTracker) and the final zip (see finishGenerate()); and the AI step's files kept while Jekyll runs
-  static final List<String> UNTRACKED_TEMP = Collections.unmodifiableList(Arrays.asList("_rapido", "full-ig.zip", AI_OUTPUTS_KEPT));
+  // (see RapidoTracker) and the final zip (see finishGenerate()); the AI step's files kept while Jekyll runs; and the
+  // package step's files a page rebuild moves aside while Jekyll runs (see PageRebuild.keepCheckedPackageOutputs())
+  static final List<String> UNTRACKED_TEMP = Collections.unmodifiableList(Arrays.asList("_rapido", "full-ig.zip", AI_OUTPUTS_KEPT,
+      PageRebuild.CHECKED_FOLDER_PREFIX + "*"));
 
   /**
    * Watch mode, before Jekyll writes these output files (relative to out) again for the template's check: moves aside

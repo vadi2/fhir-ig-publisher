@@ -542,6 +542,19 @@ class JekyllDriverTest {
   }
 
   @Test
+  void whatAPageRebuildMovesAsideWhileJekyllRunsIsntASource() throws Exception {
+    Path src = site();
+    String out = src.resolve(".watch-output").toString();
+    driver = fakeReplying(OK);
+    driver.trackSources(PublisherGenerator.UNTRACKED_TEMP);
+    // the package step's files the last html check left, next to the staged output while Jekyll runs
+    write(src, ".package-checked-123/en/a.html", "checked");
+    assertTrue(driver.build(src.toString(), out, 20_000, log::add).isOk());
+    org.apache.commons.io.FileUtils.deleteDirectory(src.resolve(".package-checked-123").toFile());
+    assertEquals(Collections.emptyList(), changedSources(src));
+  }
+
+  @Test
   void whatAnUpdateWasGivenIsWhatJekyllRead() throws Exception {
     // as in a page rebuild, which tells Jekyll which files it wrote again
     Path src = site();
