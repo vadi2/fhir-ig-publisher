@@ -473,6 +473,11 @@ public class RapidoDependencyAnalyser {
   }
 
   private boolean resolveReference(String s, Set<ResourceNode> targets) {
+    int implicit = s.indexOf("?fhir_vs");
+    if (implicit > 0) {
+      // an implicit value set of a code system (cs?fhir_vs...) depends on the code system
+      return resolveReference(s.substring(0, implicit), targets);
+    }
     // what this string finds, apart from what the strings before it found (it can find the same resource again)
     Set<ResourceNode> found = new HashSet<>();
     resolveInto(s, found);

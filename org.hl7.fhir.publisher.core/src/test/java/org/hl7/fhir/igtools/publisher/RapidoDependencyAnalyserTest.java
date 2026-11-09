@@ -188,6 +188,16 @@ class RapidoDependencyAnalyserTest {
   }
 
   @Test
+  void codeSystemChangeReachesAValueSetOnItsImplicitValueSet() {
+    Ig ig0 = new Ig();
+    ig0.add("cs-a", "CodeSystem", "cs-a").url(B+"/CodeSystem/cs-a").str("a1");
+    ig0.add("vs-implicit", "ValueSet", "vs-implicit").url(B+"/ValueSet/vs-implicit").str(B+"/CodeSystem/cs-a?fhir_vs=isa/a1");
+    ig0.add("vs-other", "ValueSet", "vs-other").url(B+"/ValueSet/vs-other").str("http://loinc.org");
+    Outcome o = edit(ig0, ig -> ig.get("cs-a").strings.set(1, "a1-changed"));
+    assertEquals(List.of("cs-a", "vs-implicit"), o.validate);
+  }
+
+  @Test
   void usingASupplementedCodeSystemIsntAUsageOfTheSupplement() {
     // the supplement's page doesn't list what uses its code system
     Outcome o = edit(supplementIg(), ig -> ig.get("ex").str("5678"));
