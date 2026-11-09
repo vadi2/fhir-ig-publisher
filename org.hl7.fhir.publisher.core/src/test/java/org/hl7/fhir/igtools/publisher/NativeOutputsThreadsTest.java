@@ -23,6 +23,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.hl7.fhir.igtools.publisher.modules.NullModule;
@@ -33,6 +35,7 @@ import org.hl7.fhir.model.core.Basic;
 import org.hl7.fhir.model.core.ElementDefinition;
 import org.hl7.fhir.model.core.Enumerations.PublicationStatus;
 import org.hl7.fhir.model.core.ImplementationGuide;
+import org.hl7.fhir.model.core.NutritionProduct;
 import org.hl7.fhir.model.core.StructureDefinition;
 import org.hl7.fhir.model.core.StructureDefinition.StructureDefinitionKind;
 import org.hl7.fhir.model.core.StructureDefinition.TypeDerivationRule;
@@ -40,6 +43,7 @@ import org.hl7.fhir.services.elementmodel.Element;
 import org.hl7.fhir.services.elementmodel.JsonParser;
 import org.hl7.fhir.services.elementmodel.LanguageUtils;
 import org.hl7.fhir.services.utilities.NPMPackageGenerator;
+import org.hl7.fhir.utilities.UserDataNames;
 import org.hl7.fhir.standalone.context.SimpleWorkerContext;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -70,6 +74,14 @@ class NativeOutputsThreadsTest {
     element(basic, "Basic.code", "string", "1");
     element(basic, "Basic.subject", "string", "*");
     context.cacheResource(basic);
+    StructureDefinition custom = type("Custom", StructureDefinitionKind.RESOURCE);
+    element(custom, "Custom", null, "*");
+    element(custom, "Custom.id", "id", "1");
+    element(custom, "Custom.language", "code", "1");
+    element(custom, "Custom.code", "string", "1");
+    element(custom, "Custom.subject", "string", "*");
+    custom.setUserData(UserDataNames.loader_custom_resource, "true");
+    context.cacheResource(custom);
   }
 
   private static StructureDefinition type(String name, StructureDefinitionKind kind) {
@@ -110,6 +122,10 @@ class NativeOutputsThreadsTest {
   private final Set<String> callThreads = ConcurrentHashMap.newKeySet();
   /** the threads that asked which outputs to make */
   private final Set<String> workThreads = ConcurrentHashMap.newKeySet();
+  /** set by the first database row */
+  private final AtomicBoolean rowsStarted = new AtomicBoolean();
+  /** whether a worker was still making outputs after the first database row */
+  private final AtomicBoolean workAfterRows = new AtomicBoolean();
 
   private NPMPackageGenerator npm(String label) throws Exception {
     NPMPackageGenerator npm = mock(NPMPackageGenerator.class);
@@ -153,8 +169,14 @@ class NativeOutputsThreadsTest {
     when(pf.igpkp.wantGen(any(FetchedResource.class), anyString())).thenAnswer(inv -> {
       FetchedResource r = inv.getArgument(0);
       workThreads.add(Thread.currentThread().getName());
+      if (rowsStarted.get()) {
+        workAfterRows.set(true);
+      }
       if (r.getId().equals(failOn)) {
         throw new IllegalStateException("no outputs for " + failOn);
+      }
+      if (r.getId().equals("!" + failOn)) {
+        throw new AssertionError("no outputs for " + failOn);
       }
       return true;
     });
@@ -170,6 +192,10 @@ class NativeOutputsThreadsTest {
       record("omit " + inv.getArgument(0) + " " + inv.getArgument(1));
       return null;
     }).when(pf.cvAnalyser).recordOmission(anyString(), anyString());
+    doAnswer(inv -> {
+      record("problem " + inv.getArgument(0) + " " + inv.getArgument(1));
+      return null;
+    }).when(pf.cvAnalyser).recordProblem(anyString(), anyString(), any());
 
     int n = 0;
     for (int i = 0; i < ids.length; i += 2) {
@@ -177,13 +203,33 @@ class NativeOutputsThreadsTest {
       for (int j = i; j < i + 2 && j < ids.length; j++) {
         String id = ids[j];
         FetchedResource r = f.addResource(id);
-        String json = "{\"resourceType\":\"Basic\",\"id\":\"" + id + "\",\"code\":\"code " + id + "\",\"subject\":["
+        int kind = j % 7;
+        String type = kind == 2 ? "Custom" : "Basic";
+        String json = "{\"resourceType\":\"" + type + "\",\"id\":\"" + id + "\",\"code\":\"code " + id + "\",\"subject\":["
             + "\"" + "x".repeat(n++ * 37 % 2000) + "\"]}"; // different sizes, so they take different times
         Element e = new JsonParser(context).parseSingle(new ByteArrayInputStream(json.getBytes(StandardCharsets.UTF_8)), null);
+        if (kind == 1) {
+          r.setType("Binary"); // an instance of a logical model, loaded as a Binary
+        } else if (kind == 4) {
+          r.setType("StructureDefinition"); // a custom resource's definition
+          StructureDefinition sd = type("Def" + id, StructureDefinitionKind.LOGICAL);
+          sd.setUserData(UserDataNames.loader_custom_resource, "true");
+          r.setResource(sd);
+        }
         r.setElement(e).setId(id);
-        if (j % 3 == 0) {
+        if (j % 4 == 1) {
+          pf.publishedIg.getDefinition().addResource().setIsExample(true).getReference().setReference(r.fhirType() + "/" + id);
+        }
+        if (kind == 6) {
+          // a resource that can't be converted to R4: a problem note
+          r.setResource(new NutritionProduct().setId(id));
+        } else if (j % 3 == 0 && kind != 2 && kind != 4) {
           // a resource that also goes in the R4 package
           r.setResource(new Basic().setId(id));
+          if (j % 2 == 0) {
+            r.getResource().setUserData(UserDataNames.archetypeSource, "archetype " + id);
+            r.getResource().setUserData(UserDataNames.archetypeName, id + ".adl");
+          }
         }
         if (j % 5 == 0) {
           pf.r5Inclusions.add("Basic/" + id); // only in the R5 package: an omission note for R4
@@ -209,6 +255,7 @@ class NativeOutputsThreadsTest {
     doAnswer(inv -> {
       FetchedFile f = inv.getArgument(0);
       FetchedResource r = inv.getArgument(1);
+      rowsStarted.set(true);
       record("db " + f.getStatedPath() + " " + r.getId() + " " + sha(inv.getArgument(2)));
       return null;
     }).when(db).saveResource(any(FetchedFile.class), any(FetchedResource.class), any(byte[].class));
@@ -244,18 +291,31 @@ class NativeOutputsThreadsTest {
     Map<String, String> files;
     List<String> outputNames;
     Throwable failure;
+    boolean workAfterRows;
+
+    /** the package entries and notes, in order */
+    List<String> packageCalls() {
+      return calls.stream().filter(c -> !c.startsWith("db ")).collect(Collectors.toList());
+    }
+
+    /** the database rows, in order */
+    List<String> rows() {
+      return calls.stream().filter(c -> c.startsWith("db ")).collect(Collectors.toList());
+    }
   }
 
   private Run run(String name, int threads, String failOn, String... ids) throws Exception {
     calls.clear();
     callThreads.clear();
     workThreads.clear();
+    rowsStarted.set(false);
+    workAfterRows.set(false);
     Path temp = dir.resolve(name);
     PublisherGenerator generator = generator(temp, threads, failOn, ids);
     Run run = new Run();
     try {
       generator.generateNativeOutputs(db());
-    } catch (Exception e) {
+    } catch (Exception | Error e) {
       run.failure = e;
     }
     run.calls = new ArrayList<>(calls);
@@ -263,6 +323,7 @@ class NativeOutputsThreadsTest {
     run.workThreads = Set.copyOf(workThreads);
     run.files = files(temp);
     run.outputNames = outputNames(generator, temp);
+    run.workAfterRows = workAfterRows.get();
     return run;
   }
 
@@ -271,8 +332,11 @@ class NativeOutputsThreadsTest {
     Run plain = run("plain", 0, null, ids(FILES));
     String main = Thread.currentThread().getName();
     assertEquals(Set.of(main), plain.workThreads);
-    for (String kind : new String[] {"npm ", "npm-en ", "npm-fr ", "npm-r4 ", "omit ", "db "}) {
+    for (String kind : new String[] {"npm ", "npm-en ", "npm-fr ", "npm-r4 ", "omit ", "problem ", "db "}) {
       assertTrue(plain.calls.stream().anyMatch(c -> c.startsWith(kind)), kind + " in " + plain.calls);
+    }
+    for (String entry : new String[] {"RESOURCE Binary-", "EXAMPLE Binary-", "ADL ", "CUSTOM Custom-", "CUSTOM StructureDefinition-"}) {
+      assertTrue(plain.calls.stream().anyMatch(c -> c.contains(" " + entry)), entry + " in " + plain.calls);
     }
     // xml, json and ttl in the root and the 3 language folders, and the _includes json and escaped json
     assertEquals(FILES * (3 * 4 + 2), plain.files.size(), plain.files.keySet().toString());
@@ -280,8 +344,10 @@ class NativeOutputsThreadsTest {
     for (int threads : new int[] {1, 3, 8}) {
       for (int rep = 0; rep < 3; rep++) {
         Run run = run("threads" + threads + "-" + rep, threads, null, ids(FILES));
-        assertEquals(plain.calls, run.calls, threads + " threads");
+        assertEquals(plain.packageCalls(), run.packageCalls(), threads + " threads");
+        assertEquals(plain.rows(), run.rows(), threads + " threads");
         assertEquals(Set.of(main), run.callThreads, "packages, notes and database only from the calling thread");
+        assertFalse(run.workAfterRows, "a database row was saved while the workers ran");
         assertFalse(run.workThreads.contains(main), "the outputs were made on " + run.workThreads);
         assertEquals(plain.files, run.files, threads + " threads");
         assertEquals(plain.outputNames, run.outputNames, threads + " threads");
@@ -298,13 +364,28 @@ class NativeOutputsThreadsTest {
     assertEquals(plain.failure.getMessage(), threads.failure.getMessage());
     // b12 (the resource before b13, in the same file) is in the packages and the database, b13 and later aren't
     assertTrue(plain.calls.stream().anyMatch(c -> c.startsWith("db input/file12.json b12 ")), plain.calls.toString());
-    assertEquals(plain.calls, threads.calls);
+    assertEquals(plain.packageCalls(), threads.packageCalls());
+    assertEquals(plain.rows(), threads.rows());
+  }
+
+  @Test
+  void anErrorStopsAtTheSameResourceAsWithoutThreads() throws Exception {
+    String[] ids = ids(FILES);
+    ids[13] = "!b13";
+    Run plain = run("plain", 0, "b13", ids);
+    Run threads = run("threads", 4, "b13", ids);
+    assertTrue(plain.failure instanceof AssertionError, String.valueOf(plain.failure));
+    assertEquals(plain.failure.getClass(), threads.failure.getClass());
+    assertEquals(plain.failure.getMessage(), threads.failure.getMessage());
+    assertTrue(plain.calls.stream().anyMatch(c -> c.startsWith("db input/file12.json b12 ")), plain.calls.toString());
+    assertEquals(plain.packageCalls(), threads.packageCalls());
+    assertEquals(plain.rows(), threads.rows());
   }
 
   @Test
   void idsThatDifferOnlyInCaseAreDoneWithoutThreads() throws Exception {
     String[] ids = ids(FILES);
-    ids[FILES - 1] = "B0";
+    ids[35] = "B0"; // a Basic, as b0 is
     Run run = run("clash", 4, null, ids);
     assertEquals(Set.of(Thread.currentThread().getName()), run.workThreads);
     assertTrue(PublisherGenerator.nativeOutputNamesClash(files("a", "A")));

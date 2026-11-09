@@ -757,7 +757,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   /**
    * The native outputs of every file in the change list. With -threads, the files are done on the extra threads:
    * each worker writes its file's outputs into temp, and keeps the steps that add to shared state (the packages,
-   * the cross-version notes, the database, the log) for this thread, which runs them in change list order.
+   * the cross-version notes, the log) for this thread, which runs them in change list order. The database rows come
+   * last, in the same order, once no worker is left: saving a row marks the resource (and, for a custom resource,
+   * its structure definition) with its key, which the workers read.
+   * <p>
+   * If a file fails, the files after it may already have written their outputs into temp; the build stops anyway.
    */
   void generateNativeOutputs(DBBuilder db) throws Exception {
     int threads = settings.getThreads();
@@ -772,22 +776,34 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
       return;
     }
-    OrderedWorkers.run("ig-native", threads, 8 * threads, pf.changeList, this::prepareNativeOutputs, (f, outputs) -> {
-      for (NativeOutputs o : outputs.resources) {
-        logDebugMessage(LogCategory.PROGRESS, "Produce resources for "+o.resource.fhirType()+"/"+o.resource.getId());
-        for (PackageStep step : o.steps) {
-          step.run();
+    List<Runnable> rows = new ArrayList<>();
+    try {
+      OrderedWorkers.run("ig-native", threads, 8 * threads, pf.changeList, this::prepareNativeOutputs, (f, outputs) -> {
+        for (NativeOutputs o : outputs.resources) {
+          logDebugMessage(LogCategory.PROGRESS, "Produce resources for "+o.resource.fhirType()+"/"+o.resource.getId());
+          for (PackageStep step : o.steps) {
+            step.run();
+          }
+          if (db != null && o.json != null) {
+            rows.add(() -> db.saveResource(f, o.resource, o.json));
+          }
         }
-        if (db != null && o.json != null) {
-          db.saveResource(f, o.resource, o.json);
+        if (outputs.failure instanceof Error) {
+          throw (Error) outputs.failure;
+        } else if (outputs.failure != null) {
+          throw (Exception) outputs.failure;
         }
+      });
+    } catch (Exception | Error e) {
+      // as without threads, the rows of the resources before a failure are saved
+      try {
+        rows.forEach(Runnable::run);
+      } catch (RuntimeException | Error e2) {
+        e.addSuppressed(e2);
       }
-      if (outputs.failure instanceof Error) {
-        throw (Error) outputs.failure;
-      } else if (outputs.failure != null) {
-        throw (Exception) outputs.failure;
-      }
-    });
+      throw e;
+    }
+    rows.forEach(Runnable::run);
   }
 
   /** a step of saveNativeResourceOutputs that changes state shared by all the files */

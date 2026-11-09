@@ -71,7 +71,7 @@ public class OrderedWorkers {
         f.cancel(true);
       }
       executor.shutdownNow();
-      awaitTermination(executor);
+      awaitTermination(name, executor);
     }
   }
 
@@ -86,12 +86,17 @@ public class OrderedWorkers {
   }
 
   /** no worker is left writing once run() returns or throws, even if the calling thread is interrupted */
-  private static void awaitTermination(ExecutorService executor) {
+  private static void awaitTermination(String name, ExecutorService executor) {
     boolean interrupted = false;
+    boolean said = false;
     while (true) {
       try {
         if (executor.awaitTermination(1, TimeUnit.MINUTES)) {
           break;
+        }
+        if (!said) {
+          System.out.println("Still waiting for the " + name + " workers to stop");
+          said = true;
         }
       } catch (InterruptedException e) {
         interrupted = true;
