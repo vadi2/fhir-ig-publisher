@@ -30,11 +30,13 @@ import java.net.URI;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.LongSupplier;
 
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.utilities.FileUtilities;
@@ -64,6 +66,7 @@ public class TemplateManager {
   private Map<String, String> templateOverrides = new LinkedHashMap<>(); // template id (name#version, or just name) -> local folder
   private boolean usedOverride;
   private final List<String> localFolders = new ArrayList<>(); // the local folders the last template was loaded from
+  private CurrencyChecks currencyChecks; // in watch mode (else null): see setCurrencyChecks
 
   private static final String ACCESSIBLE_MARKER = "[%accessibility-routines%]";
   private static final String JS_ROUTINE_NAME_REGEX = "[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*";
@@ -71,6 +74,39 @@ public class TemplateManager {
   public TemplateManager(FilesystemPackageCacheManager pcm, ILoggingService logger) {
     this.pcm = pcm;
     this.logger = logger;
+  }
+
+  /**
+   * In watch mode, a #current template is checked against its latest CI build (an HTTP request or two) once an hour
+   * rather than in every build: the checks are kept from one build to the next here
+   */
+  public void setCurrencyChecks(CurrencyChecks currencyChecks) {
+    this.currencyChecks = currencyChecks;
+  }
+
+  /** When each #current template package was last checked against its CI build */
+  public static class CurrencyChecks {
+    static final long INTERVAL = 60 * 60 * 1000L; // as often as the package cache manager reads the list of CI builds
+
+    private final Map<String, Long> checked = new HashMap<>();
+    private final LongSupplier clock;
+
+    public CurrencyChecks() {
+      this(System::currentTimeMillis);
+    }
+
+    CurrencyChecks(LongSupplier clock) {
+      this.clock = clock;
+    }
+
+    boolean isRecent(String id) {
+      Long t = checked.get(id);
+      return t != null && clock.getAsLong() - t < INTERVAL;
+    }
+
+    void checked(String id) {
+      checked.put(id, clock.getAsLong());
+    }
   }
 
   /**
@@ -449,7 +485,20 @@ public class TemplateManager {
     return false;
   }
 
-  private NpmPackage loadPackage(String template, String rootFolder) throws FHIRException, IOException {
+  /** a #current template, checked against its CI build unless that was done recently (watch mode) */
+  private NpmPackage loadCurrent(String id) throws IOException {
+    if (currencyChecks.isRecent(id)) {
+      NpmPackage npm = pcm.loadPackageFromCacheOnly(id, "current");
+      if (npm != null) {
+        return npm;
+      }
+    }
+    NpmPackage npm = pcm.loadPackage(id, "current");
+    currencyChecks.checked(id);
+    return npm;
+  }
+
+  NpmPackage loadPackage(String template, String rootFolder) throws FHIRException, IOException {
     try {
       if (template.startsWith("#")) {
         File f = new File(Utilities.path(rootFolder, template.substring(1)));
@@ -464,6 +513,9 @@ public class TemplateManager {
       }
       if (template.matches(FilesystemPackageCacheManager.PACKAGE_VERSION_REGEX)) {
         String[] p = template.split("\\#");
+        if (currencyChecks != null && "current".equals(p[1])) {
+          return loadCurrent(p[0]);
+        }
         return pcm.loadPackage(p[0], p[1]);
       }
       File f = new File(template);

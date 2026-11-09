@@ -127,6 +127,11 @@ public class PublisherIGLoader extends PublisherBase {
   private List<StructureDefinition> additionalResources = new ArrayList<>();
   // in watch mode, what is kept from one build to the next (else null)
   private WatchSession watchSession;
+  // in watch mode, the package cache manager of the session, which reads the list of CI builds once an hour rather than
+  // in every build (null until the first build makes it)
+  private FilesystemPackageCacheManager sessionPcm;
+  // in watch mode, when the #current templates were last checked against their CI builds
+  private final TemplateManager.CurrencyChecks templateChecks = new TemplateManager.CurrencyChecks();
 
   public PublisherIGLoader(PublisherSettings settings) {
     super(settings);
@@ -135,7 +140,7 @@ public class PublisherIGLoader extends PublisherBase {
 
   public void initialize() throws Exception {
     additionalResources.clear(); // in watch mode, this loader runs once per build
-    pf.pcm = getFilesystemPackageCacheManager();
+    pf.pcm = packageCacheManager();
     log("Build FHIR IG from "+ settings.getConfigFile());
     if (settings.getMode() == PublisherUtils.IGBuildMode.PUBLICATION)
       log("Build Formal Publication package, intended for "+getTargetOutput());
@@ -150,6 +155,9 @@ public class PublisherIGLoader extends PublisherBase {
     }
 
     pf.templateManager = new TemplateManager(pf.pcm, pf.logger);
+    if (watchSession != null) {
+      pf.templateManager.setCurrencyChecks(templateChecks);
+    }
     pf.templateProvider = new IGPublisherLiquidTemplateServices();
     pf.extensionTracker = new ExtensionTracker();
     log("Package Cache: "+ pf.pcm.getFolder());
@@ -219,6 +227,17 @@ public class PublisherIGLoader extends PublisherBase {
     if (watchSession != null) {
       watchSession.sushiRan();
     }
+  }
+
+  /** in watch mode, the same one for every build (unless packages are loaded from a folder into it in each build) */
+  FilesystemPackageCacheManager packageCacheManager() throws IOException {
+    if (watchSession == null || settings.getPackagesFolder() != null) {
+      return getFilesystemPackageCacheManager();
+    }
+    if (sessionPcm == null) {
+      sessionPcm = getFilesystemPackageCacheManager();
+    }
+    return sessionPcm;
   }
 
   public void setWatchSession(WatchSession watchSession) {
