@@ -153,4 +153,44 @@ class RebuildPagesFallbackTest {
     assertEquals(2, builtWith.size());
     assertEquals(1, resets[0]);
   }
+
+  @Test
+  void onlyACompleteBuildThatFinishedPassesWhatItFoundOn() throws Exception {
+    Publisher p = new Publisher();
+    p.setPf(new PublisherFields());
+    p.getPf().logger = new ILoggingService() {
+      public void logMessage(String message) {
+      }
+
+      public void logDebugMessage(LogCategory category, String message) {
+      }
+    };
+    Field f = Publisher.class.getDeclaredField("pageRebuild");
+    f.setAccessible(true);
+    HtmlCheckRecords found = new HtmlCheckRecords((String) null);
+    p.completeBuild(null, () -> ((PageRebuild) f.get(p)).setHtmlRecords(found), () -> {});
+    assertSame(found, ((PageRebuild) f.get(p)).carryOver().getHtmlRecords());
+
+    // a build that fails late still holds the last build's records: they mustn't go on
+    PageRebuild carried = ((PageRebuild) f.get(p)).carryOver();
+    assertThrows(IOException.class, () -> p.completeBuild(carried, () -> {
+      throw new IOException("a fatal html check message");
+    }, () -> {}));
+    assertEquals("the last build didn't finish", carried.getNotReusable());
+    assertNull(carried.carryOver().getHtmlRecords());
+
+    // a build done again: what it used finished, the state it dropped didn't
+    PageRebuild again = new PageRebuild();
+    again.setHtmlRecords(found);
+    again.finished();
+    PageRebuild dropped = again.carryOver();
+    p.completeBuild(dropped, () -> {
+      if (f.get(p) == dropped) {
+        throw new HTMLInspector.OutputRewriteFailure("Jekyll can't write en/a.md again");
+      }
+      ((PageRebuild) f.get(p)).setHtmlRecords(found);
+    }, () -> {});
+    assertSame(found, ((PageRebuild) f.get(p)).carryOver().getHtmlRecords());
+    assertNull(dropped.carryOver().getHtmlRecords());
+  }
 }
