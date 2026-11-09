@@ -45,6 +45,6 @@ In `-rapido -watch`, every rebuild after an FSH edit first runs SUSHI, and only 
 - **Package cache manager:** one per watch session (a new one after a failed build, so a failed CI list fetch is retried); `#current` templates are checked against the server once an hour in a session instead of every build.
 - Builds without `-watch` are unchanged, apart from the folder checks running after the template translations instead of before them.
 
-Tests: 7 new or extended test classes (52 tests: SUSHI alongside step by step and through the real start-up, restart, failure paths, state memo, session cache manager, template checks); publisher.core suite passes apart from an environment-only GitUtilitiesTests case that fails on the base too.
+Tests: 7 new or extended test classes (53 new tests: SUSHI alongside step by step and through the real start-up, restart, failure paths, state memo, session cache manager, template checks); publisher.core suite passes apart from an environment-only GitUtilitiesTests case that fails on the base too.
 
 NUMBERS: bench pending (VM has 15 GB). Table to fill: Rebuild after | base | this branch; rows First build / Profile edit window / Profile edit total / Instance edit window / Instance edit total / Title edit (1 run).
