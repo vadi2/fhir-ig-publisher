@@ -334,6 +334,56 @@ public class RapidoTracker {
     return res;
   }
 
+  /**
+   * The ValueSet and CodeSystem urls whose answers in the terminology cache this build mustn't use. The cache keys a
+   * ValueSet that has a version by url|version, and a ValueSet of the IG keeps its version while it is edited, so an
+   * answer can be from before the last edit of the ValueSet or of something it uses.
+   *
+   * <p>A complete build has nothing to compare with: every ValueSet and CodeSystem the IG defines. Otherwise, those in
+   * the files validated again because they changed or something they depend on did (an included or excluded
+   * ValueSet, a CodeSystem, a supplement), and the code systems that those supplements add to.
+   */
+  public Set<String> txCacheUrlsToScrub() {
+    if (complete) {
+      return terminologyUrls(pf.fileList, false);
+    }
+    List<FetchedFile> files = new ArrayList<>();
+    for (FetchedFile f : pf.fileList) {
+      if (!validationClean.contains(f)) {
+        files.add(f);
+      }
+    }
+    return terminologyUrls(files, true);
+  }
+
+  /**
+   * The urls of the ValueSets and CodeSystems in these files.
+   *
+   * @param supplemented whether to add the code systems that the supplements among them add to
+   */
+  static Set<String> terminologyUrls(List<FetchedFile> files, boolean supplemented) {
+    Set<String> res = new TreeSet<>();
+    for (FetchedFile f : files) {
+      for (FetchedResource r : f.getResources()) {
+        if (Utilities.existsInList(r.fhirType(), "ValueSet", "CodeSystem")) {
+          Element e = r.getElement();
+          String url = e == null ? null : singleValue(e, "url");
+          if (url == null && r.getResource() instanceof CanonicalResource) {
+            url = ((CanonicalResource) r.getResource()).getUrl();
+          }
+          if (url != null) {
+            res.add(url);
+          }
+          String supplements = supplemented && e != null && "CodeSystem".equals(r.fhirType()) ? singleValue(e, "supplements") : null;
+          if (supplements != null) {
+            res.add(supplements);
+          }
+        }
+      }
+    }
+    return res;
+  }
+
   private FileNode fileNode(FetchedFile f) {
     Hasher h = new Hasher();
     h.add(f.getPath()).add(Integer.toString(f.getProcessMode())).add(f.getLogical()).add(f.getContentType());
@@ -405,6 +455,9 @@ public class RapidoTracker {
       n.setTitle(singleValue(e, "title"));
       if ("StructureDefinition".equals(r.fhirType())) {
         n.setBaseDefinition(e.getNamedChildValue("baseDefinition"));
+      }
+      if ("CodeSystem".equals(r.fhirType())) {
+        n.setSupplements(singleValue(e, "supplements"));
       }
       h.add("(").add(e.getName()).add(e.fhirType());
       for (String c : e.getComments()) {
