@@ -1,0 +1,70 @@
+perf/watch-fsh-tail@3a40f78 (vadi2/fhir-ig-publisher; stacks on #1461, base 43229da)
+status: bench pending (VM has 15 GB RAM, 13.7 GB usable by the shell's cgroup, 4 CPUs; the -Xmx10g publisher plus Jekyll was OOM-killed twice on the warm-up build: java RSS ~12 GB + jekyll ~1.85 GB)
+
+TESTS
+- publisher.core suite at 3a40f78 (JDK 21, as root): 661 run, 1 failure, 7 skipped.
+  The failure is GitUtilitiesTests.testGetGitSource[4]; it fails on base 43229da too (the VM's git config rewrites
+  git@github.com: to https). Skips: 5 need non-root (chmod / unreadable folders), 2 pre-existing. JekyllDriverTest and
+  OutputFolderSyncTest run as a normal user: 36 run, 0 failures, 0 skipped.
+- Mutation-checked: the two new tests fail with their change reverted, and each kills the mutations tried:
+  RebuildPagesFallbackTest.onlyACompleteBuildThatFinishedPassesWhatItFoundOn: finished() before build.run(),
+    finished() removed, finished() in finally: all killed (before the test, the first survived the whole suite).
+  JekyllDriverTest.whatAPageRebuildMovesAsideWhileJekyllRunsIsntASource: prefix entry removed from UNTRACKED_TEMP,
+    prefix match disabled, top-level check disabled, whole fix reverted: all killed.
+  Earlier 66 mutations from the previous agent: not re-run here (code under them unchanged).
+
+REVIEW (code-reviewer, silent-failure-hunter, pr-test-analyzer on 43229da..branch; each claim checked)
+- Round 1: confirmed 1: completeBuild's finished() placement untested (mutation survived) -> test added (b5a6c67).
+  Rejected: post-Jekyll writers lost when state is dropped (the update path needs a template check that can't see
+  output, so nothing after Jekyll writes Jekyll-rendered files); System.out in AIProcessor (class style); symlinked temp
+  files (publisher copies); log-level and by-design date notes.
+- Round 2: confirmed 1: a page rebuild's .package-checked-* folder (in the temp folder = Jekyll source) got recorded as a
+  source when its update fell back to a full build, so the next complete build saw it "removed" and rendered the whole
+  site (speed only; reproduced by the new test before the fix) -> skipped as an untracked prefix (3a40f78).
+  Rejected: perf-only notes on rare paths (retry becomes full rapido build, full-build rescan rehash, signature cost).
+- Round 3: nothing confirmed. Notes only: .html-checked-* stash would need the same if tracking and stashing ever
+  overlapped (today they can't: stashing only when tracking is off); carriedOver cleared after resetForRebuild.
+
+BENCH
+- Not run: see status. Ready to run as designed in the handoff (r3-handoff:item2-tail.txt) on a machine with >= 16 GB
+  free for one JVM + Jekyll. Jars build from 43229da (base) and 3a40f78 (branch). IG: uzinfocom-org/digital-health-ig
+  @ 2c39cd0a (uses fhir2.base.template#current, not a local template folder). A session driver script is not pushed.
+- The earlier base1/branch1 numbers in the handoff are from another machine and an older branch commit; they are not
+  used below.
+
+COMMITS ADDED THIS ROUND
+  b5a6c67 Test: only a complete build that finished passes its records on
+  3a40f78 Watch: what a page rebuild moves aside while Jekyll runs isn't a Jekyll source
+(weak-edges follow-up still bases on 28ee3fd, part a)
+
+DRAFT PR TEXT
+-----
+Title: Watch mode: FSH edits reuse the kept Jekyll, the html checks and the AI step
+
+In `-rapido -watch`, a profile or instance edit gives a complete build, and #1461's kept Jekyll and html check replay don't apply to it. Jekyll renders the whole site again, the html checks go through every output file, and the AI step writes all its files. On uz.dhp.core that tail is most of the rebuild, whatever the edit.
+
+### Cause
+
+- A complete build asks the kept Jekyll for a full `build`, and clears the staged output it could go on from.
+- Every build stamps a new time into `_data/fhir.json` (genDate), the canonical resources without a date and the page footers, so every page and most temp files change.
+- The html check records are keyed by object identity (context, specs, sources), which are new objects in every complete build.
+- Jekyll's cleaner removes the AI step's files, so the AI step writes them all again.
+
+### Fix
+
+- **Build time:** in `-watch`, every build of the day is dated at the day's first build; a new day gets a new time. qa.txt and qa.json still say when the build ran.
+- **Kept Jekyll:** a complete build keeps the staged output, and asks Jekyll to update only what depends on the temp files whose content changed (SHA-1, reused while the file's stamp is the same). New, removed or `_data` files, a stopped or failed Jekyll, or a template check that may look at the output give a full Jekyll build, with a log line that says why.
+- **Html checks:** the records are carried to the next complete build, and compared by what the check looks up (specs, linked specs, related IGs, sources, settings) instead of by object. If Jekyll can't write a file again that a carried record needs, the build is done again without them.
+- **AI step:** its files are moved aside while Jekyll runs and put back after, and only the markdown and zips whose content changed are written. Files it no longer makes are removed.
+- Builds without `-watch` are unchanged.
+
+Adds `SpecMapManagerSignatureTest` and tests in `JekyllDriverTest`, `WatchCompleteBuildJekyllTest`, `HtmlCheckReplayTest`, `AIProcessorTest`, `WatchSessionTest`, `RebuildPagesFallbackTest` and `PageRebuildTest`; existing tests pass. Builds on #1461.
+
+| uz.dhp.core, `-rapido -watch`, s (median) | base | this PR | saved |
+|---|---|---|---|
+| profile edit | pending | pending | pending |
+| instance edit | pending | pending | pending |
+| page edit | pending | pending | pending |
+
+bench: pending (VM has 15 GB)
+-----
