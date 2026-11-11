@@ -4900,14 +4900,6 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         + " (" + DurationUtil.presentDuration(now - start) + "). They are as Jekyll rendered them: the html checks, the packages and the qa pages follow");
   }
 
-  /**
-   * Watch mode, between two steps of what follows Jekyll: whether the build stops here, before this step, because the
-   * watched files changed since it started (see TailWatch). Publisher.finishIg() then ends the build
-   */
-  private boolean givesWayBefore(TailWatch.Step next) {
-    return pf.watchTail != null && pf.watchTail.givesWayBefore(next);
-  }
-
   /** Jekyll said that it had finished, and then returned an error: the build goes on with what it wrote */
   void jekyllReturnedAnError() {
     jekyllInDoubt = true;

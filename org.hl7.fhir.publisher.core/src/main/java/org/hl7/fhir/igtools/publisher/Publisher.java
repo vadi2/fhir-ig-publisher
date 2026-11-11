@@ -49,6 +49,7 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Function;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
@@ -407,9 +408,11 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       return null;
     }
     PageRebuild state = pageRebuild;
-    watchTail = new TailWatch(tailChanges, pageRebuilt, pageRebuilt || state == null ? null
-        : changes -> state.pageRebuildCouldFollow(changes) ? "only the content of pages changed, so the pages are rebuilt when it has finished" : null,
-        this::log);
+    Function<SourceSnapshot.Changes, String> whyFinish = null;
+    if (!pageRebuilt && state != null) {
+      whyFinish = changes -> state.pageRebuildCouldFollow(changes) ? "only the content of pages changed, so the pages are rebuilt when it has finished" : null;
+    }
+    watchTail = new TailWatch(tailChanges, pageRebuilt, whyFinish, this::log);
     return watchTail;
   }
 
@@ -1010,10 +1013,6 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     buildTracker.save();
     syncWatchOutput();
     log("Finished @ "+nowString()+". Max Memory Used = "+Utilities.describeSize(pf.maxMemory)+logSummary());
-  }
-
-  private boolean givesWayBefore(TailWatch.Step next) {
-    return pf.watchTail != null && pf.watchTail.givesWayBefore(next);
   }
 
   /**

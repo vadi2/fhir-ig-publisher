@@ -274,7 +274,7 @@ class WatchTailAbandonTest {
     PublisherFields whole = new PublisherFields();
     whole.rapido = mock(RapidoTracker.class);
     Publisher q = publisher(whole);
-    assertNotNull(assertThrows(NullPointerException.class, () -> finishIg(q, tracker, false)));
+    assertThrows(NullPointerException.class, () -> finishIg(q, tracker, false));
     verify(whole.rapido, never()).save();
   }
 
