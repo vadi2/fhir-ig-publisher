@@ -2,7 +2,7 @@
 """One -rapido -watch session of the IG Publisher on uz.dhp.core, with timed edits.
 
   python3 bench/session.py --jar <publisher.jar> --seed <warm IG copy> --work <dir> --pcf <package cache dir>
-      [--heap 7g] [--threads N] [--steps first,prof1,...] [--label base] [--jvm "<extra jvm args>"] [--keep-running]
+      [--heap 7600m] [--threads N] [--steps first,prof1,...] [--label base] ["--jvm=<extra jvm args>"] [--keep-running]
 
 Copies --seed to --work (without output/, temp/, template/, fsh-generated/), starts the publisher there, waits for the
 first build, then for each step makes the edit, waits for "Finished @" and the next "Watching for changes", and
@@ -198,12 +198,12 @@ def main():
     ap.add_argument("--seed", required=True, help="IG checkout with a warm input-cache/txcache")
     ap.add_argument("--work", required=True, help="folder for the fresh copy of the IG (deleted first)")
     ap.add_argument("--pcf", required=True, help="package cache folder (warm)")
-    ap.add_argument("--heap", default="7g")
+    ap.add_argument("--heap", default="7600m")
     ap.add_argument("--threads", type=int, default=None, help="value for -threads (not passed if absent)")
     ap.add_argument("--tx", default="https://tx.fhir.org")
     ap.add_argument("--steps", default=DEFAULT_STEPS)
     ap.add_argument("--label", default="session")
-    ap.add_argument("--jvm", default="", help="extra JVM arguments, e.g. a -XX:StartFlightRecording=...")
+    ap.add_argument("--jvm", default="", help="extra JVM arguments, as --jvm=... (see bench-recipe.md)")
     ap.add_argument("--first-timeout", type=int, default=3600)
     ap.add_argument("--timeout", type=int, default=1200)
     ap.add_argument("--settle", type=float, default=3.0, help="seconds between 'Watching for changes' and the edit")

@@ -5,6 +5,7 @@ All numbers are from this VM.
 - JFR hot frames (the percentages) are from a second session, one profile rebuild. Network is from a logging CONNECT proxy in session A.
 - The heap is tight on this VM (see bench-recipe.md): GC pauses are 27 to 35 s of an FSH rebuild and sit inside the phases (gc column).
 - This VM is about 2.5x slower than the 12-core reference in PROCESS.md (SUSHI 51 s here, ~16 s there).
+- `-threads 3` (one session, base jar): first profile rebuild 263.8 s, native outputs 17.5 s instead of 28.7; the second rebuild died with OutOfMemoryError in native outputs (heap too small for the workers). Everything below is without `-threads`.
 
 ## 1. Wall time (s, median of 3; min to max)
 | edit | save to "Finished @" | save to file updated in output/ | Jekyll has it in staging at | detection | Rapido |
