@@ -50,12 +50,16 @@ class TailWatch {
 
   /** Tells whether the watched files changed since the build started */
   interface ChangeSource {
-    /** Starts looking for changes: called once, before the first call of settledChanges() */
+    /**
+     * Starts looking for changes: called before the first call of settledChanges(), and again after stop() if
+     * another TailWatch uses this source
+     */
     void start() throws IOException;
 
     /**
-     * What changed in the watched files since the build started, once they have been quiet for a moment; null or
-     * empty if nothing did. Cheap when nothing was saved since the last call
+     * If a file was saved since the last call (or, on the first call, since the build started): what changed in the
+     * watched files since the build started, once they have been quiet for a moment (empty if their content is the
+     * same). Null if nothing was saved since the last call, which is cheap to tell
      */
     SourceSnapshot.Changes settledChanges() throws IOException, InterruptedException;
 

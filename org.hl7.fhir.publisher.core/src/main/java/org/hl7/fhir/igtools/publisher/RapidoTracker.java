@@ -1095,7 +1095,8 @@ public class RapidoTracker {
     // the template can write into the IG folder as well (the HL7 template copies the IG's Jira spec file there), so the
     // next build has to be compared with what the other files hold now, not with what they held when this one started.
     // (A file edited by hand while the build is running is taken as unchanged by the next build, as it would be by any
-    // build tool that compares with the end of the last build)
+    // build tool that compares with the end of the last build; except those in editedWhileBuilding, which are put
+    // back below as the build read them)
     Map<String, String> otherNow = scanOtherFiles();
     Path root = Paths.get(pf.rootDir).toAbsolutePath().normalize();
     for (Path p : editedWhileBuilding) {
