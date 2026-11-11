@@ -1233,6 +1233,9 @@ public class PublisherProcessor extends PublisherBase  {
     logDebugMessage(LogCategory.PROGRESS, isRegen ? "regen narratives" : "gen narratives");
     // narratives generated again after validation aren't recorded: a resource that needs that has no record
     RapidoNarratives records = pf.rapido == null || isRegen ? null : new RapidoNarratives(pf.tempDir);
+    if (!isRegen) {
+      narrativesPutBack.clear();
+    }
     int reused = 0;
     for (FetchedFile f : pf.changeList) {
       f.start("generateNarratives");
@@ -1255,7 +1258,7 @@ public class PublisherProcessor extends PublisherBase  {
               } else if (putBackNarrative(r, lastRec)) {
                 rec = lastRec;
               } else {
-                NarrativeNote note = records == null ? null : new NarrativeNote(r);
+                NarrativeNote note = records == null ? null : new NarrativeNote(f, r);
                 List<Locale> langs = translationLocales();
                 logDebugMessage(LogCategory.PROGRESS, "generate narrative for "+f.getLoadPath()+" : "+r.getId());
                 if (r.getResource() != null && r.getResource() instanceof DomainResource && isConvertableResource(r.getResource().fhirType())) {
@@ -1431,10 +1434,27 @@ public class PublisherProcessor extends PublisherBase  {
     private boolean rendered;
     /** the renderer wrote files as well */
     private boolean files;
+    private final FetchedFile file;
+    /** the messages there were before, of the build, the file and the resource, and how many were to be reported (see IGKnowledgeProvider) */
+    private final int[] messages;
 
-    private NarrativeNote(FetchedResource r) {
+    private NarrativeNote(FetchedFile f, FetchedResource r) {
       this.onResource = narrativeOnResource(r);
       this.none = !r.getElement().hasChild("text") && (!onResource || !((DomainResource) r.getResource()).hasText());
+      this.file = f;
+      this.messages = messages(r);
+    }
+
+    private int[] messages(FetchedResource r) {
+      return new int[] {pf.errors.size(), file.getErrors().size(), r.getErrors().size(), pf.igpkp.getReportCount()};
+    }
+
+    /**
+     * generating the narrative reported something, or would have if it hadn't been reported before (a link that can't
+     * be resolved is reported once in a build, by whatever comes across it first)
+     */
+    private boolean reported(FetchedResource r) {
+      return !Arrays.equals(messages, messages(r));
     }
 
     /** the narrative was rendered for a language, with this context */
@@ -1456,10 +1476,12 @@ public class PublisherProcessor extends PublisherBase  {
   /**
    * -rapido: what the next build needs to put the narrative just generated back on the resource, or null if that
    * can't stand for generating it: the narrative isn't plainly the one the renderer made for a resource that had none
-   * (a status and a div, nothing else), it is generated again after validation, or it can't be read back as it is.
+   * (a status and a div, nothing else), generating it did more than that (the renderer wrote files, something was
+   * reported, the narrative source is tracked), it is generated again after validation, or it can't be read back as
+   * it is.
    */
   private RapidoNarratives.ResourceRecord recordNarrative(FetchedResource r, NarrativeNote note) {
-    if (note == null || !note.none || !note.rendered || note.files || r.isRegenAfterValidation() || pf.rc.isTrackNarrativeSource()) {
+    if (note == null || !note.none || !note.rendered || note.files || note.reported(r) || r.isRegenAfterValidation() || pf.rc.isTrackNarrativeSource()) {
       return null;
     }
     try {
@@ -1519,8 +1541,12 @@ public class PublisherProcessor extends PublisherBase  {
     }
     boolean onResource = narrativeOnResource(r);
     Element before = r.getElement();
-    if (last.onResource != onResource || !last.type.equals(r.fhirType()) || !Objects.equals(last.id, r.getId())
+    if (last.onResource != onResource || !Objects.equals(last.type, r.fhirType()) || !Objects.equals(last.id, r.getId())
         || before == null || before.hasChild("text") || (onResource ? ((DomainResource) r.getResource()).hasText() : !isDomainResource(r))) {
+      return false;
+    }
+    if (onResource && before.getFormat() != FhirFormat.JSON) {
+      // converting gives an element read from json, and the resource's content type is its element's format
       return false;
     }
     Element text = null;
@@ -1556,6 +1582,7 @@ public class PublisherProcessor extends PublisherBase  {
         r.setGeneratedNarrative(true);
         e.copyUserData(before);
         r.setElement(e);
+        narrativesPutBack.add(r);
         return true;
       }
       // as ResourceWrapperModel.setNarrative leaves the element
@@ -1584,6 +1611,25 @@ public class PublisherProcessor extends PublisherBase  {
         before.removeChild(text);
       }
       return false;
+    }
+  }
+
+  /**
+   * -rapido: the resources whose element is a copy of the one they were loaded with, with the narrative put back. All
+   * that is written from it is what converting the resource gives, but not where each element is in the json, which
+   * the validator's messages have
+   */
+  private final Set<FetchedResource> narrativesPutBack = Collections.newSetFromMap(new IdentityHashMap<>());
+
+  /**
+   * Before a resource is validated: if its narrative was put back, its element is made as generating the narrative
+   * makes it, by converting the resource (which has the narrative)
+   */
+  void elementToValidate(FetchedResource r) throws Exception {
+    if (narrativesPutBack.remove(r)) {
+      Element e = convertToElement(r, r.getResource());
+      e.copyUserData(r.getElement());
+      r.setElement(e);
     }
   }
 
@@ -1992,6 +2038,7 @@ public class PublisherProcessor extends PublisherBase  {
     }
     TimeTracker.Session tts = pf.tt.start("validation");
     List<ValidationMessage> errs = new ArrayList<ValidationMessage>();
+    elementToValidate(r);
     r.getElement().setUserData(UserDataNames.pub_context_file, file);
     r.getElement().setUserData(UserDataNames.pub_context_resource, r);
     pf.validator.setExample(r.isExample());

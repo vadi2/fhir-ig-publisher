@@ -135,6 +135,7 @@ class NarrativeReuseTest {
     /** called once the build is ready to generate the narratives */
     java.util.function.Consumer<PublisherFields> prepared = everyBuild;
     PublisherFields pf;
+    PublisherProcessor processor;
     int rendered;
 
     Build(Path root, Map<String, String> sources) {
@@ -204,7 +205,7 @@ class NarrativeReuseTest {
       pf.rc = new RenderingContext(context, pf.rendererFactory, new MarkDownProcessor(MarkDownProcessor.Dialect.COMMON_MARK), ValidationOptions.defaults(),
           "http://hl7.org/fhir/R5/", "", java.util.Locale.ENGLISH, RenderingContext.ResourceRendererMode.TECHNICAL, RenderingContext.GenerationRules.IG_PUBLISHER);
       pf.rc.setDestDir(pf.tempDir);
-      PublisherProcessor processor = new PublisherProcessor(publisher.getSettings());
+      processor = new PublisherProcessor(publisher.getSettings());
       processor.setPf(pf);
       pf.rc.setParser(processor.getTypeLoader(pf.version));
       for (FetchedFile f : pf.fileList) {
@@ -297,7 +298,7 @@ class NarrativeReuseTest {
           res.put(k + "element shape", shape(e));
           res.put(k + "generated", r.isGeneratedNarrative() + " " + r.isRegenAfterValidation());
           res.put(k + "messages", r.getErrors().size() + " " + f.getErrors().size());
-          res.put(k + "outputs", f.getOutputNames().size() + " " + pf.needsRegen + " " + pf.noNarrativeResources.size()
+          res.put(k + "outputs", f.getOutputNames().size() + " " + pf.needsRegen + " " + pf.noNarrativeResources.size() + " " + pf.errors.size()
               + " " + pf.otherFilesRun.stream().map(n -> java.nio.file.Path.of(n).getFileName().toString()).sorted().collect(java.util.stream.Collectors.toList()));
           if (r.getResource() != null) {
             DomainResource dr = (DomainResource) r.getResource();
@@ -523,6 +524,73 @@ class NarrativeReuseTest {
     assertTrue(second.pf.needsRegen);
     assertTrue(second.resource(CS).isRegenAfterValidation());
     assertSameState(fresh(sources), second);
+  }
+
+  /**
+   * Rendering a narrative can report something to the build (a link that can't be resolved), and only what comes
+   * across it first in a build does: a narrative like that is generated every build, also when it wasn't the first
+   */
+  @Test
+  void aNarrativeWhoseRenderingReportsSomethingIsNotPutBack() throws Exception {
+    java.util.concurrent.atomic.AtomicInteger reports = new java.util.concurrent.atomic.AtomicInteger();
+    everyBuild = pf -> {
+      reports.set(0);
+      when(pf.igpkp.getReportCount()).thenAnswer(inv -> reports.get());
+      org.mockito.Mockito.doAnswer(inv -> {
+        org.hl7.fhir.services.renderers.utils.ResourceWrapper w = inv.getArgument(0);
+        if ("q".equals(w.getId())) {
+          // reported
+          pf.errors.add(new org.hl7.fhir.utilities.validation.ValidationMessage(org.hl7.fhir.utilities.validation.ValidationMessage.Source.Publisher,
+              org.hl7.fhir.utilities.validation.ValidationMessage.IssueType.INVARIANT, "Patient", "The reference x could not be resolved", org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity.ERROR));
+        } else if ("p".equals(w.getId())) {
+          // would have been, had it not been reported before
+          reports.incrementAndGet();
+        }
+        return inv.callRealMethod();
+      }).when(pf.rendererFactory).factory(any(org.hl7.fhir.services.renderers.utils.ResourceWrapper.class), any(RenderingContext.class));
+    };
+    Map<String, String> sources = sources("All the colours");
+    build(sources).run().finish();
+
+    Build second = build(sources).run();
+    assertEquals(2, second.rendered, "the two patients");
+    assertEquals(1, second.pf.errors.size());
+    assertSameState(fresh(sources), second);
+  }
+
+  /**
+   * A resource whose narrative was put back is validated after all (what the validator says depends on what it has
+   * seen before): its messages say where in the converted resource they are, so the element is the converted one
+   */
+  @Test
+  void aResourceThatIsValidatedHasTheElementThatGeneratingGives() throws Exception {
+    Map<String, String> sources = sources("All the colours");
+    build(sources).run().finish();
+
+    Build second = build(sources).run();
+    assertEquals(0, second.rendered);
+    Build fresh = fresh(sources);
+    assertNotEquals(positions(fresh.resource(CS).getElement()), positions(second.resource(CS).getElement()));
+    for (Build b : new Build[] {fresh, second}) {
+      for (FetchedFile f : b.pf.fileList) {
+        for (FetchedResource r : f.getResources()) {
+          b.processor.elementToValidate(r);
+        }
+      }
+    }
+    for (String file : sources.keySet()) {
+      assertEquals(positions(fresh.resource(file).getElement()), positions(second.resource(file).getElement()), file);
+    }
+    assertSameState(fresh, second);
+  }
+
+  private static String positions(Element e) {
+    StringBuilder b = new StringBuilder();
+    b.append("(").append(e.line()).append(":").append(e.col());
+    for (Element c : e.getChildList()) {
+      b.append(positions(c));
+    }
+    return b.append(")").toString();
   }
 
   /** a renderer that writes files as well: the build is told of them when the narrative is generated, so it is, every build */

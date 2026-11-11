@@ -62,6 +62,8 @@ public class IGKnowledgeProvider implements ProfileKnowledgeProvider, ParserBase
   private IWorkerContext context;
   private SpecMapManager specPaths;
   private Set<String> msgs = new HashSet<String>();
+  /** how many times a message was to be reported, whether or not it had been before */
+  private int reports;
   private String pathToSpec;
   private String canonical;
   private List<ValidationMessage> errors;
@@ -495,6 +497,7 @@ public class IGKnowledgeProvider implements ProfileKnowledgeProvider, ParserBase
   }
 
   private void error(FetchedFile f, String path, String msg, String msgId) {
+    reports++;
     if (!msgs.contains(msg)) {
       msgs.add(msg);
       f.getErrors().add(new ValidationMessage(Source.Publisher, IssueType.INVARIANT, path, msg, IssueSeverity.ERROR).setMessageId(msgId));
@@ -502,10 +505,20 @@ public class IGKnowledgeProvider implements ProfileKnowledgeProvider, ParserBase
   }
 
   private void hint(String location, String msg) {
+    reports++;
     if (!msgs.contains(msg)) {
       msgs.add(msg);
       errors.add(new ValidationMessage(Source.Publisher, IssueType.INVARIANT, location, msg, IssueSeverity.INFORMATION));
     }
+  }
+
+  /**
+   * How many times something asked for a message to be reported so far, including the times it wasn't because the
+   * message had been reported before: a step that leaves this as it was reported nothing, and would report nothing
+   * whatever was done before it
+   */
+  public int getReportCount() {
+    return reports;
   }
 
   private String makeCanonical(String ref) {
@@ -514,6 +527,7 @@ public class IGKnowledgeProvider implements ProfileKnowledgeProvider, ParserBase
 
   private void brokenLinkMessage(String location, String ref, boolean warning) {
     String s = "The reference "+ref+" could not be resolved";
+    reports++;
     if (!msgs.contains(s)) {
       msgs.add(s);
       if (errors != null) {
