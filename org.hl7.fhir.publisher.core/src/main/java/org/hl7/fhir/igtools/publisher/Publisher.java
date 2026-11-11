@@ -424,12 +424,12 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * start one, and the output folder would stay without what that build didn't do
    */
   boolean takeTailGaveWay() {
-    boolean res = tailGaveWay;
-    tailGaveWay = false;
-    if (res) {
-      System.out.println("=== Building again: the last build gave up its last steps for a change ===");
+    if (!tailGaveWay) {
+      return false;
     }
-    return res;
+    tailGaveWay = false;
+    System.out.println("=== Building again: the last build gave up its last steps for a change ===");
+    return true;
   }
 
   private void closeWatchTail() {
