@@ -67,3 +67,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   build with swap (java 8.1 GiB, Jekyll 3.5 GiB), now timing rebuilds. native-skip: tests pass, mutation checks.
   NOTE: list_events is expensive (~10k tokens per 25 events, thinking signatures). Use it only for a session that is
   idle without a PR or silent > 45 min; get_session's task_summary is enough otherwise.
+- 16:18 tick: all 6 working. summaries-reuse pushed perf3/summaries-reuse (PR expected next). Profiler still tuning
+  heap (trial 7) after 2 h -> told it to stop tuning, push the recipe as is and do profile.md (profile+page edit first).
+  Decided NOT to launch warm-SUSHI: r3-notes/item6 says SUSHI is only ~4 s on DHP, and item 6 (SUSHI alongside start-up,
+  kept state, one package cache manager) was already tried and dropped. Wave 2 still waits for profile.md.
