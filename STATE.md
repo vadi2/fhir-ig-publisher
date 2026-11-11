@@ -130,3 +130,8 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   conflict with tail-restart/early-publish). If tail-restart drops, launch opp 6 (full-ig.zip beside QA) from base.
 - 20:40: ParallelFolderZipTest on the base @a4d1e90f in my checkout: 16 run, 2 errors, the same two tests and the same
   InvalidPathException as PR #39 reports -> pre-existing (POSIX locale), not from #39. Added to PROCESS.md rule 3.
+- 20:47 tick: no new PRs (highest 39). summaries-reuse: 495/495 list sets reused, waiting on last base + change bench
+  sessions. translations-dirty: translate phase 5.1 -> 0.2 s on pair 1, 4 timed runs left. qa-prep-reuse: review round
+  1 settled, waiting on last two bench sessions. tail-restart pushed a branch (451d3bf1); narrative-skip moving.
+  Not checked this tick: early-publish, archives-reuse, native-skip, narrative-skip, tail-restart (check next tick
+  if no PR/head movement).
