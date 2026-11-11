@@ -20,6 +20,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -32,6 +33,7 @@ import java.util.TreeSet;
 import java.util.stream.Collectors;
 
 import org.hl7.fhir.igtools.templates.Template;
+import org.hl7.fhir.model.core.DateTimeType;
 import org.hl7.fhir.model.core.ValueSet;
 import org.hl7.fhir.services.context.IWorkerContext;
 import org.hl7.fhir.services.elementmodel.Element;
@@ -93,8 +95,11 @@ class RapidoTxCacheScrubTest {
     void accept(PublisherFields pf) throws Exception;
   }
 
-  /** what the loader adds to a file's resource (as pinning a version does) */
+  /** what the loader adds to a file's resource (as pinning a version does); BUILD_DATE is the build's date */
   private final Map<String, List<String[]>> addedByLoad = new HashMap<>();
+  private static final String BUILD_DATE = "{build date}";
+  /** when the next build runs, if set */
+  private Calendar execTime;
   private String packageId;
   private BeforeBuild beforeBuild = pf -> {};
 
@@ -456,13 +461,15 @@ class RapidoTxCacheScrubTest {
   @Test
   void aRecordThatCannotBeWrittenDoesntStopTheBuild() throws Exception {
     firstPlainBuild();
-    Path record = dir.resolve(".tx-cache-scrub.json");
-    Files.delete(record);
-    Files.createDirectory(record);
+    beforeBuild = pf -> {
+      pf.txCacheScrub = spy(new RapidoTracker(pf));
+      doThrow(new IOException("locked")).when(pf.txCacheScrub).writeTxCacheRecord(any());
+    };
 
     PublisherFields pf = build(false);
 
     assertEquals(1, pf.errors.size(), "the failure is in the QA");
+    assertEquals(new TreeSet<>(ALL), cached());
   }
 
   @Test
@@ -530,7 +537,11 @@ class RapidoTxCacheScrubTest {
       pf.txCacheScrub = spy(new RapidoTracker(pf));
       doThrow(new IOException("locked")).when(pf.txCacheScrub).writeTxCacheRecord(any());
     };
-    PublisherFields pf = build(false);
+    PublisherFields pf = build(false, Set.of(), first -> {
+      if (first) {
+        assertEquals(allBut(VS_A, VS_B), cached(), "scrubbed before the snapshots even though the record couldn't be marked");
+      }
+    });
     assertEquals(2, pf.errors.size(), "before the scrub and when the record is saved: both in the QA");
     assertFalse(Files.exists(dir.resolve(".tx-cache-scrub.json")));
     beforeBuild = p -> {};
@@ -550,7 +561,11 @@ class RapidoTxCacheScrubTest {
       doThrow(new IOException("locked")).when(pf.txCacheScrub).writeTxCacheRecord(any());
       doReturn(false).when(pf.txCacheScrub).deleteTxCacheRecord();
     };
-    PublisherFields pf = build(false);
+    PublisherFields pf = build(false, Set.of(), first -> {
+      if (first) {
+        assertEquals(allBut(VS_A, VS_B), cached(), "scrubbed before the snapshots even though the record couldn't be marked");
+      }
+    });
     assertEquals(2, pf.errors.size(), "before the scrub and when the record is saved: both in the QA");
     assertTrue(Files.exists(dir.resolve(".tx-cache-scrub.json.stale")));
     beforeBuild = p -> {};
@@ -565,6 +580,75 @@ class RapidoTxCacheScrubTest {
     fillCache();
     build(false);
     assertEquals(new TreeSet<>(ALL), cached());
+  }
+
+  @Test
+  void aRecordMarkedStaleThatStillCannotBeWrittenIsLeftAsItIs() throws Exception {
+    firstPlainBuild();
+    edit("ValueSet-vs-a.json", "concept", "a2");
+    beforeBuild = pf -> {
+      pf.txCacheScrub = spy(new RapidoTracker(pf));
+      doThrow(new IOException("locked")).when(pf.txCacheScrub).writeTxCacheRecord(any());
+      doReturn(false).when(pf.txCacheScrub).deleteTxCacheRecord();
+    };
+    build(false);
+    fillCache();
+
+    PublisherFields pf = build(false);
+
+    assertEquals(1, pf.errors.size(), "only when the record is saved: the stale one isn't marked first");
+    assertEquals(Set.of(EXTERNAL_VS, VS_A+"x"), cached());
+    assertTrue(Files.exists(dir.resolve(".tx-cache-scrub.json.stale")));
+  }
+
+  @Test
+  void aValueSetNewInABuildThatStopsIsScrubbedOnceItIsUndone() throws Exception {
+    String vsNew = B+"/ValueSet/vs-new";
+    firstPlainBuild();
+    ig.put("ValueSet-vs-new.json", content("url", vsNew, "system", CS_A));
+    assertThrows(Exception.class, () -> build(false, Set.of(), first -> {
+      cacheExpansion(vsNew);
+      throw new Exception("snapshot generation failed");
+    }));
+    ig.remove("ValueSet-vs-new.json");
+
+    build(false);
+
+    // its url may still be defined elsewhere, as a dependency's ValueSet the IG overrode
+    assertFalse(isCached(vsNew));
+    assertEquals(new TreeSet<>(ALL), cached());
+  }
+
+  @Test
+  void aValueSetNewInABuildThatStopsIsScrubbedOnceItIsUndoneWithoutARecord() throws Exception {
+    String vsNew = B+"/ValueSet/vs-new";
+    ig.put("ValueSet-vs-new.json", content("url", vsNew, "system", CS_A));
+    assertThrows(Exception.class, () -> build(false, Set.of(), first -> {
+      cacheExpansion(vsNew);
+      throw new Exception("snapshot generation failed");
+    }));
+    ig.remove("ValueSet-vs-new.json");
+    fillCache();
+
+    build(false);
+
+    assertFalse(isCached(vsNew));
+    assertEquals(Set.of(EXTERNAL_VS, VS_A+"x"), cached());
+  }
+
+  @Test
+  void anUnchangedBuildOfAValueSetWithoutADateScrubsNothing() throws Exception {
+    // the loader stamps the build's date on it, which differs from build to build
+    addedByLoad.put("ValueSet-vs-a.json", content("date", BUILD_DATE));
+    execTime = Calendar.getInstance();
+    execTime.set(2026, Calendar.MARCH, 2, 10, 0, 0);
+    firstPlainBuild();
+    execTime.add(Calendar.MINUTE, 5);
+
+    PublisherFields pf = build(false);
+
+    assertEquals(new TreeSet<>(ALL), cached());
+    assertTrue(pf.errors.isEmpty());
   }
 
   @Test
@@ -660,6 +744,10 @@ class RapidoTxCacheScrubTest {
     Publisher publisher = new Publisher();
     publisher.getSettings().setRapidoMode(rapido);
     PublisherFields pf = new PublisherFields();
+    if (execTime != null) {
+      pf.getExecTime().setTime(execTime.getTime());
+    }
+    String buildDate = new DateTimeType(pf.getExecTime()).asStringValue();
     pf.logger = mock(ILoggingService.class);
     pf.rootDir = dir.toString();
     pf.vsCache = dir.toString();
@@ -681,7 +769,8 @@ class RapidoTxCacheScrubTest {
         src.append(c[0]).append('=').append(c[1]).append('\n');
       }
       FetchedResource r = noElement.contains(e.getKey()) ? resourceWithoutElement(type, id, e.getValue())
-        : resource(type, id, e.getValue(), addedByLoad.getOrDefault(e.getKey(), List.of()), loaded);
+        : resource(type, id, e.getValue(), addedByLoad.getOrDefault(e.getKey(), List.<String[]>of()).stream()
+          .map(c -> BUILD_DATE.equals(c[1]) ? new String[] {c[0], buildDate} : c).collect(Collectors.toList()), loaded);
       (late.contains(e.getKey()) ? lateFiles : pf.fileList).add(file(e.getKey(), src.toString(), List.of(r)));
     }
     publisher.setPf(pf);

@@ -428,22 +428,26 @@ public class RapidoTracker {
   }
 
   /**
-   * Called before the cache is scrubbed for urls: marks their recorded entries as being scrubbed, so if this build
-   * stops before saveTxCacheRecord(), with answers from content the record doesn't describe in the cache, the next
-   * build scrubs them again even if their content is back to what was recorded.
+   * Called before the cache is scrubbed for urls: marks them in the record as being scrubbed, so if this build stops
+   * before saveTxCacheRecord(), with answers from content the record doesn't describe in the cache, the next build
+   * scrubs them again even if their content is back to what was recorded, or they are gone by then.
    *
    * @return a warning if the record couldn't be marked, or null
    */
   public String startTxCacheScrub(Set<String> urls) throws IOException {
     if (recordedTerminology == null) {
-      // nothing (readable) recorded, so the next build scrubs everything anyway
-      return null;
+      if (txCacheStaleFile().exists()) {
+        // the next build ignores the record and scrubs everything anyway
+        return null;
+      }
+      // nothing readable is recorded: a record of just the marks still has the next build scrub every url it doesn't name
+      recordedTerminology = new HashMap<>();
     }
     boolean marked = false;
     for (String u : urls) {
       RecordedTerminology rec = recordedTerminology.get(u);
-      if (rec != null && !SCRUB_STARTED.equals(rec.hash)) {
-        recordedTerminology.put(u, new RecordedTerminology(SCRUB_STARTED, rec.supplements));
+      if (rec == null || !SCRUB_STARTED.equals(rec.hash)) {
+        recordedTerminology.put(u, new RecordedTerminology(SCRUB_STARTED, rec == null ? null : rec.supplements));
         marked = true;
       }
     }
@@ -460,7 +464,7 @@ public class RapidoTracker {
       return null;
     } catch (IOException e) {
       if (deleteTxCacheRecord()) {
-        return "could not update "+f+" ("+e.getMessage()+"), so it is deleted and the next build scrubs every ValueSet and CodeSystem of the IG";
+        return "could not update "+f+" ("+e.getMessage()+"), so there is no record and the next build scrubs every ValueSet and CodeSystem of the IG";
       }
       try {
         FileUtilities.stringToFile("", txCacheStaleFile());
