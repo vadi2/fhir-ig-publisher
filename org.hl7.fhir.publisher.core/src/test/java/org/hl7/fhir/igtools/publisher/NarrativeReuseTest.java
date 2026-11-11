@@ -8,6 +8,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockingDetails;
 import static org.mockito.Mockito.spy;
@@ -21,21 +22,34 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeSet;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.igtools.templates.Template;
 import org.hl7.fhir.model.ModelContext;
+import org.hl7.fhir.model.core.CodeSystem;
 import org.hl7.fhir.model.core.DomainResource;
 import org.hl7.fhir.model.core.Resource;
 import org.hl7.fhir.model.utilities.formats.OutputStyle;
 import org.hl7.fhir.services.elementmodel.Element;
 import org.hl7.fhir.services.elementmodel.JsonParser;
+import org.hl7.fhir.services.elementmodel.ParserBase;
+import org.hl7.fhir.services.elementmodel.XmlParser;
+import org.hl7.fhir.services.renderers.ResourceRenderer;
 import org.hl7.fhir.services.renderers.utils.RenderingContext;
+import org.hl7.fhir.services.renderers.utils.ResourceWrapper;
+import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.validation.ValidationOptions;
 import org.hl7.fhir.standalone.context.SimpleWorkerContext;
 import org.hl7.fhir.utilities.IniFile;
@@ -46,11 +60,15 @@ import org.hl7.fhir.utilities.logging.ILoggingService;
 import org.hl7.fhir.utilities.npm.FilesystemPackageCacheManager;
 import org.hl7.fhir.utilities.npm.NpmPackage;
 import org.hl7.fhir.utilities.xhtml.HierarchicalTableGenerator;
+import org.hl7.fhir.utilities.xhtml.NodeType;
 import org.hl7.fhir.utilities.xhtml.XhtmlComposer;
+import org.hl7.fhir.utilities.xhtml.XhtmlNode;
+import org.hl7.fhir.utilities.xhtml.XhtmlParser;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.invocation.Invocation;
 
 /**
  * -rapido: a resource that Rapido found unchanged gets the narrative the last build generated for it back, and is
@@ -95,7 +113,7 @@ class NarrativeReuseTest {
   }
 
   /** what every build of a test does once it is ready to generate the narratives (the builds it is compared with too) */
-  private java.util.function.Consumer<PublisherFields> everyBuild = pf -> { };
+  private Consumer<PublisherFields> everyBuild = pf -> { };
   /** between two resources of one source file */
   private static final String NEXT = "\n---\n";
 
@@ -129,11 +147,11 @@ class NarrativeReuseTest {
     final Map<String, String> sources;
     final List<String> langs = new ArrayList<>();
     /** called on each resource once it is loaded */
-    java.util.function.Consumer<FetchedResource> loaded = r -> { };
+    Consumer<FetchedResource> loaded = r -> { };
     /** called on each resource after Rapido has compared the files with the last build, before the narratives */
-    java.util.function.Consumer<FetchedResource> compared = r -> { };
+    Consumer<FetchedResource> compared = r -> { };
     /** called once the build is ready to generate the narratives */
-    java.util.function.Consumer<PublisherFields> prepared = everyBuild;
+    Consumer<PublisherFields> prepared = everyBuild;
     PublisherFields pf;
     PublisherProcessor processor;
     int rendered;
@@ -177,7 +195,7 @@ class NarrativeReuseTest {
         for (String one : s.getValue().split(NEXT)) {
           byte[] cnt = one.getBytes(StandardCharsets.UTF_8);
           boolean xml = one.startsWith("<");
-          Element e = (xml ? new org.hl7.fhir.services.elementmodel.XmlParser(context) : new JsonParser(context)).parseSingle(new ByteArrayInputStream(cnt), null);
+          Element e = (xml ? new XmlParser(context) : new JsonParser(context)).parseSingle(new ByteArrayInputStream(cnt), null);
           FetchedResource r = f.addResource(s.getKey());
           r.setElement(e).setId(e.getIdBase());
           // what the loader keeps on an element comes with it when the element is made again
@@ -205,7 +223,7 @@ class NarrativeReuseTest {
 
       pf.rendererFactory = spy(pf.rendererFactory);
       pf.rc = new RenderingContext(context, pf.rendererFactory, new MarkDownProcessor(MarkDownProcessor.Dialect.COMMON_MARK), ValidationOptions.defaults(),
-          "http://hl7.org/fhir/R5/", "", java.util.Locale.ENGLISH, RenderingContext.ResourceRendererMode.TECHNICAL, RenderingContext.GenerationRules.IG_PUBLISHER);
+          "http://hl7.org/fhir/R5/", "", Locale.ENGLISH, RenderingContext.ResourceRendererMode.TECHNICAL, RenderingContext.GenerationRules.IG_PUBLISHER);
       pf.rc.setDestDir(pf.tempDir);
       processor = new PublisherProcessor(publisher.getSettings());
       processor.setPf(pf);
@@ -219,13 +237,13 @@ class NarrativeReuseTest {
         processor.generateNarratives(true); // as the build does after validation
       }
       // the resources of the IG that a renderer was made for
-      java.util.Set<String> made = new java.util.HashSet<>();
-      for (org.mockito.invocation.Invocation i : mockingDetails(pf.rendererFactory).getInvocations()) {
+      Set<String> made = new HashSet<>();
+      for (Invocation i : mockingDetails(pf.rendererFactory).getInvocations()) {
         Object a = i.getArgument(0);
         for (FetchedFile f : pf.fileList) {
           for (FetchedResource r : f.getResources()) {
-            if (a == r.getResource() || (a instanceof org.hl7.fhir.services.renderers.utils.ResourceWrapper && r.getResource() == null
-                && r.fhirType().equals(((org.hl7.fhir.services.renderers.utils.ResourceWrapper) a).fhirType()) && r.getId().equals(((org.hl7.fhir.services.renderers.utils.ResourceWrapper) a).getId()))) {
+            if (a == r.getResource() || (a instanceof ResourceWrapper && r.getResource() == null
+                && r.fhirType().equals(((ResourceWrapper) a).fhirType()) && r.getId().equals(((ResourceWrapper) a).getId()))) {
               made.add(r.fhirType() + "/" + r.getId());
             }
           }
@@ -288,7 +306,7 @@ class NarrativeReuseTest {
           String k = f.getLoadPath() + " " + r.getId() + " ";
           Element e = r.getElement();
           res.put(k + "element json", compose(new JsonParser(context), e));
-          res.put(k + "element xml", compose(new org.hl7.fhir.services.elementmodel.XmlParser(context), e));
+          res.put(k + "element xml", compose(new XmlParser(context), e));
           RapidoDependencyAnalyser.Hasher h = new RapidoDependencyAnalyser.Hasher();
           RapidoNativeOutputs.contentKey(h, e);
           res.put(k + "element key", h.finish());
@@ -301,7 +319,7 @@ class NarrativeReuseTest {
           res.put(k + "generated", r.isGeneratedNarrative() + " " + r.isRegenAfterValidation());
           res.put(k + "messages", r.getErrors().size() + " " + f.getErrors().size());
           res.put(k + "outputs", f.getOutputNames().size() + " " + pf.needsRegen + " " + pf.noNarrativeResources.size() + " " + pf.errors.size()
-              + " " + pf.otherFilesRun.stream().map(n -> java.nio.file.Path.of(n).getFileName().toString()).sorted().collect(java.util.stream.Collectors.toList()));
+              + " " + pf.otherFilesRun.stream().map(n -> Path.of(n).getFileName().toString()).sorted().collect(Collectors.toList()));
           if (r.getResource() != null) {
             DomainResource dr = (DomainResource) r.getResource();
             ByteArrayOutputStream b = new ByteArrayOutputStream();
@@ -319,7 +337,7 @@ class NarrativeReuseTest {
       return res;
     }
 
-    private String compose(org.hl7.fhir.services.elementmodel.ParserBase p, Element e) throws Exception {
+    private String compose(ParserBase p, Element e) throws Exception {
       ByteArrayOutputStream b = new ByteArrayOutputStream();
       p.compose(e, b, OutputStyle.PRETTY, null);
       return b.toString(StandardCharsets.UTF_8);
@@ -327,7 +345,7 @@ class NarrativeReuseTest {
   }
 
   /** the tree node for node: an empty text node, the order of the attributes and the like are all in it */
-  private static String tree(org.hl7.fhir.utilities.xhtml.XhtmlNode x) {
+  private static String tree(XhtmlNode x) {
     StringBuilder b = new StringBuilder();
     b.append("<").append(x.getNodeType()).append(" ").append(x.getName()).append(" [").append(x.getContent()).append("] ")
         .append(x.isNoPretty()).append(" ").append(x.getEmptyExpanded()).append(" ").append(x.getLocation());
@@ -335,7 +353,7 @@ class NarrativeReuseTest {
       x.getAttributes().forEach((k, v) -> b.append(" @").append(k).append("=").append(v));
     }
     if (x.hasChildren()) {
-      for (org.hl7.fhir.utilities.xhtml.XhtmlNode c : x.getChildNodes()) {
+      for (XhtmlNode c : x.getChildNodes()) {
         b.append(tree(c));
       }
     }
@@ -459,9 +477,9 @@ class NarrativeReuseTest {
   @Test
   void aNarrativeIsGeneratedWhenTheElementWouldNotBeTheOneGeneratingGives() throws Exception {
     Map<String, String> sources = sources("All the colours");
-    java.util.function.Consumer<FetchedResource> loaded = r -> {
-      if (r.getResource() instanceof org.hl7.fhir.model.core.CodeSystem) {
-        ((org.hl7.fhir.model.core.CodeSystem) r.getResource()).setPublisher("The loader");
+    Consumer<FetchedResource> loaded = r -> {
+      if (r.getResource() instanceof CodeSystem) {
+        ((CodeSystem) r.getResource()).setPublisher("The loader");
       }
     };
     Build first = build(sources);
@@ -487,7 +505,7 @@ class NarrativeReuseTest {
     Map<String, String> sources = sources("All the colours");
     build(sources).run().finish();
 
-    java.util.function.Consumer<FetchedResource> compared = r -> {
+    Consumer<FetchedResource> compared = r -> {
       if (r.getId().equals("p")) {
         r.getElement().setChildValue("language", "en");
       }
@@ -508,9 +526,9 @@ class NarrativeReuseTest {
    */
   @Test
   void aNarrativeThatIsGeneratedAgainAfterValidationIsNotPutBack() throws Exception {
-    everyBuild = pf -> org.mockito.Mockito.doAnswer(inv -> {
-      org.hl7.fhir.services.renderers.ResourceRenderer rr = (org.hl7.fhir.services.renderers.ResourceRenderer) inv.callRealMethod();
-      if (inv.getArgument(0) instanceof org.hl7.fhir.model.core.CodeSystem) {
+    everyBuild = pf -> doAnswer(inv -> {
+      ResourceRenderer rr = (ResourceRenderer) inv.callRealMethod();
+      if (inv.getArgument(0) instanceof CodeSystem) {
         rr = spy(rr);
         when(rr.renderingUsesValidation()).thenReturn(true);
       }
@@ -534,22 +552,22 @@ class NarrativeReuseTest {
    */
   @Test
   void aNarrativeWhoseRenderingReportsSomethingIsNotPutBack() throws Exception {
-    java.util.concurrent.atomic.AtomicInteger reports = new java.util.concurrent.atomic.AtomicInteger();
+    AtomicInteger reports = new AtomicInteger();
     everyBuild = pf -> {
       reports.set(0);
       when(pf.igpkp.getReportCount()).thenAnswer(inv -> reports.get());
-      org.mockito.Mockito.doAnswer(inv -> {
-        org.hl7.fhir.services.renderers.utils.ResourceWrapper w = inv.getArgument(0);
+      doAnswer(inv -> {
+        ResourceWrapper w = inv.getArgument(0);
         if ("q".equals(w.getId())) {
           // reported
-          pf.errors.add(new org.hl7.fhir.utilities.validation.ValidationMessage(org.hl7.fhir.utilities.validation.ValidationMessage.Source.Publisher,
-              org.hl7.fhir.utilities.validation.ValidationMessage.IssueType.INVARIANT, "Patient", "The reference x could not be resolved", org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity.ERROR));
+          pf.errors.add(new ValidationMessage(ValidationMessage.Source.Publisher,
+              ValidationMessage.IssueType.INVARIANT, "Patient", "The reference x could not be resolved", ValidationMessage.IssueSeverity.ERROR));
         } else if ("p".equals(w.getId())) {
           // would have been, had it not been reported before
           reports.incrementAndGet();
         }
         return inv.callRealMethod();
-      }).when(pf.rendererFactory).factory(any(org.hl7.fhir.services.renderers.utils.ResourceWrapper.class), any(RenderingContext.class));
+      }).when(pf.rendererFactory).factory(any(ResourceWrapper.class), any(RenderingContext.class));
     };
     Map<String, String> sources = sources("All the colours");
     build(sources).run().finish();
@@ -615,8 +633,8 @@ class NarrativeReuseTest {
   /** a renderer that writes files as well: the build is told of them when the narrative is generated, so it is, every build */
   @Test
   void aNarrativeWhoseRendererWritesFilesIsNotPutBack() throws Exception {
-    everyBuild = pf -> org.mockito.Mockito.doAnswer(inv -> {
-      org.hl7.fhir.services.renderers.utils.ResourceWrapper w = inv.getArgument(0);
+    everyBuild = pf -> doAnswer(inv -> {
+      ResourceWrapper w = inv.getArgument(0);
       if ("q".equals(w.getId())) {
         Path diagram = Path.of(pf.tempDir, "q-diagram.svg");
         Files.createDirectories(diagram.getParent());
@@ -624,7 +642,7 @@ class NarrativeReuseTest {
         ((RenderingContext) inv.getArgument(1)).getFiles().add(diagram.toString());
       }
       return inv.callRealMethod();
-    }).when(pf.rendererFactory).factory(any(org.hl7.fhir.services.renderers.utils.ResourceWrapper.class), any(RenderingContext.class));
+    }).when(pf.rendererFactory).factory(any(ResourceWrapper.class), any(RenderingContext.class));
     Map<String, String> sources = sources("All the colours");
     build(sources).run().finish();
 
@@ -667,7 +685,7 @@ class NarrativeReuseTest {
 
     // one of them is not what it was when the narratives are generated: the others still get theirs back, and the
     // file's new record has all of them
-    java.util.function.Consumer<FetchedResource> compared = r -> {
+    Consumer<FetchedResource> compared = r -> {
       if (r.getId().equals("s")) {
         r.getElement().setChildValue("language", "en");
       }
@@ -729,27 +747,27 @@ class NarrativeReuseTest {
 
   // ---- the records ----
 
-  private static org.hl7.fhir.utilities.xhtml.XhtmlNode sample() {
-    org.hl7.fhir.utilities.xhtml.XhtmlNode div = new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "div");
+  private static XhtmlNode sample() {
+    XhtmlNode div = new XhtmlNode(NodeType.Element, "div");
     div.setAttribute("xmlns", "http://www.w3.org/1999/xhtml");
     div.setAttribute("xml:lang", "en");
     div.setAttribute("lang", "en");
     div.setAttribute("class", "a b");
-    org.hl7.fhir.utilities.xhtml.XhtmlNode td = div.table("grid").tr().td();
+    XhtmlNode td = div.table("grid").tr().td();
     td.tx(""); // a renderer's empty cell: reading xhtml text back drops it, and the cell is then written another way
-    org.hl7.fhir.utilities.xhtml.XhtmlNode p = div.para();
+    XhtmlNode p = div.para();
     p.tx("a");
     p.tx("b"); // two text nodes: read back from text they are one
     div.pre().notPretty().tx(" x é \n");
     div.addTag("br").setEmptyExpanded(true);
-    div.addComment("note").setLocation(new org.hl7.fhir.utilities.xhtml.XhtmlNode.Location(3, 14)); // as read from markdown
+    div.addComment("note").setLocation(new XhtmlNode.Location(3, 14)); // as read from markdown
     return div;
   }
 
   @Test
   void aRecordedTreeComesBackNodeForNode() throws Exception {
-    org.hl7.fhir.utilities.xhtml.XhtmlNode div = sample();
-    org.hl7.fhir.utilities.xhtml.XhtmlNode copy = RapidoNarratives.copy(div);
+    XhtmlNode div = sample();
+    XhtmlNode copy = RapidoNarratives.copy(div);
     assertNotNull(copy);
     assertEquals(tree(div), tree(copy));
 
@@ -770,7 +788,7 @@ class NarrativeReuseTest {
 
     // a tree read back from text is not the same tree
     String text = new XhtmlComposer(XhtmlComposer.XML).compose(div);
-    assertNotEquals(tree(div), tree(new org.hl7.fhir.utilities.xhtml.XhtmlParser().parseFragment(text)));
+    assertNotEquals(tree(div), tree(new XhtmlParser().parseFragment(text)));
   }
 
   @Test
@@ -792,10 +810,10 @@ class NarrativeReuseTest {
     }
     byte[] whole = Files.readAllBytes(file);
     for (int n : new int[] {0, 3, 40, whole.length / 2, whole.length - 1}) {
-      Files.write(file, java.util.Arrays.copyOf(whole, n));
+      Files.write(file, Arrays.copyOf(whole, n));
       assertNull(records.read(f, "id-1"), "cut to " + n);
     }
-    Files.write(file, java.util.Arrays.copyOf(whole, whole.length + 1));
+    Files.write(file, Arrays.copyOf(whole, whole.length + 1));
     assertNull(records.read(f, "id-1"));
     Files.write(file, whole);
     assertNotNull(records.read(f, "id-1"));
@@ -807,8 +825,8 @@ class NarrativeReuseTest {
   /** a tree with something a record doesn't hold isn't recorded: the narrative is generated in the next build */
   @Test
   void aTreeThatCantComeBackAsItIsIsNotRecorded() throws Exception {
-    org.hl7.fhir.utilities.xhtml.XhtmlNode div = sample();
-    div.getChildNodes().add(new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "p") { }); // some other kind of node
+    XhtmlNode div = sample();
+    div.getChildNodes().add(new XhtmlNode(NodeType.Element, "p") { }); // some other kind of node
     assertNull(RapidoNarratives.copy(div));
 
     RapidoNarratives records = new RapidoNarratives(dir.toString());
