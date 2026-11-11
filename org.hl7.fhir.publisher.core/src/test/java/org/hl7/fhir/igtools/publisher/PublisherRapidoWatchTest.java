@@ -173,7 +173,7 @@ class PublisherRapidoWatchTest {
     return cache().resolve(".build-tracker.ini").toString();
   }
 
-  /** As that build, but it failed: the tracker says it started and didn't complete */
+  /** As theBuildAfterOneThatGaveUpItsTailReusesWhatItMade, but the build failed: the tracker says it started and didn't complete */
   @Test
   void theBuildAfterOneThatDidNotEndReusesNothing() throws Exception {
     PublisherFields first = build("a");

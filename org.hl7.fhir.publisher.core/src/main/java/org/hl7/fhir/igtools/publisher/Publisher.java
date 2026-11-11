@@ -559,8 +559,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   /**
    * Watch mode: whether the output folder has pages that a build put there when Jekyll had rendered them (see
    * PublisherGenerator.publishPagesEarly()) and no build has synced since: the build or page rebuild before this one,
-   * or one before that, failed after that (or was given up for a complete build). The next one is told, so that if
-   * it fails too it says whose pages they are
+   * or one before that, failed after that, stopped early for a change (see TailWatch), or was given up for a complete
+   * build. The next one is told, so that if it fails too it says whose pages they are
    */
   static boolean pagesAheadOfSync(PublisherFields last) {
     return last != null && last.watchPagesPublished && !last.watchOutputSynced;
@@ -677,9 +677,10 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       System.out.print(changes);
       return true;
     } finally {
-      // not watched while building: the files the build writes would be reported for nothing (and on macOS, the
-      // folders would be scanned again and again while the build runs). What changes while the build runs is
-      // found by changesSinceBuildStart() once it has finished
+      // not watched while the build validates and generates (its tail watches again once its pages are up, see
+      // TailWatch): the files the build writes would be reported for nothing (and on macOS, the folders would be
+      // scanned again and again). What changes while the build runs is found by changesSinceBuildStart(), by the
+      // tail or once the build has finished
       monitor.stopMonitoring();
     }
   }
@@ -951,13 +952,14 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   }
 
   /**
-   * what the output folder holds after a build that failed: if it, or a failed build before it, had put pages there
-   * when Jekyll had rendered them (see PublisherGenerator.publishPagesEarly()), those aren't the last good build's
+   * what the output folder holds after a build that failed: if it, or a build before it that failed or stopped early
+   * for a change, had put pages there when Jekyll had rendered them (see PublisherGenerator.publishPagesEarly()),
+   * those aren't the last good build's
    */
   static String watchFailureNote(String outputDir, boolean pagesPublished, boolean qaElsewhere) {
     if (pagesPublished) {
-      return "The build failed after pages were put in "+ outputDir +" as Jekyll rendered them (not html checked), by it or by a build that failed before it:"
-          +" those are newer than the rest there (the other pages, packages, zips, qa pages), which is from the last build that succeeded."
+      return "The build failed after pages were put in "+ outputDir +" as Jekyll rendered them (not html checked), by it or by a build before it that failed or stopped early for a change:"
+          +" those are newer than the rest there (the other pages, packages, zips, qa pages), which is from the last build that ran to its end."
           +" The next build that succeeds brings all of it up to date";
     }
     // (with -destination the qa files go there, and nothing was said)

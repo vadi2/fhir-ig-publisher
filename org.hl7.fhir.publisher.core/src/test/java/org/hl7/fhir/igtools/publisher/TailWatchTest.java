@@ -10,8 +10,6 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashSet;
 import java.util.List;
 
 import org.junit.jupiter.api.Test;
@@ -61,9 +59,9 @@ class TailWatchTest {
     Path f = dir.resolve("input").resolve("a.fsh");
     Files.createDirectories(f.getParent());
     Files.write(f, "one".getBytes(StandardCharsets.UTF_8));
-    SourceSnapshot before = SourceSnapshot.take(List.of(dir.resolve("input")), null, new HashSet<>());
+    SourceSnapshot before = SourceSnapshot.take(List.of(f.getParent()), null);
     Files.write(f, "another".getBytes(StandardCharsets.UTF_8));
-    SourceSnapshot.Changes res = SourceSnapshot.take(List.of(dir.resolve("input")), before, new HashSet<>()).changesSince(before);
+    SourceSnapshot.Changes res = SourceSnapshot.take(List.of(f.getParent()), before).changesSince(before);
     assertFalse(res.isEmpty());
     return res;
   }
@@ -77,7 +75,7 @@ class TailWatchTest {
       assertFalse(tail.givesWayBefore(s), s.name());
     }
     // and nothing that changed is nothing too
-    source.changes = SourceSnapshot.take(Collections.emptyList(), null, new HashSet<>()).changesSince(SourceSnapshot.take(Collections.emptyList(), null, new HashSet<>()));
+    source.changes = new SourceSnapshot.Changes();
     assertFalse(tail.givesWayBefore(TailWatch.Step.QA));
     assertNull(tail.getAbandonedBefore());
     assertTrue(tail.notDone().isEmpty());
