@@ -1,7 +1,6 @@
 package org.hl7.fhir.igtools.publisher;
 
 import java.io.BufferedInputStream;
-import java.io.BufferedOutputStream;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.DataInputStream;
@@ -53,8 +52,10 @@ public class RapidoNarratives {
     final boolean onResource;
     /** Narrative.status */
     final String status;
-    /** the narrative as the renderer built it */
+    /** the narrative as the renderer built it; null in a record that is only to be saved */
     final XhtmlNode div;
+    /** the narrative as a record file holds it (see {@link RapidoNarratives#tree}), if div is null */
+    final byte[] tree;
     /** onResource: the narrative on the resource is marked as generated (it is when there is more than one language) */
     final boolean marked;
     /** the code systems that generating the narrative used (the worker context keeps the ones a build used) */
@@ -70,6 +71,21 @@ public class RapidoNarratives {
       this.onResource = onResource;
       this.status = status;
       this.div = div;
+      this.tree = null;
+      this.marked = marked;
+      this.systems = systems;
+      this.unknown = unknown;
+      this.key = key;
+    }
+
+    /** for a narrative that has just been generated: the next build reads it from the file */
+    ResourceRecord(String type, String id, boolean onResource, String status, byte[] tree, boolean marked, List<String> systems, List<String> unknown, String key) {
+      this.type = type;
+      this.id = id;
+      this.onResource = onResource;
+      this.status = status;
+      this.div = null;
+      this.tree = tree;
       this.marked = marked;
       this.systems = systems;
       this.unknown = unknown;
@@ -142,7 +158,9 @@ public class RapidoNarratives {
           strings(out, r.systems);
           strings(out, r.unknown);
           string(out, r.key);
-          if (!writeNode(out, r.div, 0)) {
+          if (r.tree != null) {
+            out.write(r.tree);
+          } else if (!writeNode(out, r.div, 0)) {
             forget(f);
             return false;
           }
@@ -200,19 +218,29 @@ public class RapidoNarratives {
   }
 
   /**
-   * A copy of the tree that is the same node for node, or null if the tree has something a record doesn't hold (then
-   * the narrative it belongs to is not recorded)
+   * The tree as a record file holds it, from which it is read back the same node for node, or null if the tree has
+   * something a record doesn't hold (then the narrative it belongs to is not recorded)
    */
-  public static XhtmlNode copy(XhtmlNode x) {
+  public static byte[] tree(XhtmlNode x) {
     try {
-      ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-      try (DataOutputStream out = new DataOutputStream(new BufferedOutputStream(bytes, 1 << 14))) {
+      ByteArrayOutputStream bytes = new ByteArrayOutputStream(1 << 14);
+      try (DataOutputStream out = new DataOutputStream(bytes)) {
         if (!writeNode(out, x, 0)) {
           return null;
         }
       }
-      XhtmlNode res = readNode(new DataInputStream(new ByteArrayInputStream(bytes.toByteArray())), 0);
-      return same(x, res) ? res : null;
+      byte[] res = bytes.toByteArray();
+      return same(x, readNode(new DataInputStream(new ByteArrayInputStream(res)), 0)) ? res : null;
+    } catch (IOException | RuntimeException e) {
+      return null;
+    }
+  }
+
+  /** a copy of the tree that is the same node for node, or null if there can't be one (see {@link #tree}) */
+  public static XhtmlNode copy(XhtmlNode x) {
+    byte[] tree = tree(x);
+    try {
+      return tree == null ? null : readNode(new DataInputStream(new ByteArrayInputStream(tree)), 0);
     } catch (IOException | RuntimeException e) {
       return null;
     }

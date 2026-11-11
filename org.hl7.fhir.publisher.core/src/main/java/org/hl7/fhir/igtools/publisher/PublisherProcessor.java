@@ -1526,7 +1526,7 @@ public class PublisherProcessor extends PublisherBase  {
             || data.size() != (marked ? 1 : 0) || (marked && !Boolean.TRUE.equals(n.getUserData(UserDataNames.renderer_is_generated)))) {
           return null;
         }
-        XhtmlNode tree = RapidoNarratives.copy(n.getDiv());
+        byte[] tree = RapidoNarratives.tree(n.getDiv());
         return tree == null ? null : new RapidoNarratives.ResourceRecord(r.fhirType(), r.getId(), true, n.getStatus().toCode(), tree, marked, note.systems, note.unknown, null);
       }
       Element e = r.getElement();
@@ -1544,7 +1544,7 @@ public class PublisherProcessor extends PublisherBase  {
           || !"div".equals(div.getName()) || !div.isXhtml() || div.hasChildren() || div.hasComments() || div.getXhtml() == null || div.getXhtmlSource() != null) {
         return null;
       }
-      XhtmlNode tree = RapidoNarratives.copy(div.getXhtml());
+      byte[] tree = RapidoNarratives.tree(div.getXhtml());
       return tree == null ? null : new RapidoNarratives.ResourceRecord(r.fhirType(), r.getId(), false, status.getValue(), tree, false, note.systems, note.unknown, narrativeKey(e));
     } catch (RuntimeException ex) {
       return null;
