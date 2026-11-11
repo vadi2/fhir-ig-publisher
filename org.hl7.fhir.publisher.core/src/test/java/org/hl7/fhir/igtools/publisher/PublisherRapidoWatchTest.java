@@ -116,6 +116,24 @@ class PublisherRapidoWatchTest {
     assertEquals("changed: input/ignoreWarnings.txt", third.rapido.getReason());
   }
 
+  @Test
+  void aFileAddedWhileTheBuildRanThatItGaveWayForIsSeenAsAddedByTheNextBuild() throws Exception {
+    cache = dir.resolve("cache");
+    Files.createDirectories(cache);
+    Files.createDirectories(dir.resolve("input"));
+    Files.writeString(dir.resolve("input").resolve("ignoreWarnings.txt"), "1");
+    finish(build("a"));
+    PublisherFields second = build("a");
+    assertFalse(second.rapido.isCompleteBuild(), second.rapido.getReason());
+    generate(second, null);
+    // (the build didn't read it: it isn't there until now)
+    giveWay(second, dir.resolve("input").resolve("new.txt"));
+
+    PublisherFields third = build("a");
+    assertTrue(third.rapido.isCompleteBuild());
+    assertEquals("changed: input/new.txt (added)", third.rapido.getReason());
+  }
+
   /** The build stops after Jekyll because this file was saved (see TailWatch), as Publisher.finishIg() ends it */
   private void giveWay(PublisherFields pf, Path edited) throws Exception {
     Files.createDirectories(edited.getParent());
