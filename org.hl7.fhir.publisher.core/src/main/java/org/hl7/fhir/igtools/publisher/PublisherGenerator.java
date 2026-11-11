@@ -839,12 +839,17 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (jekyllOk) {
       publishPagesEarly(jekyllWritten);
     }
+    // (before the full garbage collection too: a file saved while the build ran doesn't wait for it)
+    TailWatch.Step afterPages = replay == null ? TailWatch.Step.PACKAGES : TailWatch.Step.AI;
+    if (givesWayBefore(afterPages)) {
+      return;
+    }
     if (reclaimAfterJekyll) {
       reclaimAfterJekyll = false;
       System.gc();
       printMemUsage();
     }
-    if (givesWayBefore(replay == null ? TailWatch.Step.PACKAGES : TailWatch.Step.AI)) {
+    if (givesWayBefore(afterPages)) {
       return;
     }
     if (jekyllOk && replay == null) {
