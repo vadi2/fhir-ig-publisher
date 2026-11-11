@@ -591,10 +591,17 @@ class NarrativeReuseTest {
     assertEquals(0, second.rendered);
     Build fresh = fresh(sources);
     assertNotEquals(positions(fresh.resource(CS).getElement()), positions(second.resource(CS).getElement()));
+    java.lang.reflect.Method validate = PublisherProcessor.class.getDeclaredMethod("validate", FetchedFile.class, FetchedResource.class, boolean.class);
+    validate.setAccessible(true);
     for (Build b : new Build[] {fresh, second}) {
+      b.pf.validator = mock(org.hl7.fhir.validation.instance.InstanceValidator.class);
+      b.pf.validationFetcher = mock(ValidationServices.class);
       for (FetchedFile f : b.pf.fileList) {
         for (FetchedResource r : f.getResources()) {
-          b.processor.elementToValidate(r);
+          validate.invoke(b.processor, f, r, false);
+          // what the validator was given is the resource's element
+          org.mockito.Mockito.verify(b.pf.validator).validate(org.mockito.ArgumentMatchers.same(r.getElement()), any(), any(), org.mockito.ArgumentMatchers.same(r.getElement()), any(java.util.List.class));
+          assertTrue(r.getElement().hasUserData(UserDataNames.pub_context_resource));
         }
       }
     }
@@ -602,6 +609,22 @@ class NarrativeReuseTest {
       assertEquals(positions(fresh.resource(file).getElement()), positions(second.resource(file).getElement()), file);
     }
     assertSameState(fresh, second);
+  }
+
+  /** what is reported more than once in a build is counted each time, though the build only gets it once */
+  @Test
+  void theKnowledgeProviderCountsWhatItDoesNotReportAgain() throws Exception {
+    assumeTrue(context != null, noContext);
+    java.util.List<ValidationMessage> errors = new ArrayList<>();
+    IGKnowledgeProvider pkp = new IGKnowledgeProvider(context, "http://hl7.org/fhir/R5/", "http://example.org/ig", null, errors, false, null, null, null, null,
+        new org.hl7.fhir.igtools.publisher.modules.NullModule(), null);
+    assertEquals(0, pkp.getReportCount());
+    pkp.getLinkFor("Patient.thing", "NoSuchType");
+    assertEquals(1, errors.size());
+    assertEquals(1, pkp.getReportCount());
+    pkp.getLinkFor("Patient.other", "NoSuchType");
+    assertEquals(1, errors.size(), "reported once in a build");
+    assertEquals(2, pkp.getReportCount());
   }
 
   private static String positions(Element e) {
