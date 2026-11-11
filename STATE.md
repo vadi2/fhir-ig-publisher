@@ -29,7 +29,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 | native-skip | session_013FrhV7287Tkr83evM7MsqW | perf3/native-skip | - | running |
 | summaries-reuse | session_013FrhV9QcWhADhYPtwEjkoZ | perf3/summaries-reuse | - | running |
 | rapido-state | session_013FrhV9krvJaocgAxaWRabs | perf3/rapido-state | #39 | DONE. PR open 19:54, 0 checks, mergeable clean. prof -14.8 s, inst -10.3 s, page 0 |
-| narrative-skip (wave 2, stacked: PR base perf3/native-skip) | session_013FrhV6FEdUbpxzt5WmGXJF | perf3/narrative-skip | - | running |
+| narrative-skip (wave 2, stacked: PR base perf3/native-skip) | session_013FrhV6FEdUbpxzt5WmGXJF | perf3/narrative-skip | none | DROPPED 22:04: saves ~2 s of 272 s, not provably equal to a fresh build (~65 USD) |
 | translations-dirty (wave 2; + optional System.gc commit) | session_013FrhV5h5r3K9VwTsXxmcW2 | perf3/translations-dirty | - | running |
 | qa-prep-reuse (wave 2) | session_013FrhV6SxKUeigqo6vSYCQF | perf3/qa-prep-reuse | #40 | DONE. PR 22:02, 0 checks, clean. QA prep 7.6 -> 2.3 s (prof), 8.1 -> 2.2 (inst), 3.8 -> 1.0 (page); page rebuild 19.6 -> 16.2 s |
 | tail-restart (wave 2, stacked: PR base perf3/early-publish) | session_013FrhV6xnSEZUwAnAQoiLim | perf3/tail-restart | - | running (launched 19:18) |
@@ -151,3 +151,8 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   translations-dirty: waiting on output check. native-skip: n3 bench running; its output compare vs fresh was at
   "1,205 diffs after masking" (still investigating; watch for a drop or a PR that explains them). All three now on
   Opus 5.5 (Vadim switched them). tail-restart moved (14c0cdb0).
+- 23:47 tick: no new PRs (highest 42). narrative-skip DROPPED (only ~2 s, not provably equal). 2 slots free now
+  (replay-stamp, narrative-skip). Decision: launch nothing more. Remaining reserve ideas (full-ig.zip beside QA, sync
+  only what was written, html check memory) only shorten save->Finished, not save->page (early-publish already took
+  the tail off the page path), they overlap tail-restart/#42, and sessions cost 30-100 USD each. Told Vadim; launch
+  only if he asks.
