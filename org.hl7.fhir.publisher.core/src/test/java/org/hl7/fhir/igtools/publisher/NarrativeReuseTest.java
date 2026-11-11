@@ -176,14 +176,16 @@ class NarrativeReuseTest {
         FetchedFile f = file(s.getKey(), s.getValue());
         for (String one : s.getValue().split(NEXT)) {
           byte[] cnt = one.getBytes(StandardCharsets.UTF_8);
-          Element e = new JsonParser(context).parseSingle(new ByteArrayInputStream(cnt), null);
+          boolean xml = one.startsWith("<");
+          Element e = (xml ? new org.hl7.fhir.services.elementmodel.XmlParser(context) : new JsonParser(context)).parseSingle(new ByteArrayInputStream(cnt), null);
           FetchedResource r = f.addResource(s.getKey());
           r.setElement(e).setId(e.getIdBase());
           // what the loader keeps on an element comes with it when the element is made again
           e.setUserData("test.loaded", s.getKey());
           if (!"Patient".equals(e.fhirType())) {
             // a conformance resource is loaded as a resource as well, and is in the context
-            Resource res = new org.hl7.fhir.model.core.formats.JsonParser(context.getModelContext()).parse(cnt);
+            Resource res = xml ? new org.hl7.fhir.model.core.formats.XmlParser(context.getModelContext()).parse(cnt)
+                : new org.hl7.fhir.model.core.formats.JsonParser(context.getModelContext()).parse(cnt);
             r.setResource(res);
             res.setWebPath(e.fhirType() + "-" + e.getIdBase() + ".html");
             context.cacheResource(res);
@@ -591,6 +593,23 @@ class NarrativeReuseTest {
       b.append(positions(c));
     }
     return b.append(")").toString();
+  }
+
+  /**
+   * A resource that is loaded from xml and not changed by the loader has the element read from the xml until its
+   * narrative is generated, and one read from json after: the content is the same, but it isn't the same element
+   */
+  @Test
+  void aNarrativeIsGeneratedForAResourceWhoseElementWasReadFromXml() throws Exception {
+    Map<String, String> sources = sources("All the colours");
+    sources.put(CS, "<CodeSystem xmlns=\"http://hl7.org/fhir\"><id value=\"colours\"/><url value=\"http://example.org/ig/CodeSystem/colours\"/><version value=\"1.0.0\"/>"
+        + "<name value=\"Colours\"/><title value=\"Colour codes\"/><status value=\"active\"/><caseSensitive value=\"true\"/><content value=\"complete\"/>"
+        + "<concept><code value=\"red\"/><display value=\"Red\"/></concept></CodeSystem>");
+    build(sources).run().finish();
+
+    Build second = build(sources).run();
+    assertEquals(1, second.rendered, "the code system");
+    assertSameState(fresh(sources), second);
   }
 
   /** a renderer that writes files as well: the build is told of them when the narrative is generated, so it is, every build */
