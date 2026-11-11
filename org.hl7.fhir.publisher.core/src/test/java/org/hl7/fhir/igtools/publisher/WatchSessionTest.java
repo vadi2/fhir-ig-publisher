@@ -584,4 +584,22 @@ class WatchSessionTest {
     assertTrue(second.getExecTime().getTimeInMillis() > first.getExecTime().getTimeInMillis());
     assertEquals(second.getExecTime(), second.getReportTime());
   }
+
+  @Test
+  void thePublisherVersionIsLookedUpOncePerSession() throws IOException {
+    WatchSession s = session();
+    int[] lookups = {0};
+    assertEquals("1.2.3", s.currentPublisherVersion(() -> { lookups[0]++; return "1.2.3"; }));
+    assertEquals("1.2.3", s.currentPublisherVersion(() -> { lookups[0]++; return "1.2.4"; }));
+    assertEquals(1, lookups[0]);
+  }
+
+  @Test
+  void aFailedPublisherVersionLookupIsNotTriedAgain() throws IOException {
+    WatchSession s = session();
+    int[] lookups = {0};
+    assertNull(s.currentPublisherVersion(() -> { lookups[0]++; return null; }));
+    assertNull(s.currentPublisherVersion(() -> { lookups[0]++; return "1.2.3"; }));
+    assertEquals(1, lookups[0]);
+  }
 }
