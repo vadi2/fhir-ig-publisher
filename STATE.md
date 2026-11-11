@@ -147,3 +147,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   narrative-skip, translations-dirty, tail-restart.
 - 22:49 tick: PR #42 (early-publish) opened, no checks, clean. Open: #39 #40 #41 #42. #42 moves System.gc() ->
   told translations-dirty to leave out its optional GC commit. tail-restart stacks on #42 (its PR base perf3/early-publish).
+- 23:17 tick: no new PRs (highest 42). summaries-reuse: fresh build for output compare, then test + PR.
+  translations-dirty: waiting on output check. native-skip: n3 bench running; its output compare vs fresh was at
+  "1,205 diffs after masking" (still investigating; watch for a drop or a PR that explains them). All three now on
+  Opus 5.5 (Vadim switched them). tail-restart moved (14c0cdb0).
