@@ -22,14 +22,33 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 ## Sessions (wave 1, Fable, launched 14:21 UTC; the six Opus sessions from 14:17 were archived, nothing pushed)
 | slug | session id | branch | PR | status |
 |---|---|---|---|---|
-| profile (no PR) | session_013FrhV9XtpZJzHaw5CUT5RR | notes branch | n/a | running |
+| profile, then replay-stamp (wave 2) | session_013FrhV9XtpZJzHaw5CUT5RR | notes branch; perf3/replay-stamp | - | profile.md done 18:16; replay-stamp running |
 | early-publish | session_013FrhV8MAcq78uViFCFE1ve | perf3/early-publish | - | running |
 | archives-reuse | session_013FrhV89txD9eAkM8cnaV3n | perf3/archives-reuse | - | running |
 | native-skip | session_013FrhV7287Tkr83evM7MsqW | perf3/native-skip | - | running |
 | summaries-reuse | session_013FrhV9QcWhADhYPtwEjkoZ | perf3/summaries-reuse | - | running |
 | rapido-state | session_013FrhV9krvJaocgAxaWRabs | perf3/rapido-state | - | running |
+| narrative-skip (wave 2, stacked: PR base perf3/native-skip) | session_013FrhV6FEdUbpxzt5WmGXJF | perf3/narrative-skip | - | running |
+| translations-dirty (wave 2; + optional System.gc commit) | session_013FrhV5h5r3K9VwTsXxmcW2 | perf3/translations-dirty | - | running |
+| qa-prep-reuse (wave 2) | session_013FrhV6SxKUeigqo6vSYCQF | perf3/qa-prep-reuse | - | running |
+| tail-restart (wave 2, stacked on perf3/early-publish) | NOT LAUNCHED: waits for origin/perf3/early-publish to exist | perf3/tail-restart | - | pending |
 
-## Wave 2 candidates (5 PR slots left; decide after profile.md lands)
+## Wave 2 (launched 18:19 from profile.md; 10 PRs max = 5 wave 1 + 5 wave 2)
+- replay-stamp = profile opp 2 (canReplay by size+mtime, ~11 s before Jekyll). Given to the profiler session by
+  send_message; told to test-push perf3/replay-stamp first and end "blocked (push refused)" if its outcome branch
+  setting forbids it -> then launch a fresh session for it (base branch, outcome_branch perf3/replay-stamp).
+- narrative-skip = opp 1; translations-dirty = opp 10 (+12 System.gc); qa-prep-reuse = opp 7.
+- tail-restart = opp 4: launch when perf3/early-publish is on origin: create_session source_revision
+  perf3/early-publish, outcome_branch perf3/tail-restart, PR base perf3/early-publish. Brief: a change saved while
+  a build runs (monitoring is off while building, Publisher.waitForChanges) waits for the whole tail (109 s after
+  Jekyll on the VM); make the post-publish tail abortable at safe points without saving Rapido state or leaving
+  half-written outputs, then start the next build; mid-build restart before Jekyll only if safe.
+- Reserve if a PR slot frees up (a session drops): opp 6 full-ig.zip beside QA (~13 s F), opp 8 sync only what was
+  written (~7 s F), opp 5 html check memory (GC-bound, mostly small-heap). Rejected: opp 3 load while SUSHI and
+  opp 11 kept parsed sources (item 6 tried and dropped), opp 9 combined package (core + shared context), warm SUSHI
+  (profile: saves 1 to 4 s only).
+
+## Old wave 2 candidates (superseded by the section above)
 - narrative-skip: skip narrative generation for clean resources (6.4 s); stack on perf3/native-skip (its PR lists what
   reads a clean resource's narrative).
 - tail-restart: a change arriving during the post-publish tail (or mid-build) abandons it and starts the next build;
@@ -84,3 +103,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   (change cuts native phase 30 -> 10 s on the VM); summaries-reuse and rapido-state: review done, A/B running, ~3 h.
   PRs expected ~20:30-21:00 UTC. Until ~20:00 ticks can be just: notes branch ls-tree (profile.md?) + ls-remote
   refs/pull (new PR# > 38?) + perf3 heads; skip get_session unless something looks off.
+- 18:17 tick: profile.md landed (profile edit on VM 282.8 s to Finished, page in Jekyll staging at 172.2; page edit
+  19.4 / 2.6). No PRs yet (highest 38), perf3 heads unchanged. Launched wave 2 (see section). get_session create
+  shape: model claude-fable-5-2, source_url https://github.com/vadi2/fhir-ig-publisher, source_revision, outcome_branch
+  perf3/<slug>, permission_mode auto, tags [perf3].
