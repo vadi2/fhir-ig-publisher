@@ -38,7 +38,6 @@ import org.hl7.fhir.model.utilities.formats.OutputStyle;
 import org.hl7.fhir.model.core.formats.JsonParser;
 import org.hl7.fhir.services.elementmodel.Manager;
 import org.hl7.fhir.model.utilities.formats.FhirFormat;
-import org.hl7.fhir.services.utilities.NPMPackageGenerator;
 import org.hl7.fhir.services.validation.ValidatorSession;
 import org.hl7.fhir.standalone.context.SimpleWorkerContext;
 import org.hl7.fhir.validation.ValidatorSettings;
@@ -460,68 +459,6 @@ class PublisherGeneratorArchiveKeysTest {
     assertNull(fresh.generator.expansionsKey(), "an expansion that isn't in a journal");
   }
 
-  // ---- the combined package ------------------------------------------------------------------------------------------
-
-  /** a package.tgz with a profile in the package folder, an example, and what the checks put in the other folder */
-  private NpmPackage packageTgz(String profile, String example, String validation) throws Exception {
-    return packageTgz(profile, example, validation, "urn:uuid:1", "a");
-  }
-
-  private NpmPackage packageTgz(String profile, String example, String validation, String expansionId, String code) throws Exception {
-    Path tgz = dir.resolve("package.tgz");
-    Files.deleteIfExists(tgz);
-    org.hl7.fhir.utilities.json.model.JsonObject npm = new org.hl7.fhir.utilities.json.model.JsonObject();
-    npm.add("name", "example.ig");
-    npm.add("version", "0.1.0");
-    NPMPackageGenerator gen = new NPMPackageGenerator(tgz.toString(), npm, DAY.getTime(), true);
-    gen.addFile(NPMPackageGenerator.Category.RESOURCE, "StructureDefinition-p.json",
-        ("{\"resourceType\":\"StructureDefinition\",\"id\":\"p\",\"title\":\"" + profile + "\"}").getBytes(StandardCharsets.UTF_8));
-    gen.addFile(NPMPackageGenerator.Category.RESOURCE, "ValueSet-v.json",
-        ("{\"resourceType\":\"ValueSet\",\"id\":\"v\",\"expansion\":{\"extension\":[{\"url\":\"x\"}],\"identifier\":\"" + expansionId + "\",\"timestamp\":\"2026-03-04T10:00:0"
-            + expansionId.substring(expansionId.length() - 1) + "Z\",\"contains\":[{\"code\":\"" + code + "\"}]}}").getBytes(StandardCharsets.UTF_8));
-    gen.addFile(NPMPackageGenerator.Category.EXAMPLE, "Patient-e.json",
-        ("{\"resourceType\":\"Patient\",\"id\":\"e\",\"gender\":\"" + example + "\"}").getBytes(StandardCharsets.UTF_8));
-    gen.addFile(NPMPackageGenerator.Category.OTHER, "validation-summary.json", validation.getBytes(StandardCharsets.UTF_8));
-    gen.finish();
-    try (InputStream in = Files.newInputStream(tgz)) {
-      return NpmPackage.fromPackage(in);
-    }
-  }
-
-  @Test
-  void theCombinedPackageKeyHasTheConformanceResourcesOnly() throws Exception {
-    Build b = new Build(DAY);
-    b.pf.sourceIg.setPackageId("example.ig");
-    String key = b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}"));
-    assertNotNull(key);
-    assertEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
-    // an example, and what the validation and the template's check say, aren't read to make it
-    assertEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "female", "{\"errors\":1}")));
-    assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("another profile", "male", "{}")));
-    // a value set expanded again with the same codes, and one with another code
-    assertEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}", "urn:uuid:2", "a")));
-    assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}", "urn:uuid:1", "b")));
-    b.pf.sourceIg.setPackageId("example.other");
-    assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
-    b.pf.sourceIg.setPackageId("example.ig");
-    assertEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
-    b.pf.version = "4.0.1";
-    assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
-    b.pf.version = "5.0.0";
-    // the parameters the value sets are expanded with
-    org.hl7.fhir.model.core.Parameters before = context.getExpansionParameters();
-    try {
-      org.hl7.fhir.model.core.Parameters other = new org.hl7.fhir.model.core.Parameters();
-      other.addParameter("displayLanguage", "de");
-      context.setExpansionParameters(other);
-      assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
-    } finally {
-      context.setExpansionParameters(before);
-    }
-    b.pf.rapido = null;
-    assertNull(b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
-  }
-
   // ---- keeping ------------------------------------------------------------------------------------------------------
 
   private static final FileTime THEN = FileTime.fromMillis(1_700_000_000_000L);
@@ -795,89 +732,6 @@ class PublisherGeneratorArchiveKeysTest {
       }
     }
     assertEquals(key, second.generator.expansionsKey());
-  }
-
-  /** what generating the combined package does to the value set: it leaves the expansion it made in it */
-  private static void expand(Build b, String identifier, String... codes) {
-    ValueSet vs = (ValueSet) b.resource("ValueSet-vs").getResource();
-    vs.getExpansion().setIdentifier(identifier);
-    for (String c : codes) {
-      vs.getExpansion().addContains().setSystem("http://example.org/fhir/CodeSystem/cs").setCode(c);
-    }
-  }
-
-  @Test
-  void whileTheCombinedPackageIsKeptTheValueSetsStandAsInTheLastBuild() throws Exception {
-    // the first build generates the combined package, so its value set has its expansion
-    Build first = new Build(DAY);
-    expand(first, "urn:uuid:1", "a", "b");
-    String key = first.definitions();
-    first.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
-    first.generator.generateValidationPack(spec.toString());
-    Files.setLastModifiedTime(root.resolve("output").resolve("definitions.json.zip"), THEN);
-    Map<String, String> written = entries(root.resolve("output").resolve("definitions.json.zip"));
-    assertTrue(written.get("ValueSet-vs.json").contains("urn:uuid:1"));
-    first.finish();
-
-    // the next build can keep the combined package, and doesn't generate it: its value set has no expansion, but
-    // it is as it was otherwise, so the zips are those of the first build
-    int[] generated = {0};
-    Build second = differentialBuild();
-    second.generator.pendingCombined = () -> {
-      generated[0]++;
-      expand(second, "urn:uuid:2", "a", "b");
-    };
-    jekyll(second);
-    assertEquals(key, second.definitions());
-    second.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
-    second.generator.generateValidationPack(spec.toString());
-    assertEquals(0, generated[0]);
-    assertEquals(THEN, time("definitions.json.zip"));
-    second.finish();
-
-    // another resource changes, while the combined package still isn't generated: the value set is copied from the
-    // last zip, with its expansion
-    Files.write(spec, "another spec".getBytes(StandardCharsets.UTF_8));
-    Build third = differentialBuild();
-    third.generator.pendingCombined = () -> {
-      generated[0]++;
-      expand(third, "urn:uuid:3", "a", "b");
-    };
-    jekyll(third);
-    third.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
-    assertEquals(0, generated[0]);
-    assertEquals("its content changed, 3 of its 4 entries as they were", third.pf.rapido.getArchives().getRewritten().get("definitions.json.zip"));
-    assertEquals(written.get("ValueSet-vs.json"), entries(root.resolve("output").resolve("definitions.json.zip")).get("ValueSet-vs.json"));
-    third.generator.generateValidationPack(spec.toString());
-    third.finish();
-
-    // the value set itself changes: it has to be read, so the combined package is generated first
-    ValueSet changed = (ValueSet) sources.get("ValueSet-vs");
-    changed.setTitle("changed");
-    Build fourth = differentialBuild();
-    fourth.generator.pendingCombined = () -> {
-      generated[0]++;
-      expand(fourth, "urn:uuid:4", "a", "b");
-    };
-    jekyll(fourth);
-    fourth.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
-    assertEquals(1, generated[0]);
-    String vs = entries(root.resolve("output").resolve("definitions.json.zip")).get("ValueSet-vs.json");
-    assertTrue(vs.contains("\"changed\"") && vs.contains("urn:uuid:4"), vs);
-    fourth.generator.generateValidationPack(spec.toString());
-    fourth.finish();
-
-    // the zip of the last build is gone, so every entry is made: the value set is read, with its expansion
-    Build fifth = differentialBuild();
-    fifth.generator.pendingCombined = () -> {
-      generated[0]++;
-      expand(fifth, "urn:uuid:5", "a", "b");
-    };
-    Files.delete(root.resolve("output").resolve("definitions.json.zip"));
-    jekyll(fifth);
-    fifth.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
-    assertEquals(2, generated[0]);
-    assertTrue(entries(root.resolve("output").resolve("definitions.json.zip")).get("ValueSet-vs.json").contains("urn:uuid:5"));
   }
 
   /** the entries of a zip that is an entry of the pack */
