@@ -8,6 +8,7 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
@@ -21,6 +22,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Predicate;
 
 /**
  * Brings a folder up to date with a freshly built copy of it, touching only what differs. In watch mode the build
@@ -181,8 +183,9 @@ public class OutputFolderSync {
    *
    * @param files the files to copy, in the staging folder (those that aren't there, or aren't files, are skipped), or
    *              null for every file in it
+   * @param leftOut tells, by its name, a file that isn't copied (null: none)
    */
-  public static Result publish(Path staged, Path target, Collection<Path> files) throws IOException {
+  public static Result publish(Path staged, Path target, Collection<Path> files, Predicate<String> leftOut) throws IOException {
     Result result = new Result();
     // the files are named under the staging folder as it was given, which may be reached through a link
     Path given = staged.toAbsolutePath().normalize();
@@ -206,6 +209,9 @@ public class OutputFolderSync {
       }
     }
     rels.remove(QA_JSON);
+    if (leftOut != null) {
+      rels.removeIf(rel -> leftOut.test(Paths.get(rel).getFileName().toString()));
+    }
     byte[] ba = new byte[BUFFER];
     byte[] bb = new byte[BUFFER];
     Set<Path> dirs = new HashSet<>();

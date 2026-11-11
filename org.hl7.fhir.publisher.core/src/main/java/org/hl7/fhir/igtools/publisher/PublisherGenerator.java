@@ -233,6 +233,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   private Set<String> jekyllWritten;
   // whether the last Jekyll run returned an error, though it said that it had finished
   private boolean jekyllInDoubt;
+  // whether the memory that generating the outputs used is reclaimed once Jekyll has run, not before
+  private boolean reclaimAfterJekyll;
   // watch mode: where the html-checked versions of the output files that Jekyll wrote again for the template's check
   // are kept meanwhile (null: none), and those files (relative to the output folder)
   private Path checkedStash;
@@ -241,6 +243,16 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   /** Watch mode: whether Jekyll is kept running for this build's site, and writes only what changed next time */
   public boolean keepsJekyllRunning() {
     return jekyllDriver != null && jekyllDriver.isRunningFor(new File(pf.tempDir).getAbsolutePath(), new File(pf.outputDir).getAbsolutePath());
+  }
+
+  /**
+   * Whether the full garbage collection that follows generating the outputs waits until Jekyll has rendered the
+   * pages (and, in watch mode, they are in the output folder: see publishPagesEarly()). It makes room for the Jekyll
+   * that a build starts; a Jekyll kept running has its memory already, and the pages don't depend on it, so the
+   * author doesn't wait for it
+   */
+  boolean reclaimsMemoryAfterJekyll() {
+    return keepsJekyllRunning();
   }
 
   public void setWatchTools(JekyllDriver jekyllDriver, FullIgZip fullIgZip) {
@@ -517,8 +529,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     for (RelatedIG ig : pf.relatedIGs) {
       ig.dump();
     }
-    System.gc();
-    printMemUsage();
+    reclaimAfterJekyll = reclaimsMemoryAfterJekyll();
+    if (!reclaimAfterJekyll) {
+      System.gc();
+      printMemUsage();
+    }
 
     if (pageRebuild != null) {
       try {
@@ -809,6 +824,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     if (jekyllOk && !jekyllInDoubt) {
       publishPagesEarly(jekyllWritten);
+    }
+    if (reclaimAfterJekyll) {
+      reclaimAfterJekyll = false;
+      System.gc();
+      printMemUsage();
     }
     if (jekyllOk && replay == null) {
       keepForPageRebuild(() -> pageRebuild.afterJekyll());
@@ -4792,6 +4812,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * compares the whole output folder with what the build made, as it always did. If the build fails after this, the
    * output folder keeps these pages (see Publisher.recordWatchFailure()). In a page rebuild, the files Jekyll wrote
    * again only for the template's check have their html-checked content back by now, which the output folder has.
+   * The .ai.html pages aren't put there: the AI step deletes them.
    *
    * @param jekyllWritten the output files Jekyll wrote (in the staging folder), or null if it wrote all of them
    */
@@ -4809,7 +4830,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     OutputFolderSync.Result r;
     try {
-      r = OutputFolderSync.publish(Paths.get(pf.outputDir), Paths.get(pf.watchOutputDir), written);
+      r = OutputFolderSync.publish(Paths.get(pf.outputDir), Paths.get(pf.watchOutputDir), written, AIProcessor::isRenderedForAiOnly);
     } catch (IOException e) {
       log("Unable to put the pages in " + pf.watchOutputDir + " yet (it is updated when the build has finished): " + e);
       return;

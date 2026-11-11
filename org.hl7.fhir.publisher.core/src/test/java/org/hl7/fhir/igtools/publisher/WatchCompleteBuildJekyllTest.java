@@ -246,6 +246,20 @@ class WatchCompleteBuildJekyllTest {
     assertEquals(Arrays.asList("a.html"), g.changedSources(temp, out));
   }
 
+  @Test
+  void memoryIsReclaimedAfterJekyllOnlyIfTheJekyllThatIsKeptRunningRendersTheSite() throws Exception {
+    PublisherGenerator g = generator(null);
+    // the build starts Jekyll: the memory is freed for it first
+    assertFalse(g.reclaimsMemoryAfterJekyll());
+    assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
+    assertTrue(g.reclaimsMemoryAfterJekyll());
+    driver.stop();
+    assertFalse(g.reclaimsMemoryAfterJekyll());
+    // not watch mode
+    g.setWatchTools(null, null);
+    assertFalse(g.reclaimsMemoryAfterJekyll());
+  }
+
   private String output(String rel) throws IOException {
     return new String(Files.readAllBytes(Paths.get(pf.watchOutputDir, rel)), StandardCharsets.UTF_8);
   }
@@ -277,12 +291,14 @@ class WatchCompleteBuildJekyllTest {
   void whenJekyllWroteTheWholeSiteAllOfItIsPutInTheOutputFolder() throws Exception {
     write("temp/.watch-output/index.html", "home");
     write("temp/.watch-output/en/a.html", "a");
+    write("temp/.watch-output/en/a.ai.html", "what the AI step makes a.md from, and deletes");
     write("output/gone.html", "a page the build no longer makes");
 
     generator(null).publishPagesEarly(null);
 
     assertEquals("home", output("index.html"));
     assertEquals("a", output("en/a.html"));
+    assertFalse(new File(pf.watchOutputDir, "en/a.ai.html").exists());
     // (deleted by the sync at the end of the build)
     assertEquals("a page the build no longer makes", output("gone.html"));
     assertTrue(pf.watchPagesPublished);
