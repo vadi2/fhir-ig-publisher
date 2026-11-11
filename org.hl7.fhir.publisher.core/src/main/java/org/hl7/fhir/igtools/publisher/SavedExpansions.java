@@ -78,7 +78,33 @@ public class SavedExpansions {
     return h.finish();
   }
 
-  /** the hash that a journal keeps of the expansions it holds */
+  /**
+   * The JSON of an expansion without what only says when it was made: the identifier and the timestamp that the
+   * expansion gets each time it is generated. An expansion that is generated again with the same content doesn't
+   * change the key, so the expansion files stay, with the expansion as it was generated before. If the JSON isn't
+   * laid out as expected, it is returned as it is (and the key changes)
+   */
+  public static String withoutRunDetails(ValueSet vs, String json) {
+    if (!vs.hasExpansion()) {
+      return json;
+    }
+    String res = json;
+    if (vs.getExpansion().hasIdentifier()) {
+      res = blank(res, "\"expansion\":{\"identifier\":\"", vs.getExpansion().getIdentifier());
+    }
+    if (vs.getExpansion().hasTimestamp()) {
+      res = blank(res, "\"timestamp\":\"", vs.getExpansion().getTimestampElement().asStringValue());
+    }
+    return res;
+  }
+
+  /** json without the value that follows the first before, if that is how it reads there */
+  private static String blank(String json, String before, String value) {
+    int i = json.indexOf(before + value + "\"");
+    return i < 0 ? json : json.substring(0, i + before.length()) + json.substring(i + before.length() + value.length());
+  }
+
+  /** the hash that a journal keeps of the expansions it holds (as withoutRunDetails() gives them) */
   public static String hash(List<String> json) {
     Hasher h = new Hasher();
     for (String s : json) {

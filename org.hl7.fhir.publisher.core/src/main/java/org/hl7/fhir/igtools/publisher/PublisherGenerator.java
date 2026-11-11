@@ -1095,12 +1095,14 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       try (FileInputStream in = new FileInputStream(Utilities.path(pf.outputDir, "package.tgz"))) {
         npm = NpmPackage.fromPackage(in);
       }
+      // (the package generator writes a manifest next to the package)
+      String[] names = {"package-combined.tgz", "package-combined.manifest.json"};
       String key = combinedPackageKey(npm);
-      if (keptArchive(key, "package-combined.tgz")) {
+      if (keptArchive(key, names)) {
         return;
       }
       gen.generateCombinedPackage(npm);
-      wroteArchive(key, "package-combined.tgz");
+      wroteArchive(key, names);
     } catch (Exception e) {
       log("Error generating combined package: "+e.getMessage());
     }
@@ -1110,8 +1112,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * -rapido: the key of the combined package. It is made from the conformance resources in the package folder of
    * package.tgz (not from the examples, or from what the template's check and the validation put in the other
    * folders), from what they refer to in the packages the build has loaded (a change in those makes the build a
-   * complete one), and from the expansion parameters. Its package.json has the time it was written, so a kept one
-   * says when it was last made. null if the package folder can't be read
+   * complete one), and from the expansion parameters. Its package.json and its manifest have the time it was written,
+   * so a kept one says when it was last made. null if the package folder can't be read
    */
   String combinedPackageKey(NpmPackage npm) {
     if (pf.rapido == null) {
@@ -5351,6 +5353,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
   private void generateZips(File df) throws Exception {
     long start = System.nanoTime();
+    writtenHashes.clear();
     if (generateExampleZip(FhirFormat.XML)) {
       generateDefinitions(FhirFormat.XML, df.getCanonicalPath());
     }
@@ -5365,6 +5368,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     generateCsvZip();
     generateExcelZip();
     generateSchematronsZip();
+    writtenHashes.clear();
     if (pf.rapido != null) {
       log("Rapido Mode: archives: " + pf.rapido.getArchives().summary() + " (" + org.hl7.fhir.utilities.DurationUtil.presentDuration(System.nanoTime() - start) + ")");
     }
@@ -5452,11 +5456,40 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     return archiveKey(kind, fileTokens(paths));
   }
 
+  /** -rapido: by format, and then by resource, the hash of the resource as this build composes it (see writtenHash()) */
+  private final Map<FhirFormat, Map<FetchedResource, String>> writtenHashes = new HashMap<>();
+
   /**
-   * the tokens of these resources, as entries named type-id.ext: each resource as the build leaves it (see
-   * RapidoTracker.writtenHash()), and the date the build stamps on the ones that have none
+   * -rapido: a hash of the resource as the build leaves it (as loaded, with its snapshot, its narrative and whatever
+   * else the build puts in it), composed in this format: what every archive that holds the resource in the format
+   * is made from. null if it can't be composed
    */
-  private Map<String, String> resourceTokens(String ext, Predicate<FetchedResource> included) {
+  private String writtenHash(FhirFormat fmt, FetchedResource r) {
+    Map<FetchedResource, String> hashes = writtenHashes.computeIfAbsent(fmt, k -> new IdentityHashMap<>());
+    String res = hashes.get(r);
+    if (res == null && r.getResource() != null) {
+      try {
+        ByteArrayOutputStream bs = new ByteArrayOutputStream();
+        if (fmt.equals(FhirFormat.JSON)) {
+          new JsonParser(pf.context.getModelContext()).compose(bs, r.getResource());
+        } else if (fmt.equals(FhirFormat.XML)) {
+          new XmlParser(pf.context.getModelContext()).compose(bs, r.getResource());
+        } else if (fmt.equals(FhirFormat.TURTLE)) {
+          new RdfParser(pf.context.getModelContext()).compose(bs, r.getResource());
+        } else {
+          return null;
+        }
+        res = new RapidoDependencyAnalyser.Hasher().add(bs.toByteArray()).finish();
+        hashes.put(r, res);
+      } catch (Exception e) {
+        return null;
+      }
+    }
+    return res;
+  }
+
+  /** the tokens of these resources, as entries named type-id.ext: each resource as the build leaves it, in the format */
+  private Map<String, String> resourceTokens(FhirFormat fmt, Predicate<FetchedResource> included) {
     if (pf.rapido == null) {
       return null;
     }
@@ -5464,9 +5497,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     for (FetchedFile f : pf.fileList) {
       for (FetchedResource r : f.getResources()) {
         if (included.test(r)) {
-          String hash = pf.rapido.writtenHash(f, r);
+          String hash = writtenHash(fmt, r);
           // (two entries with the same name: the zip can't be written)
-          if (hash == null || res.put(r.fhirType()+"-"+r.getId()+"."+ext, hash + " " + pf.rapido.getBuildDate()) != null) {
+          if (hash == null || res.put(r.fhirType()+"-"+r.getId()+"."+fmt.getExtension(), hash) != null) {
             return null;
           }
         }
@@ -5604,7 +5637,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   /**
    * -rapido: the key of the expansion files: the expansions, by the hashes that the journals have of them (so the
    * ones that come from a journal aren't parsed to tell whether the files have to be written), and the time the
-   * bundle says it was updated. Its id is random, so a kept bundle has the id of the build that wrote it
+   * bundle says it was updated. Its id is random, so a kept bundle has the id of the build that wrote it; and an
+   * expansion that was generated again with the same content has the identifier and the timestamp it was first
+   * generated with (see SavedExpansions.withoutRunDetails())
    */
   String expansionsKey() {
     String expansions = pf.rapido == null ? null : pf.expansions.key();
@@ -5724,7 +5759,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * the format), and the spec file
    */
   private Map<String, String> definitionTokens(FhirFormat fmt, String specFile) {
-    Map<String, String> res = resourceTokens(fmt.getExtension(), r -> r.getResource() instanceof CanonicalResource
+    Map<String, String> res = resourceTokens(fmt, r -> r.getResource() instanceof CanonicalResource
         && !(fmt.equals(FhirFormat.TURTLE) && !supportsRdf(r.getResource())));
     Map<String, String> spec = fileTokens(Collections.singleton(specFile));
     if (res == null || spec == null || res.put("spec.internals", spec.values().iterator().next()) != null) {
@@ -5868,7 +5903,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * spec file, the resources, and the zips of the schematrons, json schemas and shex files
    */
   private Map<String, String> validationPackTokens(byte[] versionInfo, String specFile) throws IOException {
-    Map<String, String> res = resourceTokens("json", r -> isAdditionalResource(r) || r.getResource() instanceof CanonicalResource);
+    Map<String, String> res = resourceTokens(FhirFormat.JSON, r -> isAdditionalResource(r) || r.getResource() instanceof CanonicalResource);
     Map<String, String> spec = fileTokens(Collections.singleton(specFile));
     if (res == null || spec == null) {
       return null;

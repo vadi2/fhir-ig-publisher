@@ -338,41 +338,6 @@ public class RapidoTracker {
     return archives;
   }
 
-  /** the date the loader puts on the canonical resources that have none */
-  public String getBuildDate() {
-    return buildDate;
-  }
-
-  /**
-   * A hash of the resource as this build leaves it (as loaded, with its snapshot, its narrative and whatever else the
-   * build puts in it), for the key of an archive that holds it (see {@link RapidoArchives}). The resource of a file
-   * whose rendering is reused is as it was in the last build, apart from the build date (which the key has
-   * separately), so the hash from that build stands. Any other resource is composed to make the hash. null if there
-   * is no telling what the resource holds
-   */
-  public String writtenHash(FetchedFile f, FetchedResource r) {
-    String key = keys.get(f);
-    if (key == null || r.getResource() == null) {
-      return null;
-    }
-    String rk = r.fhirType()+"/"+r.getId();
-    JsonObject now = newFile(f).forceObject("composed");
-    String res = now.asString(rk);
-    if (res == null && renderClean.contains(f)) {
-      JsonObject before = oldFiles.getJsonObject(key).getJsonObject("composed");
-      res = before == null ? null : before.asString(rk);
-    }
-    if (res == null) {
-      try {
-        res = new Hasher().add(new JsonParser(pf.context.getModelContext()).composeBytes(r.getResource())).finish();
-      } catch (Exception e) {
-        return null;
-      }
-    }
-    now.set(rk, res);
-    return res;
-  }
-
   /** the table generator uuid to reuse, so that replayed outputs and new outputs agree */
   public String getUuid() {
     return uuid;
@@ -1825,15 +1790,18 @@ public class RapidoTracker {
       }
     }
     JsonArray exp = j.forceArray("expansions");
+    List<String> stable = new ArrayList<>();
     for (ValueSet vs : pf.expansions.since(rec.expansionsBefore)) {
       try {
-        exp.add(saveExpansion(new JsonParser(pf.context.getModelContext()), vs));
+        String json = saveExpansion(new JsonParser(pf.context.getModelContext()), vs);
+        exp.add(json);
+        stable.add(SavedExpansions.withoutRunDetails(vs, json));
       } catch (Exception e) {
         return;
       }
     }
     // what stands for them in the key of the expansion files (see SavedExpansions.key())
-    String eh = SavedExpansions.hash(exp.asStrings());
+    String eh = SavedExpansions.hash(stable);
     j.set("expansionsHash", eh);
     newFile(f).set(rec.phase, j);
     pf.expansions.journaled(rec.expansionsBefore, eh);

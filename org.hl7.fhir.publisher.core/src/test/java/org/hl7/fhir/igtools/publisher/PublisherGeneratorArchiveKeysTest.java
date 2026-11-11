@@ -28,6 +28,7 @@ import java.util.zip.ZipFile;
 
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.model.ModelContext;
+import org.hl7.fhir.model.core.CanonicalResource;
 import org.hl7.fhir.model.core.CodeSystem;
 import org.hl7.fhir.model.core.ImplementationGuide;
 import org.hl7.fhir.model.core.Resource;
@@ -142,8 +143,13 @@ class PublisherGeneratorArchiveKeysTest {
         f.setSource(json);
         FetchedResource r = f.addResource(e.getKey());
         r.setElement(Manager.parseSingle(context, new ByteArrayInputStream(json), FhirFormat.JSON)).setId(e.getValue().getId());
-        // the build goes on from its own copy: the snapshot, the narrative and so on are added to it
-        r.setResource(e.getValue().copy(org.hl7.fhir.model.Base.COPY_ALL));
+        // the build goes on from its own copy: the snapshot, the narrative and so on are added to it, and the date of
+        // the build if it has none
+        Resource res = e.getValue().copy(org.hl7.fhir.model.Base.COPY_ALL);
+        if (res instanceof CanonicalResource && !((CanonicalResource) res).hasDate()) {
+          ((CanonicalResource) res).setDate(time.getTime());
+        }
+        r.setResource(res);
         pf.fileList.add(f);
       }
       pf.rapido = new RapidoTracker(pf);
@@ -226,12 +232,15 @@ class PublisherGeneratorArchiveKeysTest {
   }
 
   @Test
-  void aCleanFileIsNotComposedToMakeTheKey() throws Exception {
+  void whatTheBuildPutsInAFileItFoundUnchangedIsInTheKeys() throws Exception {
     String[] first = firstBuild();
     Build b = differentialBuild();
-    // (not something a build does to a file it found unchanged: it shows that the hash is the last build's)
-    ((CodeSystem) b.resource("CodeSystem-other").getResource()).setTitle("not looked at");
-    assertEquals(first[0], b.definitions());
+    assertEquals(0, b.pf.rapido.countRenderDirty());
+    // the file is as it was, but this build leaves its resource another way (a complete build renders every value
+    // set, a differential build only some of them, and rendering one changes it)
+    ((CodeSystem) b.resource("CodeSystem-other").getResource()).setTitle("added by the build");
+    assertNotEquals(first[0], b.definitions());
+    assertNotEquals(first[1], b.pack());
   }
 
   @Test
@@ -303,6 +312,7 @@ class PublisherGeneratorArchiveKeysTest {
     later.add(Calendar.MINUTE, 5);
     Build b = new Build(later);
     assertFalse(b.pf.rapido.isCompleteBuild(), b.pf.rapido.getReason());
+    assertEquals(0, b.pf.rapido.countRenderDirty());
     assertNotEquals(first[0], b.definitions());
     assertNotEquals(first[1], b.pack());
   }
@@ -320,13 +330,13 @@ class PublisherGeneratorArchiveKeysTest {
   }
 
   @Test
-  void aResourceThatCannotBeToldHasNoKey() throws Exception {
+  void twoResourcesUnderTheSameNameHaveNoKey() throws Exception {
     Build b = new Build(DAY);
-    // not one of the build's files, so nothing is known about it
-    FetchedFile f = new FetchedFile("regenerated");
+    // the zip can't be written with two entries of the same name, so there is nothing to keep
+    FetchedFile f = new FetchedFile("again");
     FetchedResource r = f.addResource("x");
     r.setResource(codeSystem("q"));
-    r.setId("q");
+    r.setId("cs");
     b.pf.fileList.add(f);
     assertNull(b.definitions());
     assertNull(b.pack());
@@ -522,5 +532,33 @@ class PublisherGeneratorArchiveKeysTest {
       assertNotEquals(THEN, time(name), name);
     }
     assertTrue(new String(Files.readAllBytes(root.resolve("output").resolve("expansions.xml")), StandardCharsets.UTF_8).contains("\"c2\""));
+  }
+
+  /** the build generates a file that makes this expansion, and journals it */
+  private String expansionsKeyOf(Build b, String identifier, String... codes) throws Exception {
+    ValueSet vs = new ValueSet();
+    vs.setId("a");
+    vs.setUrl("http://example.org/fhir/ValueSet/a");
+    vs.getExpansion().setIdentifier(identifier);
+    vs.getExpansion().setTimestampElement(new org.hl7.fhir.model.core.DateTimeType("2026-03-04T10:00:" + identifier.substring(identifier.length() - 2) + "Z"));
+    for (String c : codes) {
+      vs.getExpansion().addContains().setSystem("http://example.org/fhir/CodeSystem/cs").setCode(c);
+    }
+    FetchedFile f = b.pf.fileList.get(1);
+    b.pf.rapido.startRecording(f, RapidoTracker.PHASE_HTML);
+    b.pf.expansions.add(vs);
+    b.pf.rapido.stopRecording();
+    return b.generator.expansionsKey();
+  }
+
+  @Test
+  void anExpansionGeneratedAgainWithTheSameContentKeepsTheKey() throws Exception {
+    String key = expansionsKeyOf(new Build(DAY), "urn:uuid:11", "a", "b");
+    assertNotNull(key);
+    // the same codes, generated again: only its identifier and timestamp are new
+    assertEquals(key, expansionsKeyOf(new Build(DAY), "urn:uuid:22", "a", "b"));
+    // the value set is the same, but its code system has another code now
+    assertNotEquals(key, expansionsKeyOf(new Build(DAY), "urn:uuid:33", "a", "b", "c"));
+    assertNotEquals(key, expansionsKeyOf(new Build(DAY), "urn:uuid:11", "a"));
   }
 }
