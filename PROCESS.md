@@ -68,6 +68,12 @@ package + zips 15-17, html check + AI + full-ig.zip ~65. The stacked work brings
   output/Observation-blood-pressure-example.json. page edit: a sentence in a page under input/pagecontent.
   Time each from the edit to "Finished @" in the log (and to whatever your idea makes earlier), and check the
   edited text is in output. Sessions base, change, change, base (interleaved). Same flags for both jars.
+- OOM FIX (verified by the orchestrator 14:50 UTC): the memory cgroup caps RAM at 14.3 GB but swap is not capped
+  (memory.memsw.limit_in_bytes is unlimited) and root can add swap. Before any IG build run:
+  `fallocate -l 16G /home/user/swapfile && chmod 600 /home/user/swapfile && mkswap /home/user/swapfile && swapon /home/user/swapfile`
+  Then the cgroup swaps cold pages instead of killing java or Jekyll. Use the same heap for both jars (-Xmx9g is a
+  reasonable start; 7g ran out of heap), and watch `vmstat 5` si/so during measured rebuilds: if swapping is more
+  than a trickle, lower the heap and say so.
 - Memory: the VM has 15 GB and 4 CPUs. -Xmx10g was OOM-killed by the cgroup in earlier sessions (java RSS ~12 GB +
   Jekyll ~1.9 GB). Start with -Xmx7g; if that doesn't work find the largest heap that does and say which you used.
   One publisher at a time. If `bench-recipe.md` is on the notes branch, use its settings and driver script.
