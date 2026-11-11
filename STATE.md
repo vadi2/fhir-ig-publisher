@@ -128,3 +128,5 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   passes on base, message rapido-state to look again. replay-stamp dropped itself (duplicate of #39), cost ~1 USD.
   One PR slot is free (9 owners). Decision: do NOT fill it now (quota warning; reserve ideas are tail-only and would
   conflict with tail-restart/early-publish). If tail-restart drops, launch opp 6 (full-ig.zip beside QA) from base.
+- 20:40: ParallelFolderZipTest on the base @a4d1e90f in my checkout: 16 run, 2 errors, the same two tests and the same
+  InvalidPathException as PR #39 reports -> pre-existing (POSIX locale), not from #39. Added to PROCESS.md rule 3.

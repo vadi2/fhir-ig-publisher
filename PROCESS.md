@@ -31,6 +31,8 @@ package + zips 15-17, html check + AI + full-ig.zip ~65. The stacked work brings
 3. Tests: mutation-checked (every new test fails with its change reverted). Run the org.hl7.fhir.publisher.core
    suite in full. Known on this VM: GitUtilitiesTests.testGetGitSource[4] fails on the base too (git URL rewrite);
    5 tests need a non-root user. Failures already on the base are not yours: note them.
+   Also on the base (checked by the orchestrator): ParallelFolderZipTest.entriesAreOnlyTheFilesAndTheRedirect and
+   .sameEntriesInTheSameOrderAsZipGenerator error with InvalidPathException (non-ASCII file name, POSIX locale).
 4. Benchmark A/B: base jar vs your jar, interleaved sessions, >= 3 rebuilds of each edit kind each, medians. Never
    invent or extrapolate numbers. If it can't run, write "bench: pending (why)" in the PR.
 5. Review loop (after tests and bench, before the PR), with the PR review toolkit, NOT the built-in /code-review:
