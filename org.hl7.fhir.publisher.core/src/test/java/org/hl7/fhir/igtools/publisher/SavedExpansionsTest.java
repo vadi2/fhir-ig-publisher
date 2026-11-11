@@ -168,4 +168,19 @@ class SavedExpansionsTest {
     assertEquals("{}", SavedExpansions.withoutRunDetails(new ValueSet(), "{}"));
     assertEquals("{}", SavedExpansions.withoutRunDetails(one, "{}"));
   }
+
+  @Test
+  void whenAnExpansionWasMadeIsTakenOutOfAnyJson() {
+    String compact = "{\"resourceType\":\"ValueSet\",\"expansion\":{\"identifier\":\"urn:uuid:1\",\"timestamp\":\"2026-03-04T10:00:00Z\",\"total\":2}}";
+    String later = "{\"resourceType\":\"ValueSet\",\"expansion\":{\"identifier\":\"urn:uuid:2\",\"timestamp\":\"2026-03-04T11:00:00Z\",\"total\":2}}";
+    String other = "{\"resourceType\":\"ValueSet\",\"expansion\":{\"identifier\":\"urn:uuid:1\",\"timestamp\":\"2026-03-04T10:00:00Z\",\"total\":3}}";
+    assertEquals(SavedExpansions.withoutRunDetails(compact), SavedExpansions.withoutRunDetails(later));
+    assertNotEquals(SavedExpansions.withoutRunDetails(compact), SavedExpansions.withoutRunDetails(other));
+    assertTrue(SavedExpansions.withoutRunDetails(compact).contains("\"total\":2"));
+    String pretty = "{\n  \"expansion\" : {\n    \"identifier\" : \"urn:uuid:1\",\n    \"timestamp\" : \"2026-03-04T10:00:00Z\",\n    \"total\" : 2\n  }\n}";
+    assertEquals(pretty.replace("urn:uuid:1", "").replace("2026-03-04T10:00:00Z", ""), SavedExpansions.withoutRunDetails(pretty));
+    // only the expansion's own: an identifier anywhere else stays
+    String elsewhere = "{\"identifier\":\"urn:uuid:1\",\"timestamp\":\"2026-03-04T10:00:00Z\",\"expansion\":{\"total\":2}}";
+    assertEquals(elsewhere, SavedExpansions.withoutRunDetails(elsewhere));
+  }
 }

@@ -265,6 +265,42 @@ class PublisherGeneratorArchiveKeysTest {
     assertNotEquals(key, b.definitions());
   }
 
+  /** the value set of the IG, expanded by the build: its expansion is in the resource the build leaves */
+  private Build withExpansion(String identifier, String time, String... codes) throws Exception {
+    Build b = differentialBuild();
+    ValueSet vs = (ValueSet) b.resource("ValueSet-vs").getResource();
+    vs.getExpansion().setIdentifier(identifier);
+    vs.getExpansion().setTimestampElement(new org.hl7.fhir.model.core.DateTimeType(time));
+    for (String c : codes) {
+      vs.getExpansion().addContains().setSystem("http://example.org/fhir/CodeSystem/cs").setCode(c);
+    }
+    return b;
+  }
+
+  @Test
+  void whenAValueSetWasExpandedIsNotInTheKeys() throws Exception {
+    firstBuild();
+    Build b = withExpansion("urn:uuid:1", "2026-03-04T10:00:00Z", "a", "b");
+    String definitions = b.definitions();
+    String pack = b.pack();
+    // making the key leaves the resource as it was
+    ValueSet vs = (ValueSet) b.resource("ValueSet-vs").getResource();
+    assertEquals("urn:uuid:1", vs.getExpansion().getIdentifier());
+    assertEquals("2026-03-04T10:00:00Z", vs.getExpansion().getTimestampElement().asStringValue());
+
+    // every build expands it again: the same codes, with a new identifier and timestamp
+    Build again = withExpansion("urn:uuid:2", "2026-03-04T10:07:00Z", "a", "b");
+    assertEquals(definitions, again.definitions());
+    assertEquals(pack, again.pack());
+    assertEquals(definitions, again.generator.definitionsKey(FhirFormat.JSON, spec.toString()), "and once more in the same build");
+
+    Build other = withExpansion("urn:uuid:1", "2026-03-04T10:00:00Z", "a", "b", "c");
+    assertNotEquals(definitions, other.definitions());
+    assertNotEquals(pack, other.pack());
+    Build xml = withExpansion("urn:uuid:3", "2026-03-04T10:09:00Z", "a", "b");
+    assertEquals(b.generator.definitionsKey(FhirFormat.XML, spec.toString()), xml.generator.definitionsKey(FhirFormat.XML, spec.toString()));
+  }
+
   @Test
   void anAddedResourceChangesTheKeys() throws Exception {
     String[] first = firstBuild();
@@ -406,6 +442,10 @@ class PublisherGeneratorArchiveKeysTest {
 
   /** a package.tgz with a profile in the package folder, an example, and what the checks put in the other folder */
   private NpmPackage packageTgz(String profile, String example, String validation) throws Exception {
+    return packageTgz(profile, example, validation, "urn:uuid:1", "a");
+  }
+
+  private NpmPackage packageTgz(String profile, String example, String validation, String expansionId, String code) throws Exception {
     Path tgz = dir.resolve("package.tgz");
     Files.deleteIfExists(tgz);
     org.hl7.fhir.utilities.json.model.JsonObject npm = new org.hl7.fhir.utilities.json.model.JsonObject();
@@ -414,6 +454,9 @@ class PublisherGeneratorArchiveKeysTest {
     NPMPackageGenerator gen = new NPMPackageGenerator(tgz.toString(), npm, DAY.getTime(), true);
     gen.addFile(NPMPackageGenerator.Category.RESOURCE, "StructureDefinition-p.json",
         ("{\"resourceType\":\"StructureDefinition\",\"id\":\"p\",\"title\":\"" + profile + "\"}").getBytes(StandardCharsets.UTF_8));
+    gen.addFile(NPMPackageGenerator.Category.RESOURCE, "ValueSet-v.json",
+        ("{\"resourceType\":\"ValueSet\",\"id\":\"v\",\"expansion\":{\"identifier\":\"" + expansionId + "\",\"timestamp\":\"2026-03-04T10:00:0"
+            + expansionId.substring(expansionId.length() - 1) + "Z\",\"contains\":[{\"code\":\"" + code + "\"}]}}").getBytes(StandardCharsets.UTF_8));
     gen.addFile(NPMPackageGenerator.Category.EXAMPLE, "Patient-e.json",
         ("{\"resourceType\":\"Patient\",\"id\":\"e\",\"gender\":\"" + example + "\"}").getBytes(StandardCharsets.UTF_8));
     gen.addFile(NPMPackageGenerator.Category.OTHER, "validation-summary.json", validation.getBytes(StandardCharsets.UTF_8));
@@ -433,6 +476,9 @@ class PublisherGeneratorArchiveKeysTest {
     // an example, and what the validation and the template's check say, aren't read to make it
     assertEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "female", "{\"errors\":1}")));
     assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("another profile", "male", "{}")));
+    // a value set expanded again with the same codes, and one with another code
+    assertEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}", "urn:uuid:2", "a")));
+    assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}", "urn:uuid:1", "b")));
     b.pf.sourceIg.setPackageId("example.other");
     assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
     b.pf.rapido = null;

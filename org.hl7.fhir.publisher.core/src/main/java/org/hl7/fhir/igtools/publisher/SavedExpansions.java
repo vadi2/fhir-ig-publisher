@@ -3,6 +3,7 @@ package org.hl7.fhir.igtools.publisher;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.Hasher;
 import org.hl7.fhir.model.core.formats.JsonParser;
@@ -96,6 +97,17 @@ public class SavedExpansions {
       res = blank(res, "\"timestamp\":\"", vs.getExpansion().getTimestampElement().asStringValue());
     }
     return res;
+  }
+
+  private static final Pattern RUN_DETAILS = Pattern.compile(
+      "(\"expansion\"\\s*:\\s*\\{\\s*\"identifier\"\\s*:\\s*\")[^\"]*(\"\\s*,\\s*\"timestamp\"\\s*:\\s*\")[^\"]*\"");
+
+  /**
+   * As withoutRunDetails(vs, json), for the JSON of a value set however it is laid out: without the identifier and
+   * the timestamp at the start of its expansion
+   */
+  public static String withoutRunDetails(String json) {
+    return RUN_DETAILS.matcher(json).replaceFirst("$1$2\"");
   }
 
   /** json without the value that follows the first before, if that is how it reads there */

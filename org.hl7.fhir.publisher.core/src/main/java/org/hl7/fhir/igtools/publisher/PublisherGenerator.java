@@ -1133,7 +1133,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         if (e.getValue() == null) {
           return null;
         }
-        h.add(e.getKey()).add(e.getValue());
+        h.add(e.getKey());
+        if (e.getKey().startsWith("ValueSet-")) {
+          // as in writtenHash(): not when its expansion was made
+          h.add(SavedExpansions.withoutRunDetails(new String(e.getValue(), StandardCharsets.UTF_8)));
+        } else {
+          h.add(e.getValue());
+        }
       }
       return h.finish();
     } catch (Exception e) {
@@ -5462,13 +5468,23 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   /**
    * -rapido: a hash of the resource as the build leaves it (as loaded, with its snapshot, its narrative and whatever
    * else the build puts in it), composed in this format: what every archive that holds the resource in the format
-   * is made from. null if it can't be composed
+   * is made from. A value set of the IG has its expansion in it, with the identifier and the timestamp of when it was
+   * expanded: every build gives it new ones, so they are left out (an archive that is kept has the expansion as it
+   * was made for the build that wrote it). null if the resource can't be composed
    */
   private String writtenHash(FhirFormat fmt, FetchedResource r) {
     Map<FetchedResource, String> hashes = writtenHashes.computeIfAbsent(fmt, k -> new IdentityHashMap<>());
     String res = hashes.get(r);
     if (res == null && r.getResource() != null) {
+      ValueSet.ValueSetExpansionComponent expansion = r.getResource() instanceof ValueSet && ((ValueSet) r.getResource()).hasExpansion()
+          ? ((ValueSet) r.getResource()).getExpansion() : null;
+      UriType identifier = expansion == null || !expansion.hasIdentifierElement() ? null : expansion.getIdentifierElement();
+      DateTimeType timestamp = expansion == null || !expansion.hasTimestampElement() ? null : expansion.getTimestampElement();
       try {
+        if (expansion != null) {
+          expansion.setIdentifierElement(null);
+          expansion.setTimestampElement(null);
+        }
         ByteArrayOutputStream bs = new ByteArrayOutputStream();
         if (fmt.equals(FhirFormat.JSON)) {
           new JsonParser(pf.context.getModelContext()).compose(bs, r.getResource());
@@ -5483,6 +5499,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         hashes.put(r, res);
       } catch (Exception e) {
         return null;
+      } finally {
+        if (expansion != null) {
+          expansion.setIdentifierElement(identifier);
+          expansion.setTimestampElement(timestamp);
+        }
       }
     }
     return res;
