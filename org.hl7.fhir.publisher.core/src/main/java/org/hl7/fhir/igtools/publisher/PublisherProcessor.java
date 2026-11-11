@@ -1238,9 +1238,6 @@ public class PublisherProcessor extends PublisherBase  {
       // what generating a narrative leaves in the context can't be seen: every narrative is generated
       records = null;
     }
-    if (!isRegen) {
-      narrativesPutBack.clear();
-    }
     int reused = 0;
     for (FetchedFile f : pf.changeList) {
       f.start("generateNarratives");
@@ -1470,14 +1467,13 @@ public class PublisherProcessor extends PublisherBase  {
       systems = new ArrayList<>();
       unknown = new ArrayList<>();
       for (String system : used) {
-        if (system != null) { // a value set that only takes in other value sets is noted as using no system
-          systems.add(system);
-          if (unknownSystems.contains(system)) {
-            unknown.add(system);
-          }
+        systems.add(system);
+        // (a value set that only takes in other value sets is noted as using a system that is null)
+        if (system != null && unknownSystems.contains(system)) {
+          unknown.add(system);
         }
       }
-      Collections.sort(systems);
+      systems.sort(Comparator.nullsFirst(Comparator.naturalOrder()));
       Collections.sort(unknown);
       used.addAll(systemsBefore);
     }
@@ -1503,7 +1499,7 @@ public class PublisherProcessor extends PublisherBase  {
     }
   }
 
-  /** the key of an element with its narrative: all that is written from it (see RapidoNativeOutputs.contentKey) */
+  /** the key of an element that has its narrative generated on it, with the narrative: all that is written from it (see RapidoNativeOutputs.contentKey) */
   private static String narrativeKey(Element e) {
     RapidoDependencyAnalyser.Hasher h = new RapidoDependencyAnalyser.Hasher();
     RapidoNativeOutputs.contentKey(h, e);
@@ -1522,6 +1518,17 @@ public class PublisherProcessor extends PublisherBase  {
       return null;
     }
     try {
+      if (note.onResource) {
+        Narrative n = ((DomainResource) r.getResource()).getText();
+        Set<String> data = n.getUserDataNames();
+        boolean marked = data.contains(UserDataNames.renderer_is_generated);
+        if (n.hasId() || n.hasExtension() || !n.hasStatus() || n.getStatusElement().hasId() || n.getStatusElement().hasExtension() || !n.hasDiv()
+            || data.size() != (marked ? 1 : 0) || (marked && !Boolean.TRUE.equals(n.getUserData(UserDataNames.renderer_is_generated)))) {
+          return null;
+        }
+        XhtmlNode tree = RapidoNarratives.copy(n.getDiv());
+        return tree == null ? null : new RapidoNarratives.ResourceRecord(r.fhirType(), r.getId(), true, n.getStatus().toCode(), tree, marked, note.systems, note.unknown, null);
+      }
       Element e = r.getElement();
       List<Element> texts = e.getChildrenByName("text");
       if (texts.size() != 1) {
@@ -1534,31 +1541,11 @@ public class PublisherProcessor extends PublisherBase  {
       Element status = text.getChildList().get(0);
       Element div = text.getChildList().get(1);
       if (!"status".equals(status.getName()) || status.hasChildren() || status.hasComments() || status.getValue() == null
-          || !"div".equals(div.getName()) || !div.isXhtml() || div.hasChildren() || div.hasComments() || div.getXhtml() == null) {
+          || !"div".equals(div.getName()) || !div.isXhtml() || div.hasChildren() || div.hasComments() || div.getXhtml() == null || div.getXhtmlSource() != null) {
         return null;
       }
-      XhtmlNode tree;
-      boolean marked = false;
-      if (note.onResource) {
-        Narrative n = ((DomainResource) r.getResource()).getText();
-        Set<String> data = n.getUserDataNames();
-        marked = data.contains(UserDataNames.renderer_is_generated);
-        if (n.hasId() || n.hasExtension() || !n.hasStatus() || n.getStatusElement().hasId() || n.getStatusElement().hasExtension() || !n.hasDiv()
-            || !status.getValue().equals(n.getStatus().toCode()) || div.getXhtmlSource() == null
-            || data.size() != (marked ? 1 : 0) || (marked && !Boolean.TRUE.equals(n.getUserData(UserDataNames.renderer_is_generated)))) {
-          return null;
-        }
-        tree = RapidoNarratives.copy(n.getDiv());
-      } else {
-        if (div.getXhtmlSource() != null) {
-          return null;
-        }
-        tree = RapidoNarratives.copy(div.getXhtml());
-      }
-      if (tree == null) {
-        return null;
-      }
-      return new RapidoNarratives.ResourceRecord(r.fhirType(), r.getId(), note.onResource, status.getValue(), tree, div.getXhtmlSource(), marked, note.systems, note.unknown, narrativeKey(e));
+      XhtmlNode tree = RapidoNarratives.copy(div.getXhtml());
+      return tree == null ? null : new RapidoNarratives.ResourceRecord(r.fhirType(), r.getId(), false, status.getValue(), tree, false, note.systems, note.unknown, narrativeKey(e));
     } catch (RuntimeException ex) {
       return null;
     }
@@ -1566,9 +1553,10 @@ public class PublisherProcessor extends PublisherBase  {
 
   /**
    * -rapido: puts the narrative that was generated for the resource in an earlier build back on it, as generating it
-   * would leave the resource: on a resource that is loaded as one, the narrative on the resource and a new element with
-   * the narrative as text; on any other, the narrative on its element. That is only right if the element then is what
-   * it was when the narrative was recorded, so its key is checked.
+   * would leave the resource. On a resource that is loaded as one, the narrative goes on the resource, which is then
+   * converted to an element as it is when the narrative is generated: only rendering is left out. On any other, the
+   * narrative goes on its element, and that is only right if the element then is what it was when the narrative was
+   * recorded, so its key is checked.
    *
    * @return false if nothing was done: then the narrative is generated
    */
@@ -1582,32 +1570,9 @@ public class PublisherProcessor extends PublisherBase  {
         || before == null || before.hasChild("text") || (onResource ? ((DomainResource) r.getResource()).hasText() : !isDomainResource(r))) {
       return false;
     }
-    if (onResource && before.getFormat() != FhirFormat.JSON) {
-      // converting gives an element read from json, and the resource's content type is its element's format
-      return false;
-    }
     Element text = null;
     try {
       if (onResource) {
-        // as converting the resource gives the element: read from json, the narrative from its text
-        JsonObject t = new JsonObject();
-        t.add("status", last.status);
-        t.add("div", last.source);
-        JsonObject j = new JsonObject();
-        j.add("resourceType", before.fhirType());
-        j.add("text", t);
-        byte[] cnt = org.hl7.fhir.utilities.json.parser.JsonParser.composeBytes(j);
-        Element read = new org.hl7.fhir.services.elementmodel.JsonParser(pf.context).parseSingle(new ByteArrayInputStream(cnt), null);
-        text = read == null ? null : read.getNamedChild("text");
-        if (text == null) {
-          return false;
-        }
-        Element e = (Element) before.copy(Base.COPY_NOTHING);
-        addNarrative(e, text);
-        e.numberChildren(); // as the parser does: a copy has no indexes
-        if (!last.key.equals(narrativeKey(e))) {
-          return false;
-        }
         // as ResourceWrapperNative.setNarrative leaves the resource
         DomainResource dr = (DomainResource) r.getResource();
         dr.setText(new Narrative());
@@ -1616,10 +1581,11 @@ public class PublisherProcessor extends PublisherBase  {
           dr.getText().setUserData(UserDataNames.renderer_is_generated, true);
         }
         dr.getText().setDiv(last.div);
+        // and then as generateNarratives goes on
+        Element e = convertToElement(r, dr);
         r.setGeneratedNarrative(true);
         e.copyUserData(before);
         r.setElement(e);
-        narrativesPutBack.add(r);
         usedSystems(last);
         return true;
       }
@@ -1681,25 +1647,6 @@ public class PublisherProcessor extends PublisherBase  {
   private void usedSystems(RapidoNarratives.ResourceRecord last) {
     pf.context.getCodeSystemsUsed().addAll(last.systems);
     unknownSystems.addAll(last.unknown);
-  }
-
-  /**
-   * -rapido: the resources whose element is a copy of the one they were loaded with, with the narrative put back. All
-   * that is written from it is what converting the resource gives, but not where each element is in the json, which
-   * the validator's messages have
-   */
-  private final Set<FetchedResource> narrativesPutBack = Collections.newSetFromMap(new IdentityHashMap<>());
-
-  /**
-   * Before a resource is validated: if its narrative was put back, its element is made as generating the narrative
-   * makes it, by converting the resource (which has the narrative)
-   */
-  void elementToValidate(FetchedResource r) throws Exception {
-    if (narrativesPutBack.remove(r)) {
-      Element e = convertToElement(r, r.getResource());
-      e.copyUserData(r.getElement());
-      r.setElement(e);
-    }
   }
 
   /** where the narrative of a resource goes: after id, meta, implicitRules and language */
@@ -2107,7 +2054,6 @@ public class PublisherProcessor extends PublisherBase  {
     }
     TimeTracker.Session tts = pf.tt.start("validation");
     List<ValidationMessage> errs = new ArrayList<ValidationMessage>();
-    elementToValidate(r);
     r.getElement().setUserData(UserDataNames.pub_context_file, file);
     r.getElement().setUserData(UserDataNames.pub_context_resource, r);
     pf.validator.setExample(r.isExample());

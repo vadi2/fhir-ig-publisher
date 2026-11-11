@@ -30,11 +30,11 @@ import org.hl7.fhir.utilities.xhtml.XhtmlNode;
  * the resource and converting it again.
  *
  * <p>A {@link FileRecord} holds, for each resource of the file that a narrative was generated for, the narrative as
- * the renderer built it (the tree itself, node for node: reading xhtml back from text is not the same tree), for
- * a resource that is converted to an element afterwards, the text of the narrative as that element holds it, and
- * the code systems that generating it used, which the worker context keeps for the build. With
- * them is a key of the whole element once it had its narrative (see {@link RapidoNativeOutputs#contentKey}): the
- * narrative is only put back if the element then has that key again.
+ * the renderer built it (the tree itself, node for node: reading xhtml back from text is not the same tree), and the
+ * code systems that generating it used, which the worker context keeps for the build. For a resource whose narrative
+ * is generated on its element, a key of the whole element once it had its narrative is with them (see
+ * {@link RapidoNativeOutputs#contentKey}): the narrative is only put back if the element then has that key again. A
+ * resource whose narrative is generated on the resource is converted to an element afterwards, put back or generated.
  *
  * <p>Each record has an id of its own, which the Rapido state names once the build that wrote or used the record has
  * finished. A record that the state doesn't name was written by a build that didn't finish, and is not used.
@@ -55,25 +55,21 @@ public class RapidoNarratives {
     final String status;
     /** the narrative as the renderer built it */
     final XhtmlNode div;
-    /** onResource: the narrative as the text the element has for it */
-    final String source;
     /** onResource: the narrative on the resource is marked as generated (it is when there is more than one language) */
     final boolean marked;
     /** the code systems that generating the narrative used (the worker context keeps the ones a build used) */
     final List<String> systems;
     /** those of them that the terminology server didn't know (the worker context keeps those for a build as well) */
     final List<String> unknown;
-    /** the key of the element with its narrative */
+    /** not onResource: the key of the element with its narrative */
     final String key;
 
-    ResourceRecord(String type, String id, boolean onResource, String status, XhtmlNode div, String source, boolean marked, List<String> systems, List<String> unknown,
-        String key) {
+    ResourceRecord(String type, String id, boolean onResource, String status, XhtmlNode div, boolean marked, List<String> systems, List<String> unknown, String key) {
       this.type = type;
       this.id = id;
       this.onResource = onResource;
       this.status = status;
       this.div = div;
-      this.source = source;
       this.marked = marked;
       this.systems = systems;
       this.unknown = unknown;
@@ -142,7 +138,6 @@ public class RapidoNarratives {
           string(out, r.id);
           out.writeBoolean(r.onResource);
           string(out, r.status);
-          string(out, r.source);
           out.writeBoolean(r.marked);
           strings(out, r.systems);
           strings(out, r.unknown);
@@ -190,12 +185,11 @@ public class RapidoNarratives {
           String rid = string(in);
           boolean onResource = in.readBoolean();
           String status = string(in);
-          String source = string(in);
           boolean marked = in.readBoolean();
           List<String> systems = strings(in);
           List<String> unknown = strings(in);
           String key = string(in);
-          rec.resources.add(new ResourceRecord(type, rid, onResource, status, readNode(in, 0), source, marked, systems, unknown, key));
+          rec.resources.add(new ResourceRecord(type, rid, onResource, status, readNode(in, 0), marked, systems, unknown, key));
         }
       }
       return in.readInt() == VERSION && in.read() == -1 ? rec : null;

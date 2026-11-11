@@ -386,11 +386,14 @@ class NarrativeReuseTest {
     return b.append(">").toString();
   }
 
-  /** what of an element isn't its content: the index of each child in its list (the turtle format writes it), its web path */
+  /**
+   * what of an element isn't its content: the index of each child in its list (the turtle format writes it), its web
+   * path, its format, its path, and where it was in what it was read from (the validator's messages say)
+   */
   private static String shape(Element e) {
     StringBuilder b = new StringBuilder();
     b.append("(").append(e.getName()).append(" ").append(e.getIndex()).append(" ").append(e.getWebPath()).append(" ").append(e.getSpecial())
-        .append(" ").append(e.getFormat()).append(" ").append(e.getPath());
+        .append(" ").append(e.getFormat()).append(" ").append(e.getPath()).append(" ").append(e.line()).append(":").append(e.col());
     for (Element c : e.getChildList()) {
       b.append(shape(c));
     }
@@ -497,11 +500,11 @@ class NarrativeReuseTest {
 
   /**
    * The loader changed the code system (it does: a publisher, a date, a version) without converting it to an element
-   * again. Generating the narrative converts it, so the element then has the change; the element as loaded with the
-   * narrative put back wouldn't
+   * again. Generating the narrative converts it, so the element then has the change: with the narrative put back
+   * the resource is converted just the same
    */
   @Test
-  void aNarrativeIsGeneratedWhenTheElementWouldNotBeTheOneGeneratingGives() throws Exception {
+  void aResourceIsConvertedToItsElementWhenItsNarrativeIsPutBack() throws Exception {
     Map<String, String> sources = sources("All the colours");
     Consumer<FetchedResource> loaded = r -> {
       if (r.getResource() instanceof CodeSystem) {
@@ -515,7 +518,7 @@ class NarrativeReuseTest {
     Build second = build(sources);
     second.loaded = loaded;
     second.run();
-    assertEquals(1, second.rendered, "the code system");
+    assertEquals(0, second.rendered);
     Build fresh = new Build(Files.createTempDirectory(dir, "fresh"), sources);
     fresh.loaded = loaded;
     assertSameState(fresh.run(), second);
@@ -604,39 +607,6 @@ class NarrativeReuseTest {
     assertSameState(fresh(sources), second);
   }
 
-  /**
-   * A resource whose narrative was put back is validated after all (what the validator says depends on what it has
-   * seen before): its messages say where in the converted resource they are, so the element is the converted one
-   */
-  @Test
-  void aResourceThatIsValidatedHasTheElementThatGeneratingGives() throws Exception {
-    Map<String, String> sources = sources("All the colours");
-    build(sources).run().finish();
-
-    Build second = build(sources).run();
-    assertEquals(0, second.rendered);
-    Build fresh = fresh(sources);
-    assertNotEquals(positions(fresh.resource(CS).getElement()), positions(second.resource(CS).getElement()));
-    java.lang.reflect.Method validate = PublisherProcessor.class.getDeclaredMethod("validate", FetchedFile.class, FetchedResource.class, boolean.class);
-    validate.setAccessible(true);
-    for (Build b : new Build[] {fresh, second}) {
-      b.pf.validator = mock(org.hl7.fhir.validation.instance.InstanceValidator.class);
-      b.pf.validationFetcher = mock(ValidationServices.class);
-      for (FetchedFile f : b.pf.fileList) {
-        for (FetchedResource r : f.getResources()) {
-          validate.invoke(b.processor, f, r, false);
-          // what the validator was given is the resource's element
-          org.mockito.Mockito.verify(b.pf.validator).validate(org.mockito.ArgumentMatchers.same(r.getElement()), any(), any(), org.mockito.ArgumentMatchers.same(r.getElement()), any(java.util.List.class));
-          assertTrue(r.getElement().hasUserData(UserDataNames.pub_context_resource));
-        }
-      }
-    }
-    for (String file : sources.keySet()) {
-      assertEquals(positions(fresh.resource(file).getElement()), positions(second.resource(file).getElement()), file);
-    }
-    assertSameState(fresh, second);
-  }
-
   /** what is reported more than once in a build is counted each time, though the build only gets it once */
   @Test
   void theKnowledgeProviderCountsWhatItDoesNotReportAgain() throws Exception {
@@ -653,21 +623,12 @@ class NarrativeReuseTest {
     assertEquals(2, pkp.getReportCount());
   }
 
-  private static String positions(Element e) {
-    StringBuilder b = new StringBuilder();
-    b.append("(").append(e.line()).append(":").append(e.col());
-    for (Element c : e.getChildList()) {
-      b.append(positions(c));
-    }
-    return b.append(")").toString();
-  }
-
   /**
    * A resource that is loaded from xml and not changed by the loader has the element read from the xml until its
-   * narrative is generated, and one read from json after: the content is the same, but it isn't the same element
+   * narrative is generated, and one read from json after: the same when the narrative is put back
    */
   @Test
-  void aNarrativeIsGeneratedForAResourceWhoseElementWasReadFromXml() throws Exception {
+  void aResourceReadFromXmlHasTheConvertedElementWhenItsNarrativeIsPutBack() throws Exception {
     Map<String, String> sources = sources("All the colours");
     sources.put(CS, "<CodeSystem xmlns=\"http://hl7.org/fhir\"><id value=\"colours\"/><url value=\"http://example.org/ig/CodeSystem/colours\"/><version value=\"1.0.0\"/>"
         + "<name value=\"Colours\"/><title value=\"Colour codes\"/><status value=\"active\"/><caseSensitive value=\"true\"/><content value=\"complete\"/>"
@@ -675,8 +636,9 @@ class NarrativeReuseTest {
     build(sources).run().finish();
 
     Build second = build(sources).run();
-    assertEquals(1, second.rendered, "the code system");
+    assertEquals(0, second.rendered);
     assertSameState(fresh(sources), second);
+    assertTrue(second.state().get(CS + " colours element shape").contains("JSON"));
   }
 
   /**
@@ -687,6 +649,14 @@ class NarrativeReuseTest {
   void theCodeSystemsANarrativeUsedAreUsedWhenItIsPutBack() throws Exception {
     boolean[] loinc = {true};
     everyBuild = pf -> {
+      if (loinc[0]) {
+        // found not to be known before the narratives are generated: no narrative has anything to do with it
+        try {
+          unknownSystems().add("http://example.org/other");
+        } catch (Exception e) {
+          throw new IllegalStateException(e);
+        }
+      }
       doAnswer(inv -> {
         if (loinc[0] && inv.getArgument(0) instanceof CodeSystem) {
           context.getCodeSystemsUsed().add("http://loinc.org");
@@ -701,9 +671,6 @@ class NarrativeReuseTest {
           context.getCodeSystemsUsed().add("http://example.org/unknown");
           unknownSystems().add("http://example.org/unknown");
           context.getCodeSystemsUsed().add(null);
-        } else if ("p".equals(w.getId())) {
-          // found not to be known by something else (validation, say): generating this narrative has nothing to do with it
-          unknownSystems().add("http://example.org/other");
         }
         return inv.callRealMethod();
       }).when(pf.rendererFactory).factory(any(ResourceWrapper.class), any(RenderingContext.class));
@@ -716,7 +683,7 @@ class NarrativeReuseTest {
     Build second = build(sources).run();
     assertEquals(0, second.rendered);
     assertTrue(second.systems.containsAll(List.of("http://loinc.org", "http://snomed.info/sct")), second.systems.toString());
-    assertEquals(List.of("http://example.org/unknown"), second.unknown, "not the one that no narrative used");
+    assertEquals(List.of("http://example.org/other", "http://example.org/unknown"), second.unknown);
     second.finish();
 
     // the code system changes, and no longer uses the other one: a patient's narrative, generated after it, didn't
@@ -726,6 +693,7 @@ class NarrativeReuseTest {
     assertEquals(3, third.rendered, "the code system and the value sets");
     assertFalse(third.systems.contains("http://loinc.org"), third.systems.toString());
     assertTrue(third.systems.contains("http://snomed.info/sct"), third.systems.toString());
+    assertEquals(List.of("http://example.org/unknown"), third.unknown, "not the one that no narrative used");
     assertSameState(fresh(sources), third);
   }
 
@@ -884,14 +852,14 @@ class NarrativeReuseTest {
     FetchedFile f = new FetchedFile("input/a.json");
     RapidoNarratives.FileRecord rec = new RapidoNarratives.FileRecord("id-1");
     rec.resources.add(null);
-    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", true, "generated", div, "<div/>", true, List.of("http://example.org/cs", "http://snomed.info/sct"), List.of("http://example.org/cs"), "key"));
+    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", true, "generated", div, true, List.of("http://example.org/cs", "http://snomed.info/sct"), List.of("http://example.org/cs"), "key"));
     assertTrue(records.save(f, rec));
     RapidoNarratives.FileRecord read = records.read(f, "id-1");
     assertNotNull(read);
     assertEquals(2, read.resources.size());
     assertNull(read.resources.get(0));
     RapidoNarratives.ResourceRecord r = read.resources.get(1);
-    assertEquals("Patient p true generated <div/> true key", r.type + " " + r.id + " " + r.onResource + " " + r.status + " " + r.source + " " + r.marked + " " + r.key);
+    assertEquals("Patient p true generated true key", r.type + " " + r.id + " " + r.onResource + " " + r.status + " " + r.marked + " " + r.key);
     assertEquals(List.of("http://example.org/cs", "http://snomed.info/sct"), r.systems);
     assertEquals(List.of("http://example.org/cs"), r.unknown);
     assertEquals(tree(div), tree(r.div));
@@ -906,7 +874,7 @@ class NarrativeReuseTest {
     RapidoNarratives records = new RapidoNarratives(dir.toString());
     FetchedFile f = new FetchedFile("input/a.json");
     RapidoNarratives.FileRecord rec = new RapidoNarratives.FileRecord("id-1");
-    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", false, "generated", sample(), null, false, List.of(), List.of(), "key"));
+    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", false, "generated", sample(), false, List.of(), List.of(), "key"));
     assertTrue(records.save(f, rec));
 
     assertNotNull(records.read(f, "id-1"));
@@ -942,7 +910,7 @@ class NarrativeReuseTest {
     RapidoNarratives records = new RapidoNarratives(dir.toString());
     FetchedFile f = new FetchedFile("input/a.json");
     RapidoNarratives.FileRecord rec = new RapidoNarratives.FileRecord("id-1");
-    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", false, "generated", div, null, false, List.of(), List.of(), "key"));
+    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", false, "generated", div, false, List.of(), List.of(), "key"));
     assertFalse(records.save(f, rec));
     assertNull(records.read(f, "id-1"));
   }
