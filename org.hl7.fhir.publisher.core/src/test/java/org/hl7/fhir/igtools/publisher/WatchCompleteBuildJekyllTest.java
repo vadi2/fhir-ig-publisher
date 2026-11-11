@@ -473,4 +473,19 @@ class WatchCompleteBuildJekyllTest {
     verify(pf.logger).logMessage(startsWith("  Unable to update a"));
     verify(pf.logger).logMessage(contains("1 written, 0 unchanged, 1 failed"));
   }
+
+  @Test
+  void theRestOfTheBuildDoesNotGiveWayIfSomePagesCouldNotBePutInTheOutputFolder() throws Exception {
+    // the sync at the end of the build is what puts them there
+    write("temp/.watch-output/a/page.html", "a is a folder now");
+    write("temp/.watch-output/b.html", "b2");
+    write("output/a", "a file");
+    write("output/b.html", "b");
+    pf.watchTail = tailWithAChange();
+
+    generator(null).publishPagesEarly(null);
+
+    assertEquals("b2", output("b.html"));
+    assertFalse(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES));
+  }
 }

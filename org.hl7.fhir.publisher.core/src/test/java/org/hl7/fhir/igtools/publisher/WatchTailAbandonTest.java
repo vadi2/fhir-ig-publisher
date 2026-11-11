@@ -462,6 +462,27 @@ class WatchTailAbandonTest {
   }
 
   @Test
+  void theRestOfABuildSeesAFileSavedBeforeItsPagesWereUp() throws Exception {
+    Path input = dir.resolve("ig").resolve("input");
+    Files.createDirectories(input);
+    Path fsh = input.resolve("a.fsh");
+    Files.write(fsh, "one".getBytes(StandardCharsets.UTF_8));
+    Path root = dir.resolve("ig");
+    Publisher p = publisher(new PublisherFields());
+    WatchSession session = new WatchSession(root, List.of(input));
+    try (FileChangeMonitor monitor = new FileChangeMonitor(List.of(FileChangeMonitor.MonitoredPath.recursive(input)))) {
+      session.startBuild();
+      // saved while the build validates and generates, when the files aren't watched
+      Files.write(fsh, "another".getBytes(StandardCharsets.UTF_8));
+      TailWatch.ChangeSource source = p.tailChanges(monitor, session, root, new HashSet<>());
+      source.start();
+      SourceSnapshot.Changes changes = waitForEvents(monitor, source);
+      assertEquals(Set.of(fsh), changes.getModified());
+      source.stop();
+    }
+  }
+
+  @Test
   void whatAModuleWroteInInputIsNotAChangeForTheRestOfTheBuild() throws Exception {
     Path input = dir.resolve("ig").resolve("input");
     Files.createDirectories(input);
