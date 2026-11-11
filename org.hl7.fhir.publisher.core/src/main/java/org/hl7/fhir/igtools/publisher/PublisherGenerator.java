@@ -842,6 +842,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     // (before the full garbage collection too: a file saved while the build ran doesn't wait for it)
     TailWatch.Step afterPages = replay == null ? TailWatch.Step.PACKAGES : TailWatch.Step.AI;
     if (givesWayBefore(afterPages)) {
+      reclaimAfterJekyll = false;
       return;
     }
     if (reclaimAfterJekyll) {
