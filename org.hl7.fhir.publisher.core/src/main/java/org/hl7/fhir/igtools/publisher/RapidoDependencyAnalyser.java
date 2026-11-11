@@ -112,6 +112,10 @@ public class RapidoDependencyAnalyser {
       return contentHash;
     }
 
+    Set<String> getStrings() {
+      return strings;
+    }
+
     /** a string value found anywhere in the resource (primitive, markdown, narrative, ...). */
     public ResourceNode addString(String s) {
       if (s != null && !s.isEmpty()) {

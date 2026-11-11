@@ -1147,7 +1147,10 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     if (!settings.isRapidoMode()) {
       buildTracker.setStringProperty("status", "uuid", HierarchicalTableGenerator.uuid, null);
       buildTracker.save();
-      scrubTxCache(RapidoTracker.terminologyUrls(pf.fileList, false));
+      if (hasTxCache()) {
+        RapidoTracker tracker = new RapidoTracker(pf);
+        scrubTxCache(tracker, tracker.changedTerminologyUrls());
+      }
       return;
     }
     pf.hasCheckedDependencies = true;
@@ -1173,7 +1176,13 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       }
       HierarchicalTableGenerator.uuid = pf.rapido.getUuid();
     }
-    scrubTxCache(pf.rapido.txCacheUrlsToScrub());
+    if (hasTxCache()) {
+      scrubTxCache(pf.rapido, pf.rapido.txCacheUrlsToScrub());
+    }
+  }
+
+  private boolean hasTxCache() {
+    return pf.context != null && pf.context.getTxCache() != null;
   }
 
   /**
@@ -1181,13 +1190,13 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * written, before anything expands or validates against them. The cache keys a ValueSet by url|version, which an
    * edit doesn't change.
    */
-  private void scrubTxCache(Set<String> urls) {
-    if (urls.isEmpty() || pf.context == null || pf.context.getTxCache() == null) {
-      return;
+  private void scrubTxCache(RapidoTracker tracker, Set<String> urls) throws IOException {
+    if (!urls.isEmpty()) {
+      long start = System.currentTimeMillis();
+      int n = pf.context.getTxCache().scrub(urls);
+      log("Terminology cache: removed "+n+" entries for "+urls.size()+" ValueSets and CodeSystems that may have changed ("+(System.currentTimeMillis()-start)+" ms)");
     }
-    long start = System.currentTimeMillis();
-    int n = pf.context.getTxCache().scrub(urls);
-    log("Terminology cache: removed "+n+" entries for "+urls.size()+" ValueSets and CodeSystems that may have changed ("+(System.currentTimeMillis()-start)+" ms)");
+    tracker.saveTxCacheRecord();
   }
 
   private boolean bool(JsonObject obj, String name) throws Exception {

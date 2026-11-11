@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 
 import java.lang.reflect.Field;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
@@ -38,9 +39,9 @@ import org.junit.jupiter.api.io.TempDir;
 /**
  * The terminology cache keys a ValueSet that has a version by url|version, and an IG's ValueSets keep their version
  * while they're edited. So before a build expands or validates anything, what the cache holds for the ValueSets and
- * CodeSystems that may have changed is removed: in a differential build, the ones validated again (they changed, or
- * an included ValueSet, a CodeSystem or a supplement they use did); in a complete build or a build without -rapido,
- * all of the IG's own. Both also remove the urls the IG defined in the last build and no longer does.
+ * CodeSystems that may have changed is removed: those that changed since the cache was last scrubbed (a record next to
+ * the cache), with those that name them, and the urls the IG no longer defines; all of the IG's own when there is no
+ * record. A differential build also removes the ones it validates again.
  *
  * <p>A -watch rebuild runs the same checkDependencies with a new context, whose cache is read again from disk, so these
  * cover it too; the scrub on disk is tested in core's TerminologyCacheTests.
@@ -107,8 +108,16 @@ class RapidoTxCacheScrubTest {
 
   private void fillCache() {
     for (String url : ALL) {
-      cache.cacheExpansion(cache.generateExpandToken(url, new ExpansionOptions()), new ValueSetExpansionOutcome(new ValueSet().setUrl(url)), true);
+      cacheExpansion(url);
     }
+  }
+
+  private void cacheExpansion(String url) {
+    cache.cacheExpansion(cache.generateExpandToken(url, new ExpansionOptions()), new ValueSetExpansionOutcome(new ValueSet().setUrl(url)), true);
+  }
+
+  private boolean isCached(String url) {
+    return cache.getExpansion(cache.generateExpandToken(url, new ExpansionOptions())) != null;
   }
 
   /** the urls the cache still has an expansion for */
@@ -189,8 +198,9 @@ class RapidoTxCacheScrubTest {
 
     PublisherFields pf = build(true);
 
+    // a file less makes it a complete build, which still keeps the answers for what didn't change
     assertTrue(pf.rapido.isCompleteBuild());
-    assertEquals(Set.of(SCT, EXTERNAL_VS, VS_A+"x"), cached());
+    assertEquals(allBut(VS_OTHER), cached());
   }
 
   @Test
@@ -207,7 +217,20 @@ class RapidoTxCacheScrubTest {
     PublisherFields pf = build(true);
 
     assertTrue(pf.rapido.isCompleteBuild());
-    assertEquals(Set.of(SCT, EXTERNAL_VS, VS_A+"x"), cached());
+    assertEquals(allBut(VS_OTHER), cached());
+  }
+
+  @Test
+  void aCompleteBuildWithNothingChangedKeepsEveryEntry() throws Exception {
+    firstBuild();
+    // the next build starts while this one never finished
+    build(true);
+    fillCache();
+
+    PublisherFields pf = build(true);
+
+    assertTrue(pf.rapido.isCompleteBuild());
+    assertEquals(new TreeSet<>(ALL), cached());
   }
 
   @Test
@@ -221,8 +244,117 @@ class RapidoTxCacheScrubTest {
   }
 
   @Test
-  void aBuildWithoutRapidoScrubsEveryValueSetAndCodeSystemOfTheIg() throws Exception {
+  void aBuildWithoutRapidoOrARecordScrubsEveryValueSetAndCodeSystemOfTheIg() throws Exception {
     fillCache();
+
+    build(false);
+
+    assertEquals(Set.of(SCT, EXTERNAL_VS, VS_A+"x"), cached());
+  }
+
+  /** a build without -rapido, which scrubs everything and records the IG's ValueSets and CodeSystems */
+  private void firstPlainBuild() throws Exception {
+    fillCache();
+    build(false);
+    fillCache();
+  }
+
+  @Test
+  void aBuildWithoutRapidoWithNothingChangedKeepsEveryEntry() throws Exception {
+    firstPlainBuild();
+
+    build(false);
+
+    assertEquals(new TreeSet<>(ALL), cached());
+  }
+
+  @Test
+  void aBuildWithoutRapidoScrubsAChangedValueSetAndTheValueSetsThatIncludeIt() throws Exception {
+    firstPlainBuild();
+    edit("ValueSet-vs-a.json", "concept", "a2");
+
+    build(false);
+
+    assertEquals(allBut(VS_A, VS_B), cached());
+  }
+
+  @Test
+  void aBuildWithoutRapidoScrubsAChangedCodeSystemAndTheValueSetsThatUseIt() throws Exception {
+    firstPlainBuild();
+    edit("CodeSystem-cs-a.json", "concept", "a2");
+
+    build(false);
+
+    assertEquals(allBut(CS_A, VS_A, VS_B), cached());
+  }
+
+  @Test
+  void aBuildWithoutRapidoScrubsTheCodeSystemAChangedSupplementAddsTo() throws Exception {
+    firstPlainBuild();
+    edit("CodeSystem-sct-supp.json", "designation", "new uz display");
+
+    build(false);
+
+    assertEquals(allBut(SUPP, SCT, VS_SCT), cached());
+  }
+
+  @Test
+  void aBuildWithoutRapidoScrubsADeletedValueSetAndTheValueSetsThatIncludedIt() throws Exception {
+    firstPlainBuild();
+    ig.remove("ValueSet-vs-a.json");
+
+    build(false);
+
+    assertEquals(allBut(VS_A, VS_B), cached());
+  }
+
+  @Test
+  void aValueSetThatNamesAChangedOneWithAVersionOrAsAnImplicitValueSetIsScrubbed() throws Exception {
+    String vsC = B+"/ValueSet/vs-c";
+    String vsD = B+"/ValueSet/vs-d";
+    ig.put("ValueSet-vs-c.json", content("url", vsC, "valueSet", VS_A+"|0.1.0"));
+    ig.put("ValueSet-vs-d.json", content("url", vsD, "valueSet", CS_A+"?fhir_vs=isa/a1"));
+    firstPlainBuild();
+    cacheExpansion(vsC);
+    cacheExpansion(vsD);
+    edit("CodeSystem-cs-a.json", "concept", "a2");
+
+    build(false);
+
+    assertEquals(allBut(CS_A, VS_A, VS_B), cached());
+    assertFalse(isCached(vsC), "vs-c includes vs-a|0.1.0");
+    assertFalse(isCached(vsD), "vs-d includes an implicit value set of cs-a");
+  }
+
+  @Test
+  void aRecordEntryWithoutAHashScrubsEverything() throws Exception {
+    firstPlainBuild();
+    Files.writeString(dir.resolve(".tx-cache-scrub.json"), "{\"terminology\":[{\"url\":\""+VS_A+"\"}]}");
+
+    build(false);
+
+    assertEquals(Set.of(SCT, EXTERNAL_VS, VS_A+"x"), cached());
+  }
+
+  @Test
+  void aRapidoBuildAfterABuildWithoutRapidoOfOtherContentScrubsWhatDiffers() throws Exception {
+    firstBuild();
+    edit("ValueSet-vs-a.json", "concept", "a2");
+    build(false);
+    fillCache();
+    // back to what the rapido state has: rapido sees no change, but the cache has answers for the edited vs-a
+    ig.get("ValueSet-vs-a.json").remove(ig.get("ValueSet-vs-a.json").size()-1);
+
+    PublisherFields pf = build(true);
+
+    assertFalse(pf.rapido.isCompleteBuild(), pf.rapido.getReason());
+    assertEquals(allBut(VS_A, VS_B), cached());
+  }
+
+  @Test
+  void anUnreadableRecordScrubsEverything() throws Exception {
+    firstPlainBuild();
+    Files.writeString(dir.resolve(".tx-cache-scrub.json"), "{not json");
 
     build(false);
 
