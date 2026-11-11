@@ -777,16 +777,25 @@ class NarrativeReuseTest {
   /** a narrative that came with the resource isn't generated, and isn't put back either: it is checked, every build */
   @Test
   void aNarrativeThatCameWithTheResourceIsLeftAlone() throws Exception {
+    // a resource before it uses a code system: the build has still used it after the one that isn't recorded
+    everyBuild = pf -> doAnswer(inv -> {
+      if (inv.getArgument(0) instanceof CodeSystem) {
+        context.getCodeSystemsUsed().add("http://loinc.org");
+      }
+      return inv.callRealMethod();
+    }).when(pf.rendererFactory).factory(any(Resource.class), any(RenderingContext.class));
     Map<String, String> sources = sources("All the colours");
     sources.put(OTHER, sources.get(OTHER).replace("\"active\":true", "\"text\":{\"status\":\"generated\",\"div\":\"<div xmlns=\\\"http://www.w3.org/1999/xhtml\\\"><p><b>Generated Narrative: Patient q</b></p></div>\"},\"active\":true"));
     Build first = build(sources).run();
     assertEquals(4, first.rendered);
     assertEquals(1, first.resource(OTHER).getErrors().size());
+    assertTrue(first.systems.contains("http://loinc.org"), first.systems.toString());
     first.finish();
 
     Build second = build(sources).run();
     assertEquals(0, second.rendered);
     assertEquals(1, second.resource(OTHER).getErrors().size(), "the narrative that claims to be generated is reported again");
+    assertTrue(second.systems.contains("http://loinc.org"), second.systems.toString());
     Build fresh = new Build(Files.createTempDirectory(dir, "fresh"), sources).run();
     assertSameState(fresh, second);
   }
