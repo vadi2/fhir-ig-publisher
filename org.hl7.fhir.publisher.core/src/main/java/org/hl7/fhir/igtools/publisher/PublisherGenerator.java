@@ -6331,7 +6331,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     return h.finish();
   }
 
-  private void generateExtensions(String lang) throws Exception {
+  void generateExtensions(String lang) throws Exception {
     long start = System.currentTimeMillis();
     List<Item> items = new ArrayList<Item>();
     for (FetchedFile f : pf.fileList) {
@@ -6348,7 +6348,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     fragmentStep(listStep("(extensions)", lang), listKey("(extensions)", items, false), () -> genEntryLists("extensions", items, start, lang));
   }
 
-  private void generateLogicals(String lang) throws Exception {
+  void generateLogicals(String lang) throws Exception {
     long start = System.currentTimeMillis();
     List<Item> items = new ArrayList<Item>();
     for (FetchedFile f : pf.fileList) {
