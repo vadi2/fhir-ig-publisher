@@ -593,11 +593,16 @@ class RapidoTxCacheScrubTest {
   @Test
   void aRecordWhoseSupplementsIsntAStringScrubsEverything() throws Exception {
     firstPlainBuild();
-    Files.writeString(dir.resolve(".tx-cache-scrub.json"), "{\"terminology\":[{\"url\":\""+SUPP+"\",\"hash\":\"x\",\"supplements\":{}}]}");
+    Path record = dir.resolve(".tx-cache-scrub.json");
+    String recorded = Files.readString(record);
+    assertTrue(recorded.contains("\"supplements\":\""+SCT+"\""), recorded);
+    Files.writeString(record, recorded.replace("\"supplements\":\""+SCT+"\"", "\"supplements\":{}"));
+    // what the supplement added to is only in the record now
+    ig.remove("CodeSystem-sct-supp.json");
 
     build(false);
 
-    assertEquals(Set.of(EXTERNAL_VS, VS_A+"x"), cached());
+    assertFalse(isCached(VS_A), "the record isn't as written, so it isn't read: every ValueSet and CodeSystem of the IG is scrubbed");
   }
 
   @Test
