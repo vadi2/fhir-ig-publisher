@@ -29,6 +29,7 @@ import java.util.Map;
 
 import org.apache.commons.io.FileUtils;
 import org.hl7.fhir.standalone.context.SimpleWorkerContext;
+import org.hl7.fhir.utilities.logging.ILoggingService;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueType;
@@ -142,7 +143,7 @@ class PageRebuildTest {
   @Test
   void whenItCantBeToldIfAPageRebuildCouldFollowTheLogSaysWhy() throws IOException {
     List<String> log = new ArrayList<>();
-    pf.logger = new org.hl7.fhir.utilities.logging.ILoggingService() {
+    pf.logger = new ILoggingService() {
       public void logMessage(String message) {
         log.add(message);
       }
