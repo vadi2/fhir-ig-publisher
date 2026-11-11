@@ -1062,7 +1062,11 @@ public class RapidoTracker {
     return b.toString();
   }
 
-  /** saves the state for the next build. Only called once the build has finished successfully */
+  /**
+   * saves the state for the next build. Only called once the build has finished successfully, or, in watch mode, has
+   * given up the steps after Jekyll for a change (see Publisher.tailAbandoned()): the state only holds what is
+   * validated and generated before Jekyll runs
+   */
   public void save() throws IOException {
     JsonObject state = new JsonObject();
     state.add("version", STATE_VERSION);

@@ -183,6 +183,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   private TailWatch.ChangeSource tailChanges;
   /** in watch mode, what lets the rest of the build that is running (or the last one) give way to a change; or null */
   private TailWatch watchTail;
+  /** in watch mode, whether the build that just ended gave up the rest of its tail (see takeTailGaveWay()) */
+  private boolean tailGaveWay;
 
   public Publisher() {
     super();
@@ -299,7 +301,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
             monitor = new FileChangeMonitor(watched);
           }
         }
-      } while (session != null && waitForChanges(monitor, session, buildOutputs(watchRoot), moduleWrites(watchRoot, moduleOutputs)));
+      } while (session != null && (takeTailGaveWay() || waitForChanges(monitor, session, buildOutputs(watchRoot), moduleWrites(watchRoot, moduleOutputs))));
     } finally {
       discardPageRebuild();
       if (jekyllDriver != null) {
@@ -401,7 +403,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * complete build goes on to its end if a page rebuild can follow it for the change: that is quicker than giving up
    * the rest of it for another complete build
    */
-  private TailWatch newTailWatch(boolean pageRebuilt) {
+  TailWatch newTailWatch(boolean pageRebuilt) {
     // (that of a page rebuild that failed, or of a build that is done again)
     closeWatchTail();
     if (tailChanges == null) {
@@ -410,10 +412,24 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     PageRebuild state = pageRebuild;
     Function<SourceSnapshot.Changes, String> whyFinish = null;
     if (!pageRebuilt && state != null) {
-      whyFinish = changes -> state.pageRebuildCouldFollow(changes) ? "only the content of pages changed, so the pages are rebuilt when it has finished" : null;
+      whyFinish = changes -> state.pageRebuildCouldFollow(changes) ? "only the content of pages changed, so a page rebuild can follow when it has finished" : null;
     }
     watchTail = new TailWatch(tailChanges, pageRebuilt, whyFinish, this::log);
     return watchTail;
+  }
+
+  /**
+   * Watch mode: whether the build that just ended gave up the rest of its tail for a change (asked once per build).
+   * Then a build follows whatever the watched files hold by now: if the change was undone meanwhile, nothing would
+   * start one, and the output folder would stay without what that build didn't do
+   */
+  boolean takeTailGaveWay() {
+    boolean res = tailGaveWay;
+    tailGaveWay = false;
+    if (res) {
+      System.out.println("=== Building again: the last build gave up its last steps for a change ===");
+    }
+    return res;
   }
 
   private void closeWatchTail() {
@@ -1025,6 +1041,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * state as it is, as always
    */
   void tailAbandoned(IniFile buildTracker, boolean pageRebuilt) throws IOException {
+    tailGaveWay = true;
     if (pf.rapido != null && !pageRebuilt) {
       pf.rapido.save();
     }

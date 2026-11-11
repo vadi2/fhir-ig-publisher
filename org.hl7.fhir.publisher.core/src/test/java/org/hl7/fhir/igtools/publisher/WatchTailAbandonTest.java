@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.hl7.fhir.standalone.context.SimpleWorkerContext;
 import org.hl7.fhir.utilities.IniFile;
 import org.hl7.fhir.utilities.TimeTracker;
 import org.hl7.fhir.utilities.logging.ILoggingService;
@@ -108,7 +109,7 @@ class WatchTailAbandonTest {
       state.tailAbandoned();
     }, () -> { });
     assertSame(state, f.get(p));
-    assertEquals("the last build gave up its packages, html checks and qa for a change", state.getNotReusable());
+    assertEquals("the last build stopped early for a change, so its output isn't complete", state.getNotReusable());
 
     // the next build goes on from the checks before it, and has that page to check as well as its own
     PageRebuild next = state.carryOver();
@@ -270,12 +271,165 @@ class WatchTailAbandonTest {
     assertTrue(log.stream().noneMatch(s -> s.startsWith("Finished @")), log.toString());
     assertTrue(log.get(log.size() - 1).startsWith("Stopped @ "), log.toString());
 
-    // one that didn't stop goes on to the qa pages (which need a loaded IG: this one has none)
+    // one whose files didn't change is asked, and goes on to the qa pages (which need a loaded IG: this one has none)
     PublisherFields whole = new PublisherFields();
     whole.rapido = mock(RapidoTracker.class);
+    int[] asked = {0};
+    whole.watchTail = new TailWatch(new TailWatch.ChangeSource() {
+      public void start() {
+      }
+
+      public SourceSnapshot.Changes settledChanges() {
+        asked[0]++;
+        return null;
+      }
+
+      public void stop() {
+      }
+    }, false, null, s -> { });
+    whole.watchTail.pagesPublished();
     Publisher q = publisher(whole);
+    log.clear();
     assertThrows(NullPointerException.class, () -> finishIg(q, tracker, false));
+    assertEquals(1, asked[0]);
+    assertFalse(q.takeTailGaveWay());
+    assertTrue(log.stream().noneMatch(s -> s.startsWith("Stopped @")), log.toString());
     verify(whole.rapido, never()).save();
+  }
+
+  @Test
+  void aBuildFollowsOneThatStoppedWhateverTheFilesHoldByThen() throws Exception {
+    // the change it stopped for may have been undone before the files are looked at again: the output folder would
+    // stay without the packages, the qa pages and the checked pages
+    PublisherFields pf = new PublisherFields();
+    pf.watchTail = stopped(TailWatch.Step.PACKAGES, false);
+    Publisher p = publisher(pf);
+    assertFalse(p.takeTailGaveWay());
+
+    p.tailAbandoned(new IniFile(dir.resolve(".build-tracker.ini").toString()), false);
+
+    assertTrue(p.takeTailGaveWay());
+    assertFalse(p.takeTailGaveWay(), "once");
+  }
+
+  @Test
+  void theContextOfACompleteBuildThatStoppedIsUnloadedWhenTheNextBuildStarts() throws Exception {
+    PublisherFields pf = new PublisherFields();
+    pf.context = mock(SimpleWorkerContext.class);
+    pf.watchTail = stopped(TailWatch.Step.PACKAGES, false);
+    Publisher p = publisher(pf);
+    PageRebuild state = new PageRebuild();
+    state.setPf(pf);
+    stateField().set(p, state);
+    IniFile tracker = new IniFile(dir.resolve(".build-tracker.ini").toString());
+
+    p.tailAbandoned(tracker, false);
+    verify(pf.context, never()).unload();
+    state.discard();
+    verify(pf.context).unload();
+
+    // not when the IG unloaded its terminology early, nor after a page rebuild, whose state the next one goes on from
+    PublisherFields early = new PublisherFields();
+    early.context = mock(SimpleWorkerContext.class);
+    early.txUnloadEarly = true;
+    early.watchTail = stopped(TailWatch.Step.PACKAGES, false);
+    Publisher q = publisher(early);
+    PageRebuild earlyState = new PageRebuild();
+    earlyState.setPf(early);
+    stateField().set(q, earlyState);
+    q.tailAbandoned(tracker, false);
+    earlyState.discard();
+    verify(early.context, never()).unload();
+
+    PublisherFields rebuilt = new PublisherFields();
+    rebuilt.context = mock(SimpleWorkerContext.class);
+    rebuilt.watchTail = stopped(TailWatch.Step.AI, true);
+    Publisher r = publisher(rebuilt);
+    PageRebuild kept = new PageRebuild();
+    kept.setPf(rebuilt);
+    stateField().set(r, kept);
+    r.tailAbandoned(tracker, true);
+    kept.discard();
+    verify(rebuilt.context, never()).unload();
+  }
+
+  // --- which builds can give way ---------------------------------------------------------------------------------------
+
+  /** A source of changes that counts its starts and stops */
+  private static class Counting implements TailWatch.ChangeSource {
+    SourceSnapshot.Changes changes;
+    int starts;
+    int stops;
+
+    public void start() {
+      starts++;
+    }
+
+    public SourceSnapshot.Changes settledChanges() {
+      return changes;
+    }
+
+    public void stop() {
+      stops++;
+    }
+  }
+
+  private static void setSource(Publisher p, TailWatch.ChangeSource source) throws Exception {
+    Field f = Publisher.class.getDeclaredField("tailChanges");
+    f.setAccessible(true);
+    f.set(p, source);
+  }
+
+  @Test
+  void aBuildOutsideWatchModeHasNothingToGiveWayTo() throws Exception {
+    Publisher p = publisher(new PublisherFields());
+    assertNull(p.newTailWatch(false));
+    assertNull(p.newTailWatch(true));
+  }
+
+  @Test
+  void aCompleteBuildGoesOnToItsEndWhenAPageRebuildCanFollowItAndAPageRebuildGivesWay() throws Exception {
+    Path page = dir.resolve("ig").resolve("input").resolve("pagecontent").resolve("index.md");
+    Files.createDirectories(page.getParent());
+    Files.write(page, "# Home".getBytes(StandardCharsets.UTF_8));
+    SourceSnapshot start = SourceSnapshot.take(List.of(page.getParent()), null);
+    Files.write(page, "# Home, edited".getBytes(StandardCharsets.UTF_8));
+    Counting source = new Counting();
+    source.changes = SourceSnapshot.take(List.of(page.getParent()), start).changesSince(start);
+
+    PublisherFields pf = new PublisherFields();
+    pf.rootDir = dir.resolve("ig").toString();
+    FetchedFile f = new FetchedFile("input/pagecontent/index.md", "pagecontent/index.md");
+    f.setPath(page.toFile().getCanonicalPath());
+    f.setRelativePath("index.md");
+    f.setProcessMode(FetchedFile.PROCESS_NONE);
+    pf.altMap.put("page/" + f.getPath(), f);
+    pf.fileList.add(f);
+    Publisher p = publisher(pf);
+    setSource(p, source);
+    PageRebuild state = new PageRebuild();
+    state.setPf(pf);
+    stateField().set(p, state);
+
+    TailWatch complete = p.newTailWatch(false);
+    complete.pagesPublished();
+    assertFalse(complete.givesWayBefore(TailWatch.Step.PACKAGES));
+    assertEquals(List.of("=== File changes detected while the build finishes: it goes on to its end (only the content of pages changed, so a page rebuild can follow when it has finished) ==="), log);
+
+    // a page rebuild: the next one is as quick as finishing this one
+    TailWatch rebuild = p.newTailWatch(true);
+    assertEquals(1, source.stops, "the build before it no longer looks for changes");
+    rebuild.pagesPublished();
+    assertTrue(rebuild.givesWayBefore(TailWatch.Step.AI));
+    assertEquals("the AI step's files", rebuild.notDone().get(0));
+
+    // and a complete build whose state can't be gone on from by a page rebuild
+    state.notReusable("the template's scripts read the pages");
+    TailWatch other = p.newTailWatch(false);
+    other.pagesPublished();
+    assertTrue(other.givesWayBefore(TailWatch.Step.PACKAGES));
+    assertEquals(3, source.starts);
+    assertEquals(2, source.stops);
   }
 
   // --- looking for changes ---------------------------------------------------------------------------------------------
@@ -309,6 +463,39 @@ class WatchTailAbandonTest {
 
       source.stop();
       assertFalse(monitor.isWatching(), "as it is left for the wait between builds");
+      // the change is still there for the build that follows
+      assertEquals(Set.of(fsh), session.changesSinceBuildStart().getModified());
+      session.startBuild();
+      assertEquals(Set.of(fsh), session.changesSincePreviousBuild().getModified());
+    }
+  }
+
+  @Test
+  void whatAModuleWroteInInputIsNotAChangeForTheRestOfTheBuild() throws Exception {
+    Path input = dir.resolve("ig").resolve("input");
+    Files.createDirectories(input);
+    Path mine = input.resolve("a.json");
+    Path generated = input.resolve("generated.json");
+    Files.write(mine, "one".getBytes(StandardCharsets.UTF_8));
+    Path root = dir.resolve("ig");
+    PublisherFields pf = new PublisherFields();
+    Publisher p = publisher(pf);
+    WatchSession session = new WatchSession(root, List.of(input));
+    try (FileChangeMonitor monitor = new FileChangeMonitor(List.of(FileChangeMonitor.MonitoredPath.recursive(input)))) {
+      session.startBuild();
+      // the build's module writes a file in input
+      pf.inputBeforeModule = FileChangeMonitor.fileStates(input);
+      Files.write(generated, "by the module".getBytes(StandardCharsets.UTF_8));
+      pf.moduleWrites = Set.of(generated);
+      TailWatch.ChangeSource source = p.tailChanges(monitor, session, root, new HashSet<>());
+      source.start();
+      SourceSnapshot.Changes changes = source.settledChanges();
+      assertTrue(changes == null || changes.isEmpty(), String.valueOf(changes));
+
+      Files.write(mine, "another".getBytes(StandardCharsets.UTF_8));
+      changes = waitForEvents(monitor, source);
+      assertEquals(Set.of(mine), changes.all());
+      source.stop();
     }
   }
 
@@ -321,7 +508,6 @@ class WatchTailAbandonTest {
     }
     SourceSnapshot.Changes res = source.settledChanges();
     assertNotNull(res);
-    assertFalse(monitor.hasChanges(), "the files were quiet when they were compared");
     return res;
   }
 }

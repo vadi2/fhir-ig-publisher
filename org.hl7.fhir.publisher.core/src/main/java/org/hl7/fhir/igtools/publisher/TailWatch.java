@@ -22,7 +22,11 @@ import java.util.function.Function;
  */
 class TailWatch {
 
-  /** The steps of the tail that a build can stop before, in the order they run */
+  /**
+   * The steps of the tail, in the order they run, for saying what a build that stopped didn't do. A build stops only
+   * before PACKAGES (or between two of them), AI, FULL_ZIP or QA: never between the AI step and the html checks (see
+   * PageRebuild.withUnprocessed()), nor once it has started on the qa pages
+   */
   enum Step {
     PACKAGES("the packages and zips (not all of them, if some were written already)", false),
     AI("the AI step's files", true),
@@ -107,7 +111,7 @@ class TailWatch {
     } catch (IOException | RuntimeException e) {
       // the changes are found when the build has finished, as they were before
       log.accept("Unable to look for changes while the build finishes (it goes on to its end): " + e);
-      closed = true;
+      close();
       return false;
     }
     if (changes == null || changes.isEmpty()) {
@@ -153,8 +157,9 @@ class TailWatch {
   }
 
   /**
-   * The build has finished, or is past the point where it can stop (it has saved its state, and is bringing the output
-   * folder up to date): the changes are looked for after it, as without this
+   * The build has finished, or is past the last point where it can stop (it is about to write its qa pages, save its
+   * state and bring the output folder up to date, which go together): the changes are looked for after it, as
+   * without this
    */
   void close() {
     closed = true;

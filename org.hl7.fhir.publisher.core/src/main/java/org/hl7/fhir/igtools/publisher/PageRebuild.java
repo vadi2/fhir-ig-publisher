@@ -255,7 +255,7 @@ public class PageRebuild {
       return notReusable;
     }
     if (tailAbandoned) {
-      return "the last build gave up its packages, html checks and qa for a change";
+      return "the last build stopped early for a change, so its output isn't complete";
     }
     if (!complete) {
       return "the last build didn't finish";

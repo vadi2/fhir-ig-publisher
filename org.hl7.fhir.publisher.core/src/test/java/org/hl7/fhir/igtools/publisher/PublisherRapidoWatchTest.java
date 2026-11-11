@@ -73,6 +73,57 @@ class PublisherRapidoWatchTest {
     assertEquals("the-last-build", HierarchicalTableGenerator.uuid);
   }
 
+  /**
+   * A build that gave up the rest of its tail for a change (see TailWatch) had validated and generated everything:
+   * the next build reuses it as it would after a build that ran to its end, not as after a failure
+   */
+  @Test
+  void theBuildAfterOneThatGaveUpItsTailReusesWhatItMade() throws Exception {
+    HierarchicalTableGenerator.uuid = "the-last-build";
+    PublisherFields first = build("a");
+    assertTrue(first.rapido.isCompleteBuild());
+    generate(first, null);
+    Publisher stopping = new Publisher();
+    stopping.setPf(first);
+    TailWatch tail = new TailWatch(new TailWatch.ChangeSource() {
+      public void start() {
+      }
+
+      public SourceSnapshot.Changes settledChanges() throws java.io.IOException {
+        Files.createDirectories(dir.resolve("watched"));
+        SourceSnapshot before = SourceSnapshot.take(List.of(dir.resolve("watched")), null);
+        Files.writeString(dir.resolve("watched").resolve("a.fsh"), "edited");
+        return SourceSnapshot.take(List.of(dir.resolve("watched")), before).changesSince(before);
+      }
+
+      public void stop() {
+      }
+    }, false, null, s -> { });
+    tail.pagesPublished();
+    assertTrue(tail.givesWayBefore(TailWatch.Step.PACKAGES));
+    first.watchTail = tail;
+
+    stopping.tailAbandoned(new IniFile(dir.resolve(".build-tracker.ini").toString()), false);
+
+    HierarchicalTableGenerator.uuid = "a-new-session";
+    PublisherFields pf = build("a2");
+    assertFalse(pf.rapido.isCompleteBuild(), pf.rapido.getReason());
+    assertEquals(List.of("Observation-o.json (something it depends on changed)", "Patient-a.json (changed)",
+        "ig.json (always processed)", "page.md (always processed)"), pf.rapido.listRenderDirty());
+    assertEquals("the-last-build", HierarchicalTableGenerator.uuid);
+  }
+
+  /** As that build, but it failed: the tracker says it started and didn't complete */
+  @Test
+  void theBuildAfterOneThatDidNotEndReusesNothing() throws Exception {
+    PublisherFields first = build("a");
+    generate(first, null);
+
+    PublisherFields pf = build("a2");
+    assertTrue(pf.rapido.isCompleteBuild());
+    assertEquals("after failure", pf.rapido.getReason());
+  }
+
   @Test
   void withoutARecordOfWhatTheLastBuildWroteTheBuildIsComplete() throws Exception {
     finish(build("a"));
@@ -323,6 +374,16 @@ class PublisherRapidoWatchTest {
 
   /** as finish(pf), with the html of the file named failing as generateResourceHtmlInner reports an exception */
   private RapidoOutputs.Change finish(PublisherFields pf, String failing) throws Exception {
+    RapidoOutputs.Change change = generate(pf, failing);
+    pf.rapido.save();
+    IniFile buildTracker = new IniFile(dir.resolve(".build-tracker.ini").toString());
+    buildTracker.setBooleanProperty("status", "complete", true, null);
+    buildTracker.save();
+    return change;
+  }
+
+  /** The part of finish() that comes before Jekyll: what is validated and generated, and recorded for the next build */
+  private RapidoOutputs.Change generate(PublisherFields pf, String failing) throws Exception {
     pf.rapido.finishValidation();
     replayed.clear();
     for (FetchedFile f : pf.fileList) {
@@ -347,12 +408,7 @@ class PublisherRapidoWatchTest {
       pf.rapido.startRecording(f, RapidoTracker.PHASE_SHEETS);
       pf.rapido.stopRecording();
     }
-    RapidoOutputs.Change change = new RapidoOutputs(pf.vsCache, pf.tempDir).update(pf.fileList, pf.changeList);
-    pf.rapido.save();
-    IniFile buildTracker = new IniFile(dir.resolve(".build-tracker.ini").toString());
-    buildTracker.setBooleanProperty("status", "complete", true, null);
-    buildTracker.save();
-    return change;
+    return new RapidoOutputs(pf.vsCache, pf.tempDir).update(pf.fileList, pf.changeList);
   }
 
   /** checkDependencies on new files, as a watch rebuild loads them, with the given content for Patient/a */
