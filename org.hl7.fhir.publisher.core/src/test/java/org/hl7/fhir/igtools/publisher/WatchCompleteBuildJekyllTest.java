@@ -350,6 +350,60 @@ class WatchCompleteBuildJekyllTest {
     assertFalse(pf.watchPagesPublished);
   }
 
+  /** A tail that gives way as soon as it's asked, once the pages are up (see TailWatch) */
+  private TailWatch tailWithAChange() throws IOException {
+    write("watched/a.fsh", "one");
+    SourceSnapshot start = SourceSnapshot.take(Collections.singletonList(dir.resolve("watched")), null);
+    write("watched/a.fsh", "another");
+    SourceSnapshot.Changes changes = SourceSnapshot.take(Collections.singletonList(dir.resolve("watched")), start).changesSince(start);
+    return new TailWatch(new TailWatch.ChangeSource() {
+      public void start() {
+      }
+
+      public SourceSnapshot.Changes settledChanges() {
+        return changes;
+      }
+
+      public void stop() {
+      }
+    }, false, null, s -> { });
+  }
+
+  @Test
+  void theRestOfTheBuildCanGiveWayToAChangeOnceThePagesAreInTheOutputFolder() throws Exception {
+    write("temp/.watch-output/a.html", "a2");
+    write("output/a.html", "a");
+    pf.watchTail = tailWithAChange();
+    assertFalse(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES), "the author is still waiting for the pages");
+
+    generator(null).publishPagesEarly(null);
+
+    assertEquals("a2", output("a.html"));
+    assertTrue(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES));
+  }
+
+  @Test
+  void theRestOfTheBuildDoesNotGiveWayIfThePagesAreNotInTheOutputFolder() throws Exception {
+    write("temp/.watch-output/a.html", "a2");
+    write("output/a.html", "a");
+    pf.watchTail = tailWithAChange();
+
+    PublisherGenerator g = generator(null);
+    g.jekyllReturnedAnError();
+    g.publishPagesEarly(null);
+    settings.setGenerationOff(true);
+    generator(null).publishPagesEarly(null);
+    settings.setGenerationOff(false);
+    write("blocked", "a file where the output folder's parent would be");
+    String output = pf.watchOutputDir;
+    pf.watchOutputDir = dir.resolve("blocked").resolve("output").toString();
+    generator(null).publishPagesEarly(null);
+    pf.watchOutputDir = output;
+
+    assertEquals("a", output("a.html"));
+    assertFalse(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES));
+  }
+
   @Test
   void aPageJekyllWroteAgainAsItWasStaysAsTheLastBuildsHtmlChecksLeftIt() throws Exception {
     write("temp/.watch-output/a.html", "a, as Jekyll wrote it");

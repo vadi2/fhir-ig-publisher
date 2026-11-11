@@ -180,6 +180,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   private long watchBuildStarted;
   /** in watch mode, what tells the build that is running whether the watched files changed since it started; else null */
   private TailWatch.ChangeSource tailChanges;
+  /** in watch mode, what lets the rest of the build that is running (or the last one) give way to a change; or null */
+  private TailWatch watchTail;
 
   public Publisher() {
     super();
@@ -276,9 +278,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
             }
           } finally {
             // the changes are looked for below, as after any build
-            if (pf != null && pf.watchTail != null) {
-              pf.watchTail.close();
-            }
+            closeWatchTail();
           }
         }
         first = false;
@@ -401,13 +401,23 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * the rest of it for another complete build
    */
   private TailWatch newTailWatch(boolean pageRebuilt) {
+    // (that of a page rebuild that failed, or of a build that is done again)
+    closeWatchTail();
     if (tailChanges == null) {
       return null;
     }
     PageRebuild state = pageRebuild;
-    return new TailWatch(tailChanges, pageRebuilt, pageRebuilt || state == null ? null
+    watchTail = new TailWatch(tailChanges, pageRebuilt, pageRebuilt || state == null ? null
         : changes -> state.pageRebuildCouldFollow(changes) ? "only the content of pages changed, so the pages are rebuilt when it has finished" : null,
         this::log);
+    return watchTail;
+  }
+
+  private void closeWatchTail() {
+    if (watchTail != null) {
+      watchTail.close();
+      watchTail = null;
+    }
   }
 
   /** Waits until the watched files have been quiet for a moment (see waitForChanges()) */
