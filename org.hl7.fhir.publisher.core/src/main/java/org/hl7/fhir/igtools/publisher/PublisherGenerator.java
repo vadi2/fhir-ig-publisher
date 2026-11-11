@@ -5136,6 +5136,20 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /**
+   * The pages at the top of the output that the spec file lists as link targets: not the *.ai.html pages if the AI
+   * step removes them (see AIProcessor.processNewTemplates()), as they aren't in the output when the build ends
+   */
+  static List<String> specTargets(String[] names, boolean aiPagesRemoved) {
+    List<String> res = new ArrayList<>();
+    for (String s : names) {
+      if (s.endsWith(".html") && !(aiPagesRemoved && s.endsWith(".ai.html"))) {
+        res.add(s);
+      }
+    }
+    return res;
+  }
+
   private File makeSpecFile() throws Exception {
     SpecMapManager map = new SpecMapManager(pf.npmName, pf.npmName +"#"+ pf.version, pf.version, Constants.VERSION, Integer.toString(ToolsVersion.TOOLS_VERSION), pf.getExecTime(), pf.igpkp.getCanonical());
     for (FetchedFile f : pf.fileList) {
@@ -5160,10 +5174,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         map.path(u, this.pf.igpkp.getLinkFor(r, true));
       }
     }
-    for (String s : new File(pf.outputDir).list()) {
-      if (s.endsWith(".html")) {
-        map.target(s);
-      }
+    for (String s : specTargets(new File(pf.outputDir).list(), !settings.isGenerationOff() && isNewML())) {
+      map.target(s);
     }
     File df = File.createTempFile("fhir", "tmp");
     df.deleteOnExit();
