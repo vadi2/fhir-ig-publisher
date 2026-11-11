@@ -169,6 +169,7 @@ class NarrativeReuseTest {
     Build run() throws Exception {
       assumeTrue(context != null, noContext);
       dropCached();
+      context.getCodeSystemsUsed().clear(); // a build has a context of its own
       Publisher publisher = new Publisher();
       publisher.getSettings().setRapidoMode(true);
       publisher.getSettings().setWatchMode(true);
@@ -236,6 +237,7 @@ class NarrativeReuseTest {
       if (pf.needsRegen) {
         processor.generateNarratives(true); // as the build does after validation
       }
+      systems = new ArrayList<>(new TreeSet<>(context.getCodeSystemsUsed()));
       // the resources of the IG that a renderer was made for
       Set<String> made = new HashSet<>();
       for (Invocation i : mockingDetails(pf.rendererFactory).getInvocations()) {
@@ -298,9 +300,13 @@ class NarrativeReuseTest {
       return new XhtmlComposer(XhtmlComposer.XML).compose(resource(file).getElement().getNamedChild("text").getNamedChild("div").getXhtml());
     }
 
+    /** the code systems the build used, as its context had them once the narratives were generated */
+    List<String> systems;
+
     /** every resource as the build left it, in every form it is written in */
     Map<String, String> state() throws Exception {
       Map<String, String> res = new LinkedHashMap<>();
+      res.put("code systems used", systems.toString());
       for (FetchedFile f : pf.fileList) {
         for (FetchedResource r : f.getResources()) {
           String k = f.getLoadPath() + " " + r.getId() + " ";
@@ -653,6 +659,49 @@ class NarrativeReuseTest {
     assertSameState(fresh(sources), second);
   }
 
+  /**
+   * Rendering looks codes up, and the context keeps which code systems a build used: the build warns about SNOMED CT
+   * without an edition if it used it, for one. A build that puts the narrative back has used what generating it used
+   */
+  @Test
+  void theCodeSystemsANarrativeUsedAreUsedWhenItIsPutBack() throws Exception {
+    boolean[] loinc = {true};
+    everyBuild = pf -> {
+      doAnswer(inv -> {
+        if (loinc[0] && inv.getArgument(0) instanceof CodeSystem) {
+          context.getCodeSystemsUsed().add("http://loinc.org");
+        }
+        return inv.callRealMethod();
+      }).when(pf.rendererFactory).factory(any(Resource.class), any(RenderingContext.class));
+      doAnswer(inv -> {
+        ResourceWrapper w = inv.getArgument(0);
+        if ("q".equals(w.getId())) {
+          context.getCodeSystemsUsed().add("http://snomed.info/sct");
+        }
+        return inv.callRealMethod();
+      }).when(pf.rendererFactory).factory(any(ResourceWrapper.class), any(RenderingContext.class));
+    };
+    Map<String, String> sources = sources("All the colours");
+    Build first = build(sources).run();
+    assertTrue(first.systems.containsAll(List.of("http://loinc.org", "http://snomed.info/sct")), first.systems.toString());
+    first.finish();
+
+    Build second = build(sources).run();
+    assertEquals(0, second.rendered);
+    assertTrue(second.systems.containsAll(List.of("http://loinc.org", "http://snomed.info/sct")), second.systems.toString());
+    assertSameState(fresh(sources), second);
+    second.finish();
+
+    // the code system changes, and no longer uses the other one: a patient's narrative, generated after it, didn't
+    loinc[0] = false;
+    sources.put(CS, sources.get(CS).replace("Colour codes", "Codes for colours"));
+    Build third = build(sources).run();
+    assertEquals(3, third.rendered, "the code system and the value sets");
+    assertFalse(third.systems.contains("http://loinc.org"), third.systems.toString());
+    assertTrue(third.systems.contains("http://snomed.info/sct"), third.systems.toString());
+    assertSameState(fresh(sources), third);
+  }
+
   /** a renderer that writes files as well: the build is told of them when the narrative is generated, so it is, every build */
   @Test
   void aNarrativeWhoseRendererWritesFilesIsNotPutBack() throws Exception {
@@ -799,7 +848,7 @@ class NarrativeReuseTest {
     FetchedFile f = new FetchedFile("input/a.json");
     RapidoNarratives.FileRecord rec = new RapidoNarratives.FileRecord("id-1");
     rec.resources.add(null);
-    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", true, "generated", div, "<div/>", true, "key"));
+    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", true, "generated", div, "<div/>", true, List.of("http://example.org/cs", "http://snomed.info/sct"), "key"));
     assertTrue(records.save(f, rec));
     RapidoNarratives.FileRecord read = records.read(f, "id-1");
     assertNotNull(read);
@@ -807,6 +856,7 @@ class NarrativeReuseTest {
     assertNull(read.resources.get(0));
     RapidoNarratives.ResourceRecord r = read.resources.get(1);
     assertEquals("Patient p true generated <div/> true key", r.type + " " + r.id + " " + r.onResource + " " + r.status + " " + r.source + " " + r.marked + " " + r.key);
+    assertEquals(List.of("http://example.org/cs", "http://snomed.info/sct"), r.systems);
     assertEquals(tree(div), tree(r.div));
 
     // a tree read back from text is not the same tree
@@ -819,7 +869,7 @@ class NarrativeReuseTest {
     RapidoNarratives records = new RapidoNarratives(dir.toString());
     FetchedFile f = new FetchedFile("input/a.json");
     RapidoNarratives.FileRecord rec = new RapidoNarratives.FileRecord("id-1");
-    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", false, "generated", sample(), null, false, "key"));
+    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", false, "generated", sample(), null, false, List.of(), "key"));
     assertTrue(records.save(f, rec));
 
     assertNotNull(records.read(f, "id-1"));
@@ -855,7 +905,7 @@ class NarrativeReuseTest {
     RapidoNarratives records = new RapidoNarratives(dir.toString());
     FetchedFile f = new FetchedFile("input/a.json");
     RapidoNarratives.FileRecord rec = new RapidoNarratives.FileRecord("id-1");
-    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", false, "generated", div, null, false, "key"));
+    rec.resources.add(new RapidoNarratives.ResourceRecord("Patient", "p", false, "generated", div, null, false, List.of(), "key"));
     assertFalse(records.save(f, rec));
     assertNull(records.read(f, "id-1"));
   }

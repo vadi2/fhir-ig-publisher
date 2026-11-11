@@ -1258,7 +1258,8 @@ public class PublisherProcessor extends PublisherBase  {
               } else if (putBackNarrative(r, lastRec)) {
                 rec = lastRec;
               } else {
-                NarrativeNote note = records == null ? null : new NarrativeNote(f, r);
+                NarrativeNote made = records == null ? null : new NarrativeNote(f, r);
+                NarrativeNote note = made; // dropped where what is done can't be recorded
                 List<Locale> langs = translationLocales();
                 logDebugMessage(LogCategory.PROGRESS, "generate narrative for "+f.getLoadPath()+" : "+r.getId());
                 if (r.getResource() != null && r.getResource() instanceof DomainResource && isConvertableResource(r.getResource().fhirType())) {
@@ -1305,7 +1306,6 @@ public class PublisherProcessor extends PublisherBase  {
                     e.copyUserData(r.getElement());
                     r.setElement(e);
                   }
-                  rec = recordNarrative(r, note);
                 } else {
                   boolean first = true;
                   for (Locale lang : langs) {
@@ -1355,6 +1355,9 @@ public class PublisherProcessor extends PublisherBase  {
                       checkExistingNarrative(f, r, r.getElement().getNamedChild("text").getNamedChild("div").getXhtml());
                     }
                   }
+                }
+                if (made != null) {
+                  made.done();
                   rec = recordNarrative(r, note);
                 }
               }
@@ -1438,11 +1441,27 @@ public class PublisherProcessor extends PublisherBase  {
     /** the messages there were before, of the build, the file and the resource, and how many were to be reported (see IGKnowledgeProvider) */
     private final int[] messages;
 
+    /** the code systems the build had used before */
+    private final Set<String> systemsBefore;
+    /** the code systems that generating the narrative used: the build goes by them once it has generated everything */
+    private List<String> systems;
+
     private NarrativeNote(FetchedFile f, FetchedResource r) {
       this.onResource = narrativeOnResource(r);
       this.none = !r.getElement().hasChild("text") && (!onResource || !((DomainResource) r.getResource()).hasText());
       this.file = f;
       this.messages = messages(r);
+      // set aside while the narrative is generated, to see all that generating it uses, used before or not
+      Set<String> used = pf.context.getCodeSystemsUsed();
+      this.systemsBefore = new HashSet<>(used);
+      used.clear();
+    }
+
+    /** the narrative has been generated, or what is done in its place has been */
+    private void done() {
+      Set<String> used = pf.context.getCodeSystemsUsed();
+      systems = new ArrayList<>(new TreeSet<>(used));
+      used.addAll(systemsBefore);
     }
 
     private int[] messages(FetchedResource r) {
@@ -1521,7 +1540,7 @@ public class PublisherProcessor extends PublisherBase  {
       if (tree == null) {
         return null;
       }
-      return new RapidoNarratives.ResourceRecord(r.fhirType(), r.getId(), note.onResource, status.getValue(), tree, div.getXhtmlSource(), marked, narrativeKey(e));
+      return new RapidoNarratives.ResourceRecord(r.fhirType(), r.getId(), note.onResource, status.getValue(), tree, div.getXhtmlSource(), marked, note.systems, narrativeKey(e));
     } catch (RuntimeException ex) {
       return null;
     }
@@ -1583,6 +1602,7 @@ public class PublisherProcessor extends PublisherBase  {
         e.copyUserData(before);
         r.setElement(e);
         narrativesPutBack.add(r);
+        pf.context.getCodeSystemsUsed().addAll(last.systems);
         return true;
       }
       // as ResourceWrapperModel.setNarrative leaves the element
@@ -1595,6 +1615,7 @@ public class PublisherProcessor extends PublisherBase  {
       div.setXhtml(last.div);
       addNarrative(before, text);
       if (last.key.equals(narrativeKey(before))) {
+        pf.context.getCodeSystemsUsed().addAll(last.systems);
         return true;
       }
       before.removeChild(text);

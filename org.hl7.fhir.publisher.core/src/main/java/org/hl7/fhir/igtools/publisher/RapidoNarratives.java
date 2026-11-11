@@ -58,10 +58,12 @@ public class RapidoNarratives {
     final String source;
     /** onResource: the narrative on the resource is marked as generated (it is when there is more than one language) */
     final boolean marked;
+    /** the code systems that generating the narrative used (the worker context keeps the ones a build used) */
+    final List<String> systems;
     /** the key of the element with its narrative */
     final String key;
 
-    ResourceRecord(String type, String id, boolean onResource, String status, XhtmlNode div, String source, boolean marked, String key) {
+    ResourceRecord(String type, String id, boolean onResource, String status, XhtmlNode div, String source, boolean marked, List<String> systems, String key) {
       this.type = type;
       this.id = id;
       this.onResource = onResource;
@@ -69,6 +71,7 @@ public class RapidoNarratives {
       this.div = div;
       this.source = source;
       this.marked = marked;
+      this.systems = systems;
       this.key = key;
     }
   }
@@ -136,6 +139,10 @@ public class RapidoNarratives {
           string(out, r.status);
           string(out, r.source);
           out.writeBoolean(r.marked);
+          out.writeInt(r.systems.size());
+          for (String system : r.systems) {
+            string(out, system);
+          }
           string(out, r.key);
           if (!writeNode(out, r.div, 0)) {
             forget(f);
@@ -182,8 +189,12 @@ public class RapidoNarratives {
           String status = string(in);
           String source = string(in);
           boolean marked = in.readBoolean();
+          List<String> systems = new ArrayList<>();
+          for (int j = count(in); j > 0; j--) {
+            systems.add(string(in));
+          }
           String key = string(in);
-          rec.resources.add(new ResourceRecord(type, rid, onResource, status, readNode(in, 0), source, marked, key));
+          rec.resources.add(new ResourceRecord(type, rid, onResource, status, readNode(in, 0), source, marked, systems, key));
         }
       }
       return in.readInt() == VERSION && in.read() == -1 ? rec : null;
