@@ -101,7 +101,7 @@ public class RapidoTracker {
   public static final String PHASE_HTML = "html";
   public static final String PHASE_SHEETS = "sheets";
 
-  private static final int STATE_VERSION = 4;
+  private static final int STATE_VERSION = 5;
 
   private final PublisherFields pf;
   private final String stateFile;
@@ -125,6 +125,8 @@ public class RapidoTracker {
   private boolean complete;
   private String reason;
   private Recording recording;
+  /** the archives of the package step that can be kept from the last build */
+  private RapidoArchives archives;
   /** the validator's statusWarnings before the resource being validated now, or null if they can't be read */
   private Set<String> statusBefore;
   /** how many of the IG's profiles the resource being validated was known to conform to before it was validated */
@@ -146,6 +148,12 @@ public class RapidoTracker {
     this.stateFile = Utilities.path(pf.tempDir, "_rapido", "state.json");
     this.buildDate = new DateTimeType(pf.getExecTime()).asStringValue();
     this.weakReferences = pf.version != null && VersionUtilities.isR4Plus(pf.version);
+    this.archives = new RapidoArchives(pf.outputDir, archivesAside(), null);
+  }
+
+  /** where the archives of the last build are while Jekyll runs (see RapidoArchives): not a folder that Jekyll reads */
+  private String archivesAside() throws IOException {
+    return Utilities.path(pf.tempDir, "_rapido", "archives");
   }
 
   // ---- analysis ------------------------------------------------------------------------------------------------------
@@ -194,6 +202,7 @@ public class RapidoTracker {
       reason = "what the last build wrote in the temp folder isn't all there";
     }
     complete = reason != null;
+    archives = new RapidoArchives(pf.outputDir, archivesAside(), complete ? null : old.getJsonObject("archives"));
     if (complete) {
       return;
     }
@@ -322,6 +331,11 @@ public class RapidoTracker {
 
   public String getReason() {
     return reason;
+  }
+
+  /** the archives of the package step: which of them can be kept from the last build, and what this build records of them */
+  public RapidoArchives getArchives() {
+    return archives;
   }
 
   /** the table generator uuid to reuse, so that replayed outputs and new outputs agree */
@@ -1119,6 +1133,7 @@ public class RapidoTracker {
       files.set(key, nf);
     }
     state.add("files", files);
+    state.add("archives", archives.getRecords());
     writeState(state, sf);
   }
 
@@ -1650,7 +1665,9 @@ public class RapidoTracker {
     /** the resources (by index) the phase found a UML diagram for, as _data/structuredefinitions.json says */
     public final Set<Integer> umlGenerated = new TreeSet<>();
     public final List<NpmEntry> npm = new ArrayList<>();
-    public final List<ValueSet> expansions = new ArrayList<>();
+    /** the expansions as JSON (see readExpansion()), and the hash the journal has of them */
+    public final List<String> expansions = new ArrayList<>();
+    public String expansionsHash;
     public final List<String[]> tracked = new ArrayList<>();
     public final List<long[]> fragUseNumbers = new ArrayList<>();
     public final List<String> fragUseKeys = new ArrayList<>();
@@ -1773,14 +1790,21 @@ public class RapidoTracker {
       }
     }
     JsonArray exp = j.forceArray("expansions");
-    for (ValueSet vs : pf.expansions.subList(rec.expansionsBefore, pf.expansions.size())) {
+    List<String> stable = new ArrayList<>();
+    for (ValueSet vs : pf.expansions.since(rec.expansionsBefore)) {
       try {
-        exp.add(saveExpansion(new JsonParser(pf.context.getModelContext()), vs));
+        String json = saveExpansion(new JsonParser(pf.context.getModelContext()), vs);
+        exp.add(json);
+        stable.add(SavedExpansions.withoutRunDetails(json));
       } catch (Exception e) {
         return;
       }
     }
+    // what stands for them in the key of the expansion files (see SavedExpansions.key())
+    String eh = SavedExpansions.hash(stable);
+    j.set("expansionsHash", eh);
     newFile(f).set(rec.phase, j);
+    pf.expansions.journaled(rec.expansionsBefore, eh);
   }
 
   private static boolean threw(List<ValidationMessage> list) {
@@ -1863,13 +1887,9 @@ public class RapidoTracker {
     for (JsonObject e : j.forceArray("npm").asJsonObjects()) {
       res.npm.add(new NpmEntry(e.asString("category"), e.asString("folder"), e.asString("name"), Base64.getDecoder().decode(e.asString("content"))));
     }
-    for (String s : j.forceArray("expansions").asStrings()) {
-      try {
-        res.expansions.add(readExpansion(new JsonParser(pf.context.getModelContext()), s));
-      } catch (Exception e) {
-        throw new Error("Unable to read an expansion saved by the last Rapido build: "+e.getMessage(), e);
-      }
-    }
+    // not parsed here: they are only needed if the expansion files are written again (see SavedExpansions)
+    res.expansions.addAll(j.forceArray("expansions").asStrings());
+    res.expansionsHash = j.asString("expansionsHash");
     for (JsonElement e : j.forceArray("tracked").getItems()) {
       List<String> a = ((JsonArray) e).asStrings();
       res.tracked.add(new String[] {a.get(0), a.get(1)});
