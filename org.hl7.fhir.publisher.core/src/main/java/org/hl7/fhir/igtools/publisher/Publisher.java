@@ -815,7 +815,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       pf.watchOutputSynced = true;
     } catch (IOException e) {
       log("Unable to update "+ pf.watchOutputDir +" (it still has the output of the last build that succeeded"
-          +(pf.watchPagesPublished ? ", and the pages this build put there when Jekyll had rendered them" : "")+"): "+e);
+          +(pf.watchPagesPublished ? ", and the pages put there since, when Jekyll had rendered them" : "")+"): "+e);
       return;
     }
     for (String s : r.getFailures()) {
@@ -837,11 +837,13 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       // it failed after the output folder was brought up to date
       return;
     }
-    String note = watchFailureNote(pf.watchOutputDir, pf.watchPagesPublished, settings.getDestDir() != null);
+    // with -destination the qa files go there
+    boolean qaElsewhere = settings.getDestDir() != null;
+    String note = watchFailureNote(pf.watchOutputDir, pf.watchPagesPublished, qaElsewhere);
     if (note != null) {
       log(note);
     }
-    if (settings.getDestDir() != null) {
+    if (qaElsewhere) {
       return;
     }
     if (!new File(pf.outputDir, "qa.json").exists()) {

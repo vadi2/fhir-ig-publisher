@@ -187,10 +187,10 @@ public class OutputFolderSync {
    * @param files the files to copy, in the staging folder (those that aren't there, or aren't files, are skipped), or
    *              null for every file in it
    * @param leftOut tells, by its name, a file that isn't copied (null: none)
-   * @param offered what the calls before this one found in the staging folder, by relative path (a digest of the
-   *              content), kept up to date here; or null. A file that is as it was then isn't looked at again: the
-   *              target has it, or what the build made of it since (the html checks change the pages Jekyll
-   *              wrote), which a copy would put back to how it was before
+   * @param offered what the calls before this one copied to the target, by relative path (a digest of the content),
+   *              kept up to date here; or null. A file that is as it was then, and still in the target, isn't
+   *              looked at again: the target has it, or what the build made of it since (the html checks change
+   *              the pages Jekyll wrote), which a copy would put back to how it was before
    */
   public static Result publish(Path staged, Path target, Collection<Path> files, Predicate<String> leftOut,
       Map<String, String> offered) throws IOException {
@@ -228,23 +228,28 @@ public class OutputFolderSync {
       Path to = target.resolve(rel);
       try {
         String digest = offered == null ? null : digest(from, ba);
-        if (digest != null && digest.equals(offered.get(rel))) {
+        boolean there = Files.isRegularFile(to);
+        if (there && digest != null && digest.equals(offered.get(rel))) {
           result.unchanged++;
           continue;
         }
         if (dirs.add(to.getParent())) {
           Files.createDirectories(to.getParent());
         }
-        if (Files.isRegularFile(to) && Files.size(to) == Files.size(from) && sameContent(from, to, ba, bb)) {
+        if (there && Files.size(to) == Files.size(from) && sameContent(from, to, ba, bb)) {
+          // (not noted as offered: it may be what the build made of the file, put back in the staging folder)
           result.unchanged++;
         } else {
           copy(from, to);
           result.written++;
-        }
-        if (digest != null) {
-          offered.put(rel, digest);
+          if (digest != null) {
+            offered.put(rel, digest);
+          }
         }
       } catch (IOException ex) {
+        if (offered != null) {
+          offered.remove(rel);
+        }
         result.failures.add("Unable to update " + rel + ": " + describe(ex));
       }
     }

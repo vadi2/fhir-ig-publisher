@@ -602,6 +602,38 @@ class OutputFolderSyncTest {
   }
 
   @Test
+  void aCheckedPagePutBackInTheStagingFolderIsntTakenForWhatJekyllWrote() throws IOException {
+    Path staged = staged();
+    Map<String, String> offered = new HashMap<>();
+    write(staged, "a.html", "a, as Jekyll wrote it");
+    OutputFolderSync.publish(staged, target(), null, null, offered);
+    write(target(), "a.html", "a, html checked");
+
+    // a page rebuild: Jekyll wrote it again for the template's check, and the checked page was put back
+    write(staged, "a.html", "a, html checked");
+    OutputFolderSync.Result r = OutputFolderSync.publish(staged, target(), List.of(staged.resolve("a.html")), null, offered);
+    assertEquals(0, r.getWritten());
+
+    // the next build: Jekyll writes it as before, and the checked page stays
+    write(staged, "a.html", "a, as Jekyll wrote it");
+    r = OutputFolderSync.publish(staged, target(), null, null, offered);
+    assertEquals(0, r.getWritten());
+    assertEquals("a, html checked", read(target(), "a.html"));
+  }
+
+  @Test
+  void aPageThatIsNoLongerInTheOutputFolderIsPublishedAgain() throws IOException {
+    Path staged = staged();
+    Map<String, String> offered = new HashMap<>();
+    write(staged, "a.html", "a");
+    OutputFolderSync.publish(staged, target(), null, null, offered);
+    Files.delete(target().resolve("a.html"));
+
+    assertEquals(1, OutputFolderSync.publish(staged, target(), null, null, offered).getWritten());
+    assertEquals("a", read(target(), "a.html"));
+  }
+
+  @Test
   void aPageThatCouldNotBePublishedIsOfferedAgain() throws IOException {
     Path staged = staged();
     Map<String, String> offered = new HashMap<>();

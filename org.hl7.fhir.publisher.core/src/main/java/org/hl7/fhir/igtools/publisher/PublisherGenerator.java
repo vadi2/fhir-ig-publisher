@@ -233,8 +233,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   private Set<String> jekyllWritten;
   // whether the last Jekyll run returned an error, though it said that it had finished
   private boolean jekyllInDoubt;
-  // watch mode: the pages as Jekyll last wrote them (a digest, by path in the output folder), as far as they were
-  // put in the output folder before the build had finished (see publishPagesEarly())
+  // watch mode: the files that were put in the output folder before a build had finished, as they were then (a
+  // digest, by path in the output folder): see publishPagesEarly()
   private final Map<String, String> earlyPages = new HashMap<>();
   // whether the memory that generating the outputs used is reclaimed once Jekyll has run, not before
   private boolean reclaimAfterJekyll;
@@ -4824,7 +4824,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * @param files the output files Jekyll wrote (in the staging folder), or null if it wrote all of them
    */
   void publishPagesEarly(Set<String> files) {
-    if (pf.watchOutputDir == null || settings.isGenerationOff() || settings.isSimplifierMode() || jekyllInDoubt) {
+    if (pf.watchOutputDir == null || settings.isGenerationOff() || settings.isSimplifierMode()) {
+      return;
+    }
+    if (jekyllInDoubt) {
+      // what the sync puts in the output folder for these pages isn't what was last put there here
+      earlyPages.clear();
       return;
     }
     long start = System.nanoTime();
