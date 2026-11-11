@@ -213,4 +213,29 @@ class RapidoZipTest {
       assertArrayEquals(binary, in.readAllBytes());
     }
   }
+
+  @Test
+  void aPreviousZipThatCannotBeReadIsNotUsed() throws Exception {
+    Path broken = dir.resolve("broken.zip");
+    Files.write(broken, bytes("this is not a zip"));
+    Path second = dir.resolve("second.zip");
+    RapidoZip z = write(second, new RapidoArchives.Previous(broken, new JsonObject().add("one.json", "token of 1")), "one.json", "1");
+    assertEquals(0, z.getCopied());
+    assertEquals("1", read(second).get("one.json"));
+  }
+
+  @Test
+  void aZipWithCopiedEntriesReadsAsAStreamToo() throws Exception {
+    Path first = dir.resolve("first.zip");
+    RapidoZip z1 = write(first, null, "one.json", "1", "two.json", "second ".repeat(500));
+    Path second = dir.resolve("second.zip");
+    write(second, previous(first, z1), "one.json", "1 changed", "two.json", "second ".repeat(500));
+    Map<String, String> res = new LinkedHashMap<>();
+    try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(Files.newInputStream(second))) {
+      for (ZipEntry e = in.getNextEntry(); e != null; e = in.getNextEntry()) {
+        res.put(e.getName(), new String(in.readAllBytes(), StandardCharsets.UTF_8));
+      }
+    }
+    assertEquals(read(second), res);
+  }
 }

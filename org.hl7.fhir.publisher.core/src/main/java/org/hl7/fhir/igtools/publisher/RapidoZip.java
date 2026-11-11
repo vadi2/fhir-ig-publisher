@@ -24,9 +24,9 @@ import org.hl7.fhir.utilities.json.model.JsonObject;
  * still what they were: each entry comes with a token that stands for its content, and an entry that had the same
  * token in the last build is copied from that build's zip as it is there, compressed. Only the others are made (the
  * resource composed, the file read) and compressed, the same way (deflate, level 9). So the zip holds the same
- * entries with the same content as the one ZipGenerator would write; its entries keep the time they were first
- * written, and the zip's own headers are laid out differently (the sizes are in the local headers, not after the
- * data), which readers don't see.
+ * entries as the one ZipGenerator would write, with the same content as far as the tokens tell (a token leaves out
+ * what only says when the content was made: see the tokens in PublisherGenerator). A copied entry keeps the time it
+ * was first written, and the zip's own headers are laid out differently, which readers don't see.
  */
 public class RapidoZip implements Closeable {
 
@@ -48,14 +48,21 @@ public class RapidoZip implements Closeable {
    * @param previous the zip the last build wrote under this name with the tokens of its entries, or null
    */
   public RapidoZip(String path, RapidoArchives.Previous previous) throws IOException {
-    if (previous == null) {
+    ZipFile old = null;
+    if (previous != null) {
+      try {
+        old = ZipFile.builder().setFile(previous.getFile().toFile()).get();
+      } catch (IOException | RuntimeException e) {
+        // it can't be read as a zip: the zip is written with nothing from it
+      }
+    }
+    last = old;
+    if (last == null) {
       plain = new ZipGenerator(path);
       out = null;
-      last = null;
       lastTokens = null;
     } else {
       plain = null;
-      last = ZipFile.builder().setFile(previous.getFile().toFile()).get();
       lastTokens = previous.getEntries();
       try {
         out = new ZipArchiveOutputStream(new File(path));

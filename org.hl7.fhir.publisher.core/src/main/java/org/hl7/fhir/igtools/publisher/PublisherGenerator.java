@@ -763,9 +763,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         templateBeforeJekyll();
       }
       keepForPageRebuild(() -> pageRebuild.beforeJekyll());
-      if (pf.rapido != null) {
+      if (archives() != null) {
         // Jekyll removes them from the output folder: the package step puts back the ones it can keep
-        pf.rapido.getArchives().beforeJekyll();
+        archives().beforeJekyll();
       }
     }
 
@@ -897,8 +897,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         FileUtilities.bytesToFile(org.hl7.fhir.utilities.json.parser.JsonParser.composeBytes(json), Utilities.path(pf.outputDir, "sub-package-list.json"));
         generateZips(df);
       }
-      if (pf.rapido != null) {
-        pf.rapido.getArchives().finish(!pf.changeList.isEmpty());
+      if (archives() != null) {
+        archives().finish(!pf.changeList.isEmpty());
       }
       keepForPageRebuild(() -> pageRebuild.afterPackage());
       if (fresh != null) {
@@ -912,9 +912,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
     }
 
-    if (!jekyllOk && replay == null && pf.rapido != null) {
+    if (!jekyllOk && replay == null && archives() != null) {
       // the package step didn't run: its archives stay as the last build left them
-      pf.rapido.getArchives().finish(false);
+      archives().finish(false);
     }
 
     log("Checking Output HTML");
@@ -1109,14 +1109,19 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   /**
-   * -rapido: the key of the combined package. It is made from the conformance resources in the package folder of
-   * package.tgz (not from the examples, or from what the template's check and the validation put in the other
-   * folders), from what they refer to in the packages the build has loaded (a change in those makes the build a
-   * complete one), and from the expansion parameters. Its package.json and its manifest have the time it was written,
-   * so a kept one says when it was last made. null if the package folder can't be read
+   * -rapido -watch: the key of the combined package: everything in the package folder of package.tgz (the conformance
+   * resources, package.json with the time of the build; not the examples, or what the template's check and the
+   * validation put in the other folders), the expansion parameters, the package id and the version.
+   * <p>
+   * The combined package is made from those conformance resources, from what they refer to in the packages the build
+   * has loaded (not in the key: a change in those makes the build a complete one), and from the expansions of their
+   * value sets (not in the key either: a differential build takes what the terminology server said as it stands, as
+   * it does for the pages it replays, and a build whose terminology calls failed is followed by a complete one).
+   * Its package.json and its manifest have the time it was written, so a kept one says when it was last made.
+   * null if no archives are kept, or the package folder can't be read
    */
   String combinedPackageKey(NpmPackage npm) {
-    if (pf.rapido == null) {
+    if (archives() == null) {
       return null;
     }
     NpmPackage.NpmPackageFolder folder = npm.getFolders().get("package");
@@ -5375,8 +5380,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     generateExcelZip();
     generateSchematronsZip();
     writtenHashes.clear();
-    if (pf.rapido != null) {
-      log("Rapido Mode: archives: " + pf.rapido.getArchives().summary() + " (" + org.hl7.fhir.utilities.DurationUtil.presentDuration(System.nanoTime() - start) + ")");
+    if (archives() != null) {
+      log("Rapido Mode: archives: " + archives().summary() + " (" + org.hl7.fhir.utilities.DurationUtil.presentDuration(System.nanoTime() - start) + ")");
     }
   }
 
@@ -5386,23 +5391,39 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * wroteArchive() records them
    */
   private boolean keptArchive(String key, String... names) {
-    return pf.rapido != null && pf.rapido.getArchives().keep(key, names);
+    RapidoArchives archives = archives();
+    return archives != null && archives.keep(key, names);
   }
 
   private void wroteArchive(String key, String... names) {
-    if (pf.rapido != null) {
-      pf.rapido.getArchives().written(key, names);
+    RapidoArchives archives = archives();
+    if (archives != null) {
+      archives.written(key, names);
     }
   }
 
-  /** as wroteArchive(key, names), for a zip written by openArchive(): the first of the names */
-  private void wroteArchive(String key, RapidoZip zip, String... names) {
-    if (pf.rapido != null) {
-      pf.rapido.getArchives().written(key, zip.getTokens(), names);
+  /**
+   * as wroteArchive(key, names), for a zip written by openArchive(): the first of the names. tokens is what the key
+   * was made from: if the zip doesn't hold just those entries, the key doesn't stand for it, and nothing is recorded
+   */
+  private void wroteArchive(String key, Map<String, String> tokens, RapidoZip zip, String... names) {
+    RapidoArchives archives = archives();
+    if (archives != null) {
+      boolean covered = tokens != null && zip.getTokens() != null && zip.getEntries() == tokens.size();
+      archives.written(covered ? key : null, zip.getTokens(), names);
       if (zip.getCopied() > 0) {
-        pf.rapido.getArchives().note(names[0], zip.getCopied() + " of its " + zip.getEntries() + " entries as they were");
+        archives.note(names[0], zip.getCopied() + " of its " + zip.getEntries() + " entries as they were");
       }
     }
+  }
+
+  /**
+   * The archives of the package step that a build can keep (see RapidoArchives), or null if it keeps none: only a
+   * -watch build has the output of the last build to go on from (any other starts with an empty output folder), and
+   * the same build time, without which most of the archives are different every time
+   */
+  private RapidoArchives archives() {
+    return pf.rapido == null || pf.watchOutputDir == null ? null : pf.rapido.getArchives();
   }
 
   /**
@@ -5410,14 +5431,16 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * last build are copied from the zip that build wrote (see RapidoZip)
    */
   private RapidoZip openArchive(String name) throws IOException {
-    return new RapidoZip(Utilities.path(pf.outputDir, name), pf.rapido == null ? null : pf.rapido.getArchives().previous(name));
+    return new RapidoZip(Utilities.path(pf.outputDir, name), archives() == null ? null : archives().previous(name));
   }
 
   /*
    * -rapido: what goes into an archive is told by tokens: for each entry, by its name, a string that stands for its
    * content (the same in two builds only if the content is). The key of the archive is made from all of them
    * (archiveKey()), and each stands for its entry when the zip is written again (see RapidoZip). There are no tokens
-   * (null) in any other build, or if the content of an entry can't be told
+   * (null) in a build that keeps no archives (see archives()), or if the content of an entry can't be told. What goes
+   * into the key but not into the tokens (the format, the version of the IG, the publisher) is the same whenever
+   * there is a zip of the last build to take entries from: a change in it makes the build a complete one
    */
 
   private static String token(Map<String, String> tokens, String name) {
@@ -5443,7 +5466,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
   /** the tokens of these files, as entries under their names: the digest of each */
   private Map<String, String> fileTokens(Collection<String> paths) {
-    if (pf.rapido == null) {
+    if (archives() == null) {
       return null;
     }
     Map<String, String> res = new HashMap<>();
@@ -5467,10 +5490,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
   /**
    * -rapido: a hash of the resource as the build leaves it (as loaded, with its snapshot, its narrative and whatever
-   * else the build puts in it), composed in this format: what every archive that holds the resource in the format
-   * is made from. A value set of the IG has its expansion in it, with the identifier and the timestamp of when it was
-   * expanded: every build gives it new ones, so they are left out (an archive that is kept has the expansion as it
-   * was made for the build that wrote it). null if the resource can't be composed
+   * else the build puts in it), composed in this format by the R5 parser: what every archive that holds the
+   * resource in the format is made from (converted to the version of the IG, for a version before R5: the same
+   * resource gives the same conversion). A value set of the IG has its expansion in it, with the identifier and the
+   * timestamp of when it was expanded: every build gives it new ones, so they are taken off the resource while it is
+   * composed here (an archive that is kept has the expansion as it was made for the build that wrote it). null if
+   * there is no resource, or it can't be composed
    */
   private String writtenHash(FhirFormat fmt, FetchedResource r) {
     Map<FetchedResource, String> hashes = writtenHashes.computeIfAbsent(fmt, k -> new IdentityHashMap<>());
@@ -5511,7 +5536,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
   /** the tokens of these resources, as entries named type-id.ext: each resource as the build leaves it, in the format */
   private Map<String, String> resourceTokens(FhirFormat fmt, Predicate<FetchedResource> included) {
-    if (pf.rapido == null) {
+    if (archives() == null) {
       return null;
     }
     Map<String, String> res = new HashMap<>();
@@ -5539,15 +5564,24 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
-  /** the files at the top of the output folder with this extension */
+  /** the names of the files at the top of the output folder with this extension */
   private Set<String> outputFilesByExtension(String ext) throws IOException {
     Set<String> files = new HashSet<String>();
     for (String s : new File(pf.outputDir).list()) {
       if (s.endsWith(ext)) {
-        files.add(Utilities.path(pf.outputDir, s));
+        files.add(s);
       }
     }
     return files;
+  }
+
+  /** the tokens of the files at the top of the output folder with these names */
+  private Map<String, String> outputFileTokens(Set<String> names) throws IOException {
+    List<String> paths = new ArrayList<>();
+    for (String fn : names) {
+      paths.add(Utilities.path(pf.outputDir, fn));
+    }
+    return fileTokens(paths);
   }
 
   private boolean generateZipByExtension(String path, String ext) throws IOException {
@@ -5557,7 +5591,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     ZipGenerator zip = new ZipGenerator(path);
     for (String fn : files) {
-      zip.addFileName(new File(fn).getName(), fn, false);
+      zip.addFileName(fn, Utilities.path(pf.outputDir, fn), false);
     }
     zip.close();
     return true;
@@ -5569,16 +5603,18 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (files.isEmpty()) {
       return;
     }
-    Map<String, String> tokens = fileTokens(files);
+    Map<String, String> tokens = outputFileTokens(files);
     String key = archiveKey(name, tokens);
     if (!keptArchive(key, name)) {
       RapidoZip zip = openArchive(name);
-      for (String fn : files) {
-        String entry = new File(fn).getName();
-        zip.addFile(entry, token(tokens, entry), fn);
+      try {
+        for (String fn : files) {
+          zip.addFile(fn, token(tokens, fn), Utilities.path(pf.outputDir, fn));
+        }
+      } finally {
+        zip.close();
       }
-      zip.close();
-      wroteArchive(key, zip, name);
+      wroteArchive(key, tokens, zip, name);
     }
   }
 
@@ -5605,12 +5641,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       String key = archiveKey("examples", tokens);
       if (!keptArchive(key, name)) {
         RapidoZip zip = openArchive(name);
-        for (String fn : files) {
-          String entry = fn.substring(fn.lastIndexOf(File.separator)+1);
-          zip.addFile(entry, token(tokens, entry), fn);
+        try {
+          for (String fn : files) {
+            String entry = fn.substring(fn.lastIndexOf(File.separator)+1);
+            zip.addFile(entry, token(tokens, entry), fn);
+          }
+        } finally {
+          zip.close();
         }
-        zip.close();
-        wroteArchive(key, zip, name);
+        wroteArchive(key, tokens, zip, name);
       }
     }
 
@@ -5663,7 +5702,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * generated with (see SavedExpansions.withoutRunDetails())
    */
   String expansionsKey() {
-    String expansions = pf.rapido == null ? null : pf.expansions.key();
+    String expansions = archives() == null ? null : pf.expansions.key();
     if (expansions == null) {
       return null;
     }
@@ -5686,7 +5725,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     return pf.context.getModelContext().getContextInformation().getHandler(res.fhirType()) == null;
   }
 
-  private void generateDefinitions(FhirFormat fmt, String specFile)  throws Exception {
+  void generateDefinitions(FhirFormat fmt, String specFile)  throws Exception {
     // public definitions
     Set<FetchedResource> files = new HashSet<FetchedResource>();
     for (FetchedFile f : pf.fileList) {
@@ -5704,75 +5743,82 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         return;
       }
       RapidoZip zip = openArchive(name);
-      for (FetchedResource r : files) {
-        if (fmt.equals(FhirFormat.TURTLE) && !supportsRdf(r.getResource())) {
-          continue;
-        }
-        String entry = r.fhirType()+"-"+r.getId()+"."+fmt.getExtension();
-        zip.add(entry, token(tokens, entry), () -> {
-          ByteArrayOutputStream bs = new ByteArrayOutputStream();
-          if (VersionUtilities.isR3Ver(pf.version)) {
-            org.hl7.fhir.dstu3.model.Resource r3 = VersionConvertorFactory_30_N.convertResource(r.getResource());
-            if (fmt.equals(FhirFormat.JSON)) {
-              new org.hl7.fhir.dstu3.formats.JsonParser().compose(bs, r3);
-            } else if (fmt.equals(FhirFormat.XML)) {
-              new org.hl7.fhir.dstu3.formats.XmlParser().compose(bs, r3);
-            } else if (fmt.equals(FhirFormat.TURTLE)) {
-              new org.hl7.fhir.dstu3.formats.RdfParser().compose(bs, r3);
-            }
-          } else if (VersionUtilities.isR4Ver(pf.version)) {
-            org.hl7.fhir.r4.model.Resource r4 = VersionConvertorFactory_40_N.convertResource(r.getResource());
-            if (fmt.equals(FhirFormat.JSON)) {
-              new org.hl7.fhir.r4.formats.JsonParser().compose(bs, r4);
-            } else if (fmt.equals(FhirFormat.XML)) {
-              new org.hl7.fhir.r4.formats.XmlParser().compose(bs, r4);
-            } else if (fmt.equals(FhirFormat.TURTLE)) {
-              new org.hl7.fhir.r4.formats.RdfParser().compose(bs, r4);
-            }
-          } else if (VersionUtilities.isR4BVer(pf.version)) {
-            org.hl7.fhir.r4b.model.Resource r4b = VersionConvertorFactory_43_N.convertResource(r.getResource());
-            if (fmt.equals(FhirFormat.JSON)) {
-              new org.hl7.fhir.r4b.formats.JsonParser().compose(bs, r4b);
-            } else if (fmt.equals(FhirFormat.XML)) {
-              new org.hl7.fhir.r4b.formats.XmlParser().compose(bs, r4b);
-            } else if (fmt.equals(FhirFormat.TURTLE)) {
-              new org.hl7.fhir.r4b.formats.RdfParser().compose(bs, r4b);
-            }
-          } else if (VersionUtilities.isR2BVer(pf.version)) {
-            org.hl7.fhir.dstu2016may.model.Resource r14 = VersionConvertorFactory_14_N.convertResource(r.getResource());
-            if (fmt.equals(FhirFormat.JSON)) {
-              new org.hl7.fhir.dstu2016may.formats.JsonParser().compose(bs, r14);
-            } else if (fmt.equals(FhirFormat.XML)) {
-              new org.hl7.fhir.dstu2016may.formats.XmlParser().compose(bs, r14);
-            } else if (fmt.equals(FhirFormat.TURTLE)) {
-              new org.hl7.fhir.dstu2016may.formats.RdfParser().compose(bs, r14);
-            }
-          } else if (VersionUtilities.isR2Ver(pf.version)) {
-            BaseAdvisor_10_50 advisor = new IGR2ConvertorAdvisor5();
-            org.hl7.fhir.dstu2.model.Resource r14 = VersionConvertorFactory_10_N.convertResource(r.getResource(), advisor);
-            if (fmt.equals(FhirFormat.JSON)) {
-              new org.hl7.fhir.dstu2.formats.JsonParser().compose(bs, r14);
-            } else if (fmt.equals(FhirFormat.XML)) {
-              new org.hl7.fhir.dstu2.formats.XmlParser().compose(bs, r14);
-            } else if (fmt.equals(FhirFormat.TURTLE)) {
-              throw new Exception("Turtle is not supported for releases < 3");
-            }
-          } else {
-            if (fmt.equals(FhirFormat.JSON)) {
-              new JsonParser(pf.context.getModelContext()).compose(bs, r.getResource());
-            } else if (fmt.equals(FhirFormat.XML)) {
-              new XmlParser(pf.context.getModelContext()).compose(bs, r.getResource());
-            } else if (fmt.equals(FhirFormat.TURTLE)) {
-              new RdfParser(pf.context.getModelContext()).compose(bs, r.getResource());
-            }
-          }
-          return bs.toByteArray();
-        });
+      try {
+        addDefinitions(zip, fmt, files, tokens, specFile);
+      } finally {
+        zip.close();
       }
-      zip.addFile("spec.internals", token(tokens, "spec.internals"), specFile);
-      zip.close();
-      wroteArchive(key, zip, name);
+      wroteArchive(key, tokens, zip, name);
     }
+  }
+
+  private void addDefinitions(RapidoZip zip, FhirFormat fmt, Set<FetchedResource> files, Map<String, String> tokens, String specFile) throws Exception {
+    for (FetchedResource r : files) {
+      if (fmt.equals(FhirFormat.TURTLE) && !supportsRdf(r.getResource())) {
+        continue;
+      }
+      String entry = r.fhirType()+"-"+r.getId()+"."+fmt.getExtension();
+      zip.add(entry, token(tokens, entry), () -> {
+        ByteArrayOutputStream bs = new ByteArrayOutputStream();
+        if (VersionUtilities.isR3Ver(pf.version)) {
+          org.hl7.fhir.dstu3.model.Resource r3 = VersionConvertorFactory_30_N.convertResource(r.getResource());
+          if (fmt.equals(FhirFormat.JSON)) {
+            new org.hl7.fhir.dstu3.formats.JsonParser().compose(bs, r3);
+          } else if (fmt.equals(FhirFormat.XML)) {
+            new org.hl7.fhir.dstu3.formats.XmlParser().compose(bs, r3);
+          } else if (fmt.equals(FhirFormat.TURTLE)) {
+            new org.hl7.fhir.dstu3.formats.RdfParser().compose(bs, r3);
+          }
+        } else if (VersionUtilities.isR4Ver(pf.version)) {
+          org.hl7.fhir.r4.model.Resource r4 = VersionConvertorFactory_40_N.convertResource(r.getResource());
+          if (fmt.equals(FhirFormat.JSON)) {
+            new org.hl7.fhir.r4.formats.JsonParser().compose(bs, r4);
+          } else if (fmt.equals(FhirFormat.XML)) {
+            new org.hl7.fhir.r4.formats.XmlParser().compose(bs, r4);
+          } else if (fmt.equals(FhirFormat.TURTLE)) {
+            new org.hl7.fhir.r4.formats.RdfParser().compose(bs, r4);
+          }
+        } else if (VersionUtilities.isR4BVer(pf.version)) {
+          org.hl7.fhir.r4b.model.Resource r4b = VersionConvertorFactory_43_N.convertResource(r.getResource());
+          if (fmt.equals(FhirFormat.JSON)) {
+            new org.hl7.fhir.r4b.formats.JsonParser().compose(bs, r4b);
+          } else if (fmt.equals(FhirFormat.XML)) {
+            new org.hl7.fhir.r4b.formats.XmlParser().compose(bs, r4b);
+          } else if (fmt.equals(FhirFormat.TURTLE)) {
+            new org.hl7.fhir.r4b.formats.RdfParser().compose(bs, r4b);
+          }
+        } else if (VersionUtilities.isR2BVer(pf.version)) {
+          org.hl7.fhir.dstu2016may.model.Resource r14 = VersionConvertorFactory_14_N.convertResource(r.getResource());
+          if (fmt.equals(FhirFormat.JSON)) {
+            new org.hl7.fhir.dstu2016may.formats.JsonParser().compose(bs, r14);
+          } else if (fmt.equals(FhirFormat.XML)) {
+            new org.hl7.fhir.dstu2016may.formats.XmlParser().compose(bs, r14);
+          } else if (fmt.equals(FhirFormat.TURTLE)) {
+            new org.hl7.fhir.dstu2016may.formats.RdfParser().compose(bs, r14);
+          }
+        } else if (VersionUtilities.isR2Ver(pf.version)) {
+          BaseAdvisor_10_50 advisor = new IGR2ConvertorAdvisor5();
+          org.hl7.fhir.dstu2.model.Resource r14 = VersionConvertorFactory_10_N.convertResource(r.getResource(), advisor);
+          if (fmt.equals(FhirFormat.JSON)) {
+            new org.hl7.fhir.dstu2.formats.JsonParser().compose(bs, r14);
+          } else if (fmt.equals(FhirFormat.XML)) {
+            new org.hl7.fhir.dstu2.formats.XmlParser().compose(bs, r14);
+          } else if (fmt.equals(FhirFormat.TURTLE)) {
+            throw new Exception("Turtle is not supported for releases < 3");
+          }
+        } else {
+          if (fmt.equals(FhirFormat.JSON)) {
+            new JsonParser(pf.context.getModelContext()).compose(bs, r.getResource());
+          } else if (fmt.equals(FhirFormat.XML)) {
+            new XmlParser(pf.context.getModelContext()).compose(bs, r.getResource());
+          } else if (fmt.equals(FhirFormat.TURTLE)) {
+            new RdfParser(pf.context.getModelContext()).compose(bs, r.getResource());
+          }
+        }
+        return bs.toByteArray();
+      });
+    }
+    zip.addFile("spec.internals", token(tokens, "spec.internals"), specFile);
   }
 
   /**
@@ -5845,7 +5891,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     zip.close();
   }
 
-  private void generateValidationPack(String specFile)  throws Exception {
+  void generateValidationPack(String specFile)  throws Exception {
     // an IG-specific named igpack as well, to make is easy to grab the igpacks for multiple igs without the names colliding (Talk to Lloyd before removing this)
     String named = "validator-" + pf.sourceIg.getId() + ".pack";
     byte[] versionInfo = makeNewVersionInfo(pf.version);
@@ -5855,6 +5901,16 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       return;
     }
     RapidoZip zip = openArchive("validator.pack");
+    try {
+      addValidationPack(zip, versionInfo, tokens, specFile);
+    } finally {
+      zip.close();
+    }
+    FileUtils.copyFile(new File(Utilities.path(pf.outputDir, "validator.pack")),new File(Utilities.path(pf.outputDir, named)));
+    wroteArchive(key, tokens, zip, "validator.pack", named);
+  }
+
+  private void addValidationPack(RapidoZip zip, byte[] versionInfo, Map<String, String> tokens, String specFile) throws Exception {
     zip.add("version.info", token(tokens, "version.info"), () -> versionInfo);
     zip.addFile("spec.internals", token(tokens, "spec.internals"), specFile);
     for (FetchedFile f : pf.fileList) {
@@ -5911,9 +5967,6 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         zip.add(z[0], token(tokens, z[0]), () -> FileUtilities.fileToBytes(makeTempZip(z[1])));
       }
     }
-    zip.close();
-    FileUtils.copyFile(new File(Utilities.path(pf.outputDir, "validator.pack")),new File(Utilities.path(pf.outputDir, named)));
-    wroteArchive(key, zip, "validator.pack", named);
   }
 
   /** the zips in validator.pack, and the extension of the files at the top of the output folder that each is made of */
@@ -5934,7 +5987,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     for (String[] z : PACK_ZIPS) {
       Set<String> files = outputFilesByExtension(z[1]);
       if (!files.isEmpty()) {
-        String zipped = filesKey(z[0], files);
+        String zipped = archiveKey(z[0], outputFileTokens(files));
         clash = zipped == null || res.put(z[0], zipped) != null || clash;
       }
     }

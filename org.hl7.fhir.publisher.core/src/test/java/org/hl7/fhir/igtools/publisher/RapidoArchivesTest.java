@@ -203,4 +203,54 @@ class RapidoArchivesTest {
     assertEquals(RapidoArchives.key("a").add("x").finish(), RapidoArchives.key("a").add("x").finish());
     assertNotEquals(RapidoArchives.key("a").add("x").finish(), RapidoArchives.key("b").add("x").finish());
   }
+
+  /** a build that wrote a zip and recorded what stands for its entries */
+  private JsonObject builtZip(String key, String name) throws Exception {
+    RapidoArchives a = archives(null);
+    write(name, "content of " + name);
+    a.written(key, new JsonObject().add("one.json", "t1"), name);
+    return JsonParser.parseObject(JsonParser.compose(a.getRecords()));
+  }
+
+  @Test
+  void aZipThatIsWrittenAgainHasTheZipOfTheLastBuildToGoOnFrom() throws Exception {
+    RapidoArchives a = afterJekyll(builtZip("k1", "definitions.json.zip"));
+    assertFalse(a.keep("k2", "definitions.json.zip"));
+    RapidoArchives.Previous p = a.previous("definitions.json.zip");
+    assertEquals(aside.resolve("definitions.json.zip"), p.getFile());
+    assertEquals("t1", p.getEntries().asString("one.json"));
+    assertNull(a.previous("other.zip"));
+
+    // a build that kept it carries the entries on, for the build after it
+    RapidoArchives kept = afterJekyll(builtZip("k1", "definitions.json.zip"));
+    assertTrue(kept.keep("k1", "definitions.json.zip"));
+    assertNull(kept.previous("definitions.json.zip"), "it is in the output folder again");
+    RapidoArchives next = afterJekyll(JsonParser.parseObject(JsonParser.compose(kept.getRecords())));
+    assertEquals("t1", next.previous("definitions.json.zip").getEntries().asString("one.json"));
+  }
+
+  @Test
+  void aZipThatIsNotAsItWasWrittenIsNotGoneOnFrom() throws Exception {
+    JsonObject last = builtZip("k1", "definitions.json.zip");
+    write("definitions.json.zip", "CONTENT OF definitions.json.zip");
+    assertNull(afterJekyll(last).previous("definitions.json.zip"));
+
+    assertNull(archives(null).previous("definitions.json.zip"), "a complete build");
+    // no record of its entries
+    assertNull(afterJekyll(built("k1", "definitions.json.zip")).previous("definitions.json.zip"));
+    RapidoArchives noKey = archives(null);
+    write("a.zip", "x");
+    noKey.written(null, new JsonObject().add("one.json", "t1"), "a.zip");
+    assertTrue(noKey.getRecords().getNames().isEmpty());
+  }
+
+  @Test
+  void aRecordThatIsNotOneIsLeftAlone() throws Exception {
+    JsonObject last = built("k1", "a.zip");
+    last.add("b.zip", "not a record");
+    last.getJsonObject("a.zip").getJsonObject("files").getJsonObject("a.zip").remove("size");
+    RapidoArchives a = afterJekyll(last);
+    assertFalse(a.keep("k1", "a.zip"));
+    assertFalse(a.keep("k1", "b.zip"));
+  }
 }

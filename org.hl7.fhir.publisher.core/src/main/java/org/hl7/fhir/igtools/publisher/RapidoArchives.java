@@ -19,12 +19,14 @@ import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.Hasher;
 import org.hl7.fhir.utilities.json.model.JsonObject;
 
 /**
- * -rapido: the archives that the package step writes to the output folder once Jekyll has run (the example and
- * definition zips, the expansions, validator.pack, the csv, excel and schematron zips), kept from the last build when
- * what goes into them is the same.
+ * -rapido -watch: the archives that the package step writes to the output folder once Jekyll has run (the combined
+ * package, the example and definition zips, the expansions, validator.pack, the csv, excel and schematron zips), kept
+ * from the last build when what goes into them is the same.
  *
- * <p>Each archive (or group of archives made from the same content) has a key: a hash of everything that ends up in
- * it. The build works the key out before it does the work, and asks {@link #keep} whether the files of the last build
+ * <p>Each archive (or group of files made from the same content) has a key: a hash of everything that ends up in
+ * it, apart from what only says when it was made (the caller says what that is: see the keys in PublisherGenerator),
+ * so a kept archive is what the build would write, with the times and random ids of the build that wrote it.
+ * The build works the key out before it does the work, and asks {@link #keep} whether the files of the last build
  * can stay: they can if that build recorded the same key for them, and each file still has the size and the digest
  * that were recorded when it was written. If not, the build writes them again, and tells {@link #written}. A key of
  * null means the build can't tell what goes into the archive, and it is written again.
@@ -37,8 +39,8 @@ import org.hl7.fhir.utilities.json.model.JsonObject;
  * made any more, and is deleted ({@link #finish}).
  *
  * <p>The records are part of the Rapido state (see {@link RapidoTracker#save()}), which is only written by a build
- * that finished: after a build that failed, the next one is a complete build, which has no records and writes
- * everything again.
+ * that finished: after a build that failed, the next one is a complete build, which has no records from the last
+ * build to go by, and writes everything again (and records it).
  */
 public class RapidoArchives {
 
@@ -79,7 +81,8 @@ public class RapidoArchives {
       return;
     }
     for (String group : last.getNames()) {
-      JsonObject files = last.getJsonObject(group).getJsonObject("files");
+      JsonObject rec = last.getJsonObject(group);
+      JsonObject files = rec == null ? null : rec.getJsonObject("files");
       if (files == null) {
         continue;
       }
@@ -265,8 +268,9 @@ public class RapidoArchives {
   }
 
   /**
-   * When the package step is over: deletes what was moved aside and not kept. If the package step didn't run to its
-   * end, the files it didn't get to are put back as the last build left them instead
+   * When the package step is over: deletes what was moved aside and not kept. If the package step didn't run, the
+   * files are put back as the last build left them instead (they aren't recorded, so the next build writes them
+   * again). If the build fails before this, the files stay aside: the next build is a complete one
    */
   public void finish(boolean packageStepDone) {
     for (String name : movedAside) {

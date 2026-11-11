@@ -123,6 +123,8 @@ class PublisherGeneratorArchiveKeysTest {
       pf.rootDir = root.toString();
       pf.tempDir = root.resolve("temp").resolve("pages").toString();
       pf.outputDir = root.resolve("output").toString();
+      // -watch: the build writes to a staging folder, which is kept from one build to the next
+      pf.watchOutputDir = root.resolve("watch-output").toString();
       pf.vsCache = root.resolve("txcache").toString();
       Files.createDirectories(root.resolve("txcache"));
       pf.context = context;
@@ -343,7 +345,7 @@ class PublisherGeneratorArchiveKeysTest {
   @Test
   void theTimeOfTheBuildIsInTheKeys() throws Exception {
     String[] first = firstBuild();
-    // a build without -watch on the same day: the resources that have no date get another one
+    // a build at another time: the resources that have no date get another one, and the pack says when it was built
     Calendar later = (Calendar) DAY.clone();
     later.add(Calendar.MINUTE, 5);
     Build b = new Build(later);
@@ -351,6 +353,19 @@ class PublisherGeneratorArchiveKeysTest {
     assertEquals(0, b.pf.rapido.countRenderDirty());
     assertNotEquals(first[0], b.definitions());
     assertNotEquals(first[1], b.pack());
+  }
+
+  @Test
+  void thePackSaysWhenItWasBuiltAndTheDefinitionsDoNot() throws Exception {
+    for (Resource r : sources.values()) {
+      ((CanonicalResource) r).setDateElement(new org.hl7.fhir.model.core.DateTimeType("2026-01-01"));
+    }
+    String[] first = firstBuild();
+    Calendar later = (Calendar) DAY.clone();
+    later.add(Calendar.MINUTE, 5);
+    Build b = new Build(later);
+    assertEquals(first[0], b.definitions(), "every resource has its own date");
+    assertNotEquals(first[1], b.pack(), "version.info has the time of the build");
   }
 
   @Test
@@ -380,6 +395,12 @@ class PublisherGeneratorArchiveKeysTest {
 
   @Test
   void aBuildWithoutRapidoHasNoKeys() throws Exception {
+    // without -watch the output folder is empty when the build starts: nothing to keep, so no keys are made
+    Build plain = new Build(DAY);
+    plain.pf.watchOutputDir = null;
+    assertNull(plain.definitions());
+    assertNull(plain.pack());
+    assertNull(plain.generator.filesKey("csvs.zip", Arrays.asList(spec.toString())));
     Build b = new Build(DAY);
     b.pf.rapido = null;
     assertNull(b.definitions());
@@ -481,6 +502,21 @@ class PublisherGeneratorArchiveKeysTest {
     assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}", "urn:uuid:1", "b")));
     b.pf.sourceIg.setPackageId("example.other");
     assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
+    b.pf.sourceIg.setPackageId("example.ig");
+    assertEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
+    b.pf.version = "4.0.1";
+    assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
+    b.pf.version = "5.0.0";
+    // the parameters the value sets are expanded with
+    org.hl7.fhir.model.core.Parameters before = context.getExpansionParameters();
+    try {
+      org.hl7.fhir.model.core.Parameters other = new org.hl7.fhir.model.core.Parameters();
+      other.addParameter("displayLanguage", "de");
+      context.setExpansionParameters(other);
+      assertNotEquals(key, b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
+    } finally {
+      context.setExpansionParameters(before);
+    }
     b.pf.rapido = null;
     assertNull(b.generator.combinedPackageKey(packageTgz("a profile", "male", "{}")));
   }
@@ -492,7 +528,8 @@ class PublisherGeneratorArchiveKeysTest {
   /** Jekyll runs: it removes what it didn't write from the output folder */
   private void jekyll(Build b) throws Exception {
     b.pf.rapido.getArchives().beforeJekyll();
-    for (String name : new String[] {"csvs.zip", "expansions.json", "expansions.xml", "expansions.json.zip", "expansions.xml.zip"}) {
+    for (String name : new String[] {"csvs.zip", "expansions.json", "expansions.xml", "expansions.json.zip", "expansions.xml.zip",
+      "definitions.json.zip", "validator.pack", "validator-ig.pack"}) {
       Files.deleteIfExists(root.resolve("output").resolve(name));
     }
   }
@@ -505,6 +542,7 @@ class PublisherGeneratorArchiveKeysTest {
   void aZipOfUnchangedFilesIsKept() throws Exception {
     Path csv = root.resolve("output").resolve("one.csv");
     Files.write(csv, "1".getBytes(StandardCharsets.UTF_8));
+    Files.write(root.resolve("output").resolve("two.csv"), "second".getBytes(StandardCharsets.UTF_8));
     Build first = new Build(DAY);
     first.generator.generateOutputZip("csvs.zip", ".csv");
     Files.setLastModifiedTime(root.resolve("output").resolve("csvs.zip"), THEN);
@@ -524,7 +562,11 @@ class PublisherGeneratorArchiveKeysTest {
     assertNotEquals(THEN, time("csvs.zip"), "written again");
     try (ZipFile zip = new ZipFile(root.resolve("output").resolve("csvs.zip").toFile())) {
       assertEquals("2", new String(zip.getInputStream(zip.getEntry("one.csv")).readAllBytes(), StandardCharsets.UTF_8));
+      assertEquals("second", new String(zip.getInputStream(zip.getEntry("two.csv")).readAllBytes(), StandardCharsets.UTF_8));
+      assertEquals(2, zip.size());
     }
+    // the entry that didn't change comes from the zip of the last build
+    assertEquals("its content changed, 1 of its 2 entries as they were", third.pf.rapido.getArchives().getRewritten().get("csvs.zip"));
     third.finish();
 
     // a complete build writes it whatever the last build recorded
@@ -606,5 +648,151 @@ class PublisherGeneratorArchiveKeysTest {
     // the value set is the same, but its code system has another code now
     assertNotEquals(key, expansionsKeyOf(new Build(DAY), "urn:uuid:33", "a", "b", "c"));
     assertNotEquals(key, expansionsKeyOf(new Build(DAY), "urn:uuid:11", "a"));
+  }
+
+  /** what a zip holds: name to content, in the order of its entries */
+  private static Map<String, String> entries(Path zip) throws Exception {
+    Map<String, String> res = new LinkedHashMap<>();
+    try (java.util.zip.ZipInputStream in = new java.util.zip.ZipInputStream(Files.newInputStream(zip))) {
+      for (java.util.zip.ZipEntry e = in.getNextEntry(); e != null; e = in.getNextEntry()) {
+        res.put(e.getName(), new String(in.readAllBytes(), StandardCharsets.UTF_8));
+      }
+    }
+    return res;
+  }
+
+  @Test
+  void aBuildWithoutRapidoZipsTheFilesInTheOrderItAlwaysDid() throws Exception {
+    for (int i = 0; i < 40; i++) {
+      Files.write(root.resolve("output").resolve("file-" + (i * 7919) + ".csv"), ("content " + i).getBytes(StandardCharsets.UTF_8));
+    }
+    java.util.Set<String> names = new java.util.HashSet<>();
+    for (String n : root.resolve("output").toFile().list()) {
+      if (n.endsWith(".csv")) {
+        names.add(n);
+      }
+    }
+    assertEquals(40, names.size());
+    Build b = new Build(DAY);
+    b.pf.rapido = null;
+    b.generator.generateOutputZip("csvs.zip", ".csv");
+    // (the order of a set of the names, which is what was zipped before)
+    assertEquals(new ArrayList<>(names), new ArrayList<>(entries(root.resolve("output").resolve("csvs.zip")).keySet()));
+  }
+
+  /** the definitions zip and validator.pack as a build without -rapido writes them for the sources as they are now */
+  private Map<String, Map<String, String>> plainArchives(String version) throws Exception {
+    Build b = new Build(DAY);
+    b.pf.rapido = null;
+    b.pf.version = version;
+    Path out = Files.createDirectories(dir.resolve("plain-" + System.nanoTime()));
+    b.pf.outputDir = out.toString();
+    b.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
+    b.generator.generateValidationPack(spec.toString());
+    Map<String, Map<String, String>> res = new LinkedHashMap<>();
+    res.put("definitions.json.zip", entries(out.resolve("definitions.json.zip")));
+    res.put("validator.pack", entries(out.resolve("validator.pack")));
+    assertEquals(res.get("validator.pack"), entries(out.resolve("validator-ig.pack")));
+    return res;
+  }
+
+  private void theArchivesOfADifferentialBuildHoldWhatAPlainBuildWrites(String version) throws Exception {
+    Build first = new Build(DAY);
+    first.pf.version = version;
+    first.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
+    first.generator.generateValidationPack(spec.toString());
+    assertEquals(plainArchives(version).get("definitions.json.zip"), entries(root.resolve("output").resolve("definitions.json.zip")));
+    for (String name : new String[] {"definitions.json.zip", "validator.pack"}) {
+      Files.setLastModifiedTime(root.resolve("output").resolve(name), THEN);
+      // every entry of the zip has a token, so the key stands for all of it
+      assertEquals(new java.util.TreeSet<>(entries(root.resolve("output").resolve(name)).keySet()),
+          new java.util.TreeSet<>(first.pf.rapido.getArchives().getRecords().getJsonObject(name).getJsonObject("entries").getNames()), name);
+    }
+    Files.setLastModifiedTime(root.resolve("output").resolve("validator-ig.pack"), THEN);
+    assertEquals(new java.util.TreeSet<>(Arrays.asList("validator.pack", "validator-ig.pack")),
+        new java.util.TreeSet<>(first.pf.rapido.getArchives().getRecords().getJsonObject("validator.pack").getJsonObject("files").getNames()));
+    first.finish();
+
+    // nothing changed: both are kept
+    Build second = differentialBuild();
+    second.pf.version = version;
+    jekyll(second);
+    second.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
+    second.generator.generateValidationPack(spec.toString());
+    assertEquals(THEN, time("definitions.json.zip"));
+    assertEquals(THEN, time("validator.pack"));
+    assertEquals(THEN, time("validator-ig.pack"));
+    second.finish();
+
+    // a code system changes: both are written again, with the other entries as they were
+    sources.put("CodeSystem-cs", codeSystem("a", "b", "c"));
+    Build third = differentialBuild();
+    third.pf.version = version;
+    jekyll(third);
+    third.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
+    third.generator.generateValidationPack(spec.toString());
+    assertNotEquals(THEN, time("definitions.json.zip"));
+    assertEquals("its content changed, 3 of its 4 entries as they were", third.pf.rapido.getArchives().getRewritten().get("definitions.json.zip"));
+    assertEquals("its content changed, 4 of its 5 entries as they were", third.pf.rapido.getArchives().getRewritten().get("validator.pack"));
+    Map<String, Map<String, String>> plain = plainArchives(version);
+    assertTrue(plain.get("definitions.json.zip").get("CodeSystem-cs.json").contains("\"c\""));
+    assertEquals(new java.util.TreeMap<>(plain.get("definitions.json.zip")), new java.util.TreeMap<>(entries(root.resolve("output").resolve("definitions.json.zip"))));
+    assertEquals(new java.util.TreeMap<>(plain.get("validator.pack")), new java.util.TreeMap<>(entries(root.resolve("output").resolve("validator.pack"))));
+    assertEquals(entries(root.resolve("output").resolve("validator.pack")), entries(root.resolve("output").resolve("validator-ig.pack")));
+  }
+
+  @Test
+  void theArchivesOfADifferentialBuildHoldWhatAPlainBuildWrites() throws Exception {
+    theArchivesOfADifferentialBuildHoldWhatAPlainBuildWrites("5.0.0");
+  }
+
+  @Test
+  void theArchivesOfADifferentialBuildHoldWhatAPlainBuildWritesInAnotherVersion() throws Exception {
+    theArchivesOfADifferentialBuildHoldWhatAPlainBuildWrites("4.0.1");
+  }
+
+  @Test
+  void theJournalKeepsWhatStandsForItsExpansions() throws Exception {
+    Build first = new Build(DAY);
+    ValueSet vs = new ValueSet();
+    vs.setId("a");
+    vs.getExpansion().setIdentifier("urn:uuid:1");
+    vs.getExpansion().addContains().setCode("c1");
+    for (FetchedFile ff : first.pf.fileList) {
+      for (String phase : new String[] {RapidoTracker.PHASE_HTML, RapidoTracker.PHASE_SHEETS}) {
+        first.pf.rapido.startRecording(ff, phase);
+        if (ff == first.pf.fileList.get(1) && phase.equals(RapidoTracker.PHASE_HTML)) {
+          first.pf.expansions.add(vs);
+        }
+        first.pf.rapido.stopRecording();
+      }
+    }
+    String key = first.generator.expansionsKey();
+    assertNotNull(key);
+    for (FetchedFile ff : first.pf.fileList) {
+      for (FetchedResource r : ff.getResources()) {
+        first.pf.rapido.reuseValidation(ff, r);
+        first.pf.rapido.recordValidation(ff, r, new ArrayList<>());
+      }
+    }
+    first.pf.rapido.finishValidation();
+    new RapidoOutputs(first.pf.vsCache, first.pf.tempDir).update(first.pf.fileList, first.pf.fileList);
+    first.pf.rapido.save();
+
+    // the next build replays the file: the expansion comes back as it was saved, with the hash, and isn't parsed
+    Build second = differentialBuild();
+    for (FetchedFile ff : second.pf.fileList) {
+      for (String phase : new String[] {RapidoTracker.PHASE_HTML, RapidoTracker.PHASE_SHEETS}) {
+        assertTrue(second.pf.rapido.canReplay(ff, phase));
+        RapidoTracker.Journal j = second.pf.rapido.replay(ff, phase);
+        if (ff == second.pf.fileList.get(1) && phase.equals(RapidoTracker.PHASE_HTML)) {
+          assertEquals(1, j.expansions.size());
+          assertTrue(j.expansions.get(0).contains("urn:uuid:1"));
+        }
+        assertNotNull(j.expansionsHash);
+        second.pf.expansions.addJournaled(j.expansions, j.expansionsHash);
+      }
+    }
+    assertEquals(key, second.generator.expansionsKey());
   }
 }
