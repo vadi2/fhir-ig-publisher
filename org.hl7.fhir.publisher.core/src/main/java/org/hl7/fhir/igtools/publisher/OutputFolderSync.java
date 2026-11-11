@@ -198,7 +198,10 @@ public class OutputFolderSync {
     // the files are named under the staging folder as it was given, which may be reached through a link
     Path given = staged.toAbsolutePath().normalize();
     staged = staged.toRealPath();
-    Files.createDirectories(target);
+    // (a folder that is a link is one already: creating it fails before Java 20)
+    if (!Files.isDirectory(target)) {
+      Files.createDirectories(target);
+    }
     target = target.toRealPath();
     if (staged.startsWith(target) || target.startsWith(staged)) {
       throw new IOException("The folder " + target + " holds, or is inside, the staging folder " + staged);

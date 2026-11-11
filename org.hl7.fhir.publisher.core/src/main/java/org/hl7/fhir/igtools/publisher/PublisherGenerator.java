@@ -4845,6 +4845,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       r = OutputFolderSync.publish(Paths.get(pf.outputDir), Paths.get(pf.watchOutputDir), written, AIProcessor::isRenderedForAiOnly, earlyPages);
     } catch (IOException e) {
       log("Unable to put the pages in " + pf.watchOutputDir + " yet (it is updated when the build has finished): " + e);
+      earlyPages.clear();
       return;
     }
     if (r.getWritten() > 0) {

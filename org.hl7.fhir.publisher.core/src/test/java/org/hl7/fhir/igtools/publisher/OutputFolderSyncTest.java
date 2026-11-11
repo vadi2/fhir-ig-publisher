@@ -647,6 +647,24 @@ class OutputFolderSyncTest {
   }
 
   @Test
+  void publishesWhereALinkedOutputFolderPoints() throws IOException {
+    Path staged = staged();
+    Path real = Files.createDirectories(dir.resolve("web-root"));
+    write(staged, "new.html", "new");
+    try {
+      Files.createSymbolicLink(target(), real);
+    } catch (UnsupportedOperationException | IOException e) {
+      assumeTrue(false, "can't make a link here");
+    }
+
+    OutputFolderSync.Result r = OutputFolderSync.publish(staged, target(), null, null, null);
+
+    assertTrue(Files.isSymbolicLink(target()));
+    assertEquals(1, r.getWritten());
+    assertEquals("new", read(real, "new.html"));
+  }
+
+  @Test
   void publishingIntoAFolderThatHoldsTheStagingFolderIsRefused() throws IOException {
     Path staged = Files.createDirectories(target().resolve("temp"));
     write(staged, "page.html", "new");
