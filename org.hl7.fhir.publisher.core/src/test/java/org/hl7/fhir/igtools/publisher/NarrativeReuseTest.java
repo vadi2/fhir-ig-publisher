@@ -62,11 +62,13 @@ class NarrativeReuseTest {
 
   private static SimpleWorkerContext context;
   private static String noContext;
+  private static FilesystemPackageCacheManager pcm;
 
   @BeforeAll
   static void loadContext() throws Exception {
     try {
-      NpmPackage npm = new FilesystemPackageCacheManager.Builder().build().loadPackage("hl7.fhir.r5.core", "5.0.0");
+      pcm = new FilesystemPackageCacheManager.Builder().build();
+      NpmPackage npm = pcm.loadPackage("hl7.fhir.r5.core", "5.0.0");
       context = new SimpleWorkerContext.SimpleWorkerContextBuilder(ModelContext.fullCoreContext()).withAllowLoadingDuplicates(true).fromPackage(npm);
     } catch (IOException | FHIRException e) {
       noContext = "hl7.fhir.r5.core#5.0.0 can't be fetched: " + e;
@@ -94,17 +96,23 @@ class NarrativeReuseTest {
 
   private static final String CS = "CodeSystem-colours.json";
   private static final String VS = "ValueSet-colours.json";
+  private static final String ALL = "ValueSet-all.json";
   private static final String PATIENT = "Patient-p.json";
   private static final String OTHER = "Patient-q.json";
 
-  /** the sources of an IG: a value set of all the codes of a code system, and two patients */
-  private static Map<String, String> sources(String codeSystemTitle) {
+  /**
+   * the sources of an IG: a code system, a value set of all its codes, a value set that takes in that value set (its
+   * narrative names it by its title), and two patients
+   */
+  private static Map<String, String> sources(String valueSetTitle) {
     Map<String, String> s = new LinkedHashMap<>();
     s.put(CS, "{\"resourceType\":\"CodeSystem\",\"id\":\"colours\",\"url\":\"http://example.org/ig/CodeSystem/colours\",\"version\":\"1.0.0\",\"name\":\"Colours\","
-        + "\"title\":\"" + codeSystemTitle + "\",\"status\":\"active\",\"caseSensitive\":true,\"content\":\"complete\","
-        + "\"concept\":[{\"code\":\"red\",\"display\":\"Red\"},{\"code\":\"blue\",\"display\":\"Blue\",\"definition\":\"\"}]}");
+        + "\"title\":\"Colour codes\",\"status\":\"active\",\"caseSensitive\":true,\"content\":\"complete\","
+        + "\"concept\":[{\"code\":\"red\",\"display\":\"Red\",\"definition\":\"The colour *red*\"},{\"code\":\"blue\",\"display\":\"Blue\"}]}");
     s.put(VS, "{\"resourceType\":\"ValueSet\",\"id\":\"colours\",\"url\":\"http://example.org/ig/ValueSet/colours\",\"version\":\"1.0.0\",\"name\":\"ColourSet\","
-        + "\"title\":\"All the colours\",\"status\":\"active\",\"compose\":{\"include\":[{\"system\":\"http://example.org/ig/CodeSystem/colours\"}]}}");
+        + "\"title\":\"" + valueSetTitle + "\",\"status\":\"active\",\"compose\":{\"include\":[{\"system\":\"http://example.org/ig/CodeSystem/colours\"}]}}");
+    s.put(ALL, "{\"resourceType\":\"ValueSet\",\"id\":\"all\",\"url\":\"http://example.org/ig/ValueSet/all\",\"version\":\"1.0.0\",\"name\":\"AllSet\","
+        + "\"title\":\"Everything\",\"status\":\"active\",\"compose\":{\"include\":[{\"valueSet\":[\"http://example.org/ig/ValueSet/colours\"]}]}}");
     s.put(PATIENT, "{\"resourceType\":\"Patient\",\"id\":\"p\",\"name\":[{\"family\":\"Family\",\"given\":[\"Given\"]}],\"gender\":\"female\"}");
     s.put(OTHER, "{\"resourceType\":\"Patient\",\"id\":\"q\",\"active\":true,\"birthDate\":\"1970-01-01\"}");
     return s;
@@ -142,6 +150,7 @@ class NarrativeReuseTest {
       pf.vsCache = root.toString();
       pf.tempDir = root.resolve("temp").toString();
       pf.context = context;
+      pf.pcm = pcm;
       pf.version = "5.0.0";
       pf.igpkp = mock(IGKnowledgeProvider.class);
       when(pf.igpkp.getCanonical()).thenReturn("http://example.org/ig");
@@ -186,7 +195,20 @@ class NarrativeReuseTest {
       processor.setPf(pf);
       pf.rc.setParser(processor.getTypeLoader(pf.version));
       processor.generateNarratives(false);
-      rendered = mockingDetails(pf.rendererFactory).getInvocations().size() / (1 + langs.size());
+      // the resources of the IG that a renderer was made for
+      java.util.Set<String> made = new java.util.HashSet<>();
+      for (org.mockito.invocation.Invocation i : mockingDetails(pf.rendererFactory).getInvocations()) {
+        Object a = i.getArgument(0);
+        for (FetchedFile f : pf.fileList) {
+          for (FetchedResource r : f.getResources()) {
+            if (a == r.getResource() || (a instanceof org.hl7.fhir.services.renderers.utils.ResourceWrapper && r.getResource() == null
+                && r.fhirType().equals(((org.hl7.fhir.services.renderers.utils.ResourceWrapper) a).fhirType()) && r.getId().equals(((org.hl7.fhir.services.renderers.utils.ResourceWrapper) a).getId()))) {
+              made.add(r.fhirType() + "/" + r.getId());
+            }
+          }
+        }
+      }
+      rendered = made.size();
       return this;
     }
 
@@ -195,7 +217,9 @@ class NarrativeReuseTest {
       pf.rapido.finishValidation();
       for (FetchedFile f : pf.fileList) {
         for (String phase : new String[] {RapidoTracker.PHASE_HTML, RapidoTracker.PHASE_SHEETS}) {
-          if (!pf.rapido.canReplay(f, phase)) {
+          if (pf.rapido.canReplay(f, phase)) {
+            pf.rapido.replay(f, phase);
+          } else {
             pf.rapido.startRecording(f, phase);
             pf.rapido.stopRecording();
           }
@@ -275,7 +299,7 @@ class NarrativeReuseTest {
   private static String tree(org.hl7.fhir.utilities.xhtml.XhtmlNode x) {
     StringBuilder b = new StringBuilder();
     b.append("<").append(x.getNodeType()).append(" ").append(x.getName()).append(" [").append(x.getContent()).append("] ")
-        .append(x.isNoPretty()).append(" ").append(x.getEmptyExpanded());
+        .append(x.isNoPretty()).append(" ").append(x.getEmptyExpanded()).append(" ").append(x.getLocation());
     if (x.hasAttributes()) {
       x.getAttributes().forEach((k, v) -> b.append(" @").append(k).append("=").append(v));
     }
@@ -324,16 +348,16 @@ class NarrativeReuseTest {
   void theNarrativeOfAnUnchangedResourceIsPutBackAsGenerated() throws Exception {
     for (String[] langs : new String[][] {{}, {"de"}}) {
       Path root = Files.createTempDirectory(dir, "ig");
-      Map<String, String> sources = sources("Colours");
+      Map<String, String> sources = sources("All the colours");
       Build first = new Build(root, sources).langs(langs).run();
       assertTrue(first.pf.rapido.isCompleteBuild());
-      assertEquals(4, first.rendered);
+      assertEquals(5, first.rendered);
       first.finish();
 
       Build second = new Build(root, sources).langs(langs).run();
       assertFalse(second.pf.rapido.isCompleteBuild(), second.pf.rapido.getReason());
       assertEquals(0, second.rendered, "no narrative is generated");
-      assertTrue(second.narrative(VS).contains("Colours"));
+      assertTrue(second.narrative(ALL).contains("All the colours"));
       assertSameState(fresh(sources, langs), second);
       second.finish();
 
@@ -344,36 +368,36 @@ class NarrativeReuseTest {
     }
   }
 
-  /** the value set's narrative names the code system by its title: the value set's own file didn't change */
+  /** a value set that takes in another names it by its title in its narrative: its own file did not change */
   @Test
   void aNarrativeThatShowsTheTitleOfAnotherResourceIsGeneratedWhenThatTitleChanges() throws Exception {
-    build(sources("Colours")).run().finish();
+    build(sources("All the colours")).run().finish();
 
     Map<String, String> sources = sources("Hues and shades");
     Build second = build(sources).run();
     assertFalse(second.pf.rapido.isCompleteBuild(), second.pf.rapido.getReason());
-    assertEquals(2, second.rendered, "the code system and the value set; the patients' narratives are put back");
-    assertTrue(second.narrative(VS).contains("Hues and shades"), second.narrative(VS));
-    assertFalse(second.narrative(VS).contains("Colours"), second.narrative(VS));
+    assertEquals(3, second.rendered, "the value set, the one that names it and the code system it uses (its page lists it); the patients' narratives are put back");
+    assertTrue(second.narrative(ALL).contains("Hues and shades"), second.narrative(ALL));
+    assertFalse(second.narrative(ALL).contains("All the colours"), second.narrative(ALL));
     assertSameState(fresh(sources), second);
     second.finish();
 
     // the new narrative is the one the next build puts back
     Build third = build(sources).run();
     assertEquals(0, third.rendered);
-    assertTrue(third.narrative(VS).contains("Hues and shades"));
+    assertTrue(third.narrative(ALL).contains("Hues and shades"));
     assertSameState(fresh(sources), third);
   }
 
   @Test
   void aChangedResourceGetsItsNarrativeGenerated() throws Exception {
-    build(sources("Colours")).run().finish();
+    build(sources("All the colours")).run().finish();
 
-    Map<String, String> sources = sources("Colours");
+    Map<String, String> sources = sources("All the colours");
     sources.put(PATIENT, sources.get(PATIENT).replace("female", "male"));
     Build second = build(sources).run();
     assertEquals(1, second.rendered);
-    assertTrue(second.narrative(PATIENT).contains("Male"), second.narrative(PATIENT));
+    assertTrue(second.narrative(PATIENT).contains(" male,"), second.narrative(PATIENT));
     assertSameState(fresh(sources), second);
   }
 
@@ -383,17 +407,17 @@ class NarrativeReuseTest {
    */
   @Test
   void theRecordOfABuildThatDidntFinishIsNotUsed() throws Exception {
-    Map<String, String> sources = sources("Colours");
+    Map<String, String> sources = sources("All the colours");
     build(sources).run().finish();
 
     Build failed = build(sources("Hues and shades")).run();
-    assertEquals(2, failed.rendered);
+    assertEquals(3, failed.rendered);
     failed.endedWell(); // as far as the build tracker knows: the Rapido state wasn't saved
 
     Build third = build(sources).run();
     assertFalse(third.pf.rapido.isCompleteBuild(), third.pf.rapido.getReason());
-    assertEquals(2, third.rendered, "the code system and the value set have the records of the build that didn't finish");
-    assertTrue(third.narrative(VS).contains("Colours"), third.narrative(VS));
+    assertEquals(3, third.rendered, "the value sets and the code system have the records of the build that did not finish");
+    assertTrue(third.narrative(ALL).contains("All the colours"), third.narrative(ALL));
     assertSameState(fresh(sources), third);
   }
 
@@ -404,7 +428,7 @@ class NarrativeReuseTest {
    */
   @Test
   void aNarrativeIsGeneratedWhenTheElementWouldNotBeTheOneGeneratingGives() throws Exception {
-    Map<String, String> sources = sources("Colours");
+    Map<String, String> sources = sources("All the colours");
     java.util.function.Consumer<FetchedResource> loaded = r -> {
       if (r.getResource() instanceof org.hl7.fhir.model.core.CodeSystem) {
         ((org.hl7.fhir.model.core.CodeSystem) r.getResource()).setPublisher("The loader");
@@ -427,10 +451,10 @@ class NarrativeReuseTest {
   /** a narrative that came with the resource isn't generated, and isn't put back either: it is checked, every build */
   @Test
   void aNarrativeThatCameWithTheResourceIsLeftAlone() throws Exception {
-    Map<String, String> sources = sources("Colours");
+    Map<String, String> sources = sources("All the colours");
     sources.put(OTHER, sources.get(OTHER).replace("\"active\":true", "\"text\":{\"status\":\"generated\",\"div\":\"<div xmlns=\\\"http://www.w3.org/1999/xhtml\\\"><p><b>Generated Narrative: Patient q</b></p></div>\"},\"active\":true"));
     Build first = build(sources).run();
-    assertEquals(3, first.rendered);
+    assertEquals(4, first.rendered);
     assertEquals(1, first.resource(OTHER).getErrors().size());
     first.finish();
 
@@ -444,10 +468,10 @@ class NarrativeReuseTest {
   /** without -rapido nothing is recorded */
   @Test
   void nothingIsKeptWithoutRapido() throws Exception {
-    Build b = build(sources("Colours")).run();
+    Build b = build(sources("All the colours")).run();
     assertTrue(Files.isDirectory(dir.resolve("ig").resolve("temp").resolve("_rapido").resolve("narratives")));
     try (Stream<Path> s = Files.list(dir.resolve("ig").resolve("temp").resolve("_rapido").resolve("narratives"))) {
-      assertEquals(4, s.count());
+      assertEquals(5, s.count());
     }
     b.pf.rapido = null;
     Path other = Files.createTempDirectory(dir, "plain");
@@ -477,10 +501,12 @@ class NarrativeReuseTest {
     div.setAttribute("class", "a b");
     org.hl7.fhir.utilities.xhtml.XhtmlNode td = div.table("grid").tr().td();
     td.tx(""); // a renderer's empty cell: reading xhtml text back drops it, and the cell is then written another way
-    div.para().tx("a").tx("b"); // two text nodes: read back from text they are one
+    org.hl7.fhir.utilities.xhtml.XhtmlNode p = div.para();
+    p.tx("a");
+    p.tx("b"); // two text nodes: read back from text they are one
     div.pre().notPretty().tx(" x é \n");
     div.addTag("br").setEmptyExpanded(true);
-    div.addComment("note");
+    div.addComment("note").setLocation(new org.hl7.fhir.utilities.xhtml.XhtmlNode.Location(3, 14)); // as read from markdown
     return div;
   }
 
@@ -546,7 +572,7 @@ class NarrativeReuseTest {
   @Test
   void aTreeThatCantComeBackAsItIsIsNotRecorded() throws Exception {
     org.hl7.fhir.utilities.xhtml.XhtmlNode div = sample();
-    div.getChildNodes().get(0).setLocation(new org.hl7.fhir.utilities.xhtml.XhtmlNode.Location(1, 2));
+    div.getChildNodes().add(new org.hl7.fhir.utilities.xhtml.XhtmlNode(org.hl7.fhir.utilities.xhtml.NodeType.Element, "p") { }); // some other kind of node
     assertNull(RapidoNarratives.copy(div));
 
     RapidoNarratives records = new RapidoNarratives(dir.toString());

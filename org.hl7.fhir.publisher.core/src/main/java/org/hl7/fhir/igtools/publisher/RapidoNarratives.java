@@ -214,7 +214,8 @@ public class RapidoNarratives {
 
   /** false if the node isn't one that can be read back as it is */
   private static boolean writeNode(DataOutputStream out, XhtmlNode x, int depth) throws IOException {
-    if (x == null || x.getClass() != XhtmlNode.class || x.getNodeType() == null || x.getLocation() != null || depth > MAX_DEPTH) {
+    if (x == null || x.getClass() != XhtmlNode.class || x.getNodeType() == null || depth > MAX_DEPTH
+        || (x.getLocation() != null && x.getLocation().getClass() != XhtmlNode.Location.class)) {
       return false;
     }
     out.writeByte(x.getNodeType().ordinal());
@@ -222,6 +223,12 @@ public class RapidoNarratives {
     string(out, x.getContent());
     out.writeBoolean(x.isNoPretty());
     out.writeByte(x.getEmptyExpanded() == null ? 0 : x.getEmptyExpanded() ? 1 : 2);
+    // where it was in the text it was read from (markdown, say), if it was read
+    out.writeBoolean(x.getLocation() != null);
+    if (x.getLocation() != null) {
+      out.writeInt(x.getLocation().getLine());
+      out.writeInt(x.getLocation().getColumn());
+    }
     if (!x.hasAttributes()) {
       out.writeInt(0);
     } else {
@@ -264,6 +271,10 @@ public class RapidoNarratives {
     if (expanded != 0) {
       x.setEmptyExpanded(expanded == 1);
     }
+    if (in.readBoolean()) {
+      int line = in.readInt();
+      x.setLocation(new XhtmlNode.Location(line, in.readInt()));
+    }
     int attributes = count(in);
     for (int i = 0; i < attributes; i++) {
       String name = string(in);
@@ -280,7 +291,8 @@ public class RapidoNarratives {
   static boolean same(XhtmlNode a, XhtmlNode b) {
     if (a.getNodeType() != b.getNodeType() || !Objects.equals(a.getName(), b.getName()) || !Objects.equals(a.getContent(), b.getContent())
         || a.isNoPretty() != b.isNoPretty() || !Objects.equals(a.getEmptyExpanded(), b.getEmptyExpanded())
-        || a.hasAttributes() != b.hasAttributes() || a.hasChildren() != b.hasChildren()) {
+        || a.hasAttributes() != b.hasAttributes() || a.hasChildren() != b.hasChildren() || (a.getLocation() == null) != (b.getLocation() == null)
+        || (a.getLocation() != null && (a.getLocation().getLine() != b.getLocation().getLine() || a.getLocation().getColumn() != b.getLocation().getColumn()))) {
       return false;
     }
     if (a.hasAttributes()) {
