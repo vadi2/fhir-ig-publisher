@@ -1233,6 +1233,11 @@ public class PublisherProcessor extends PublisherBase  {
     logDebugMessage(LogCategory.PROGRESS, isRegen ? "regen narratives" : "gen narratives");
     // narratives generated again after validation aren't recorded: a resource that needs that has no record
     RapidoNarratives records = pf.rapido == null || isRegen ? null : new RapidoNarratives(pf.tempDir);
+    unknownSystems = records == null ? null : unsupportedCodeSystems();
+    if (unknownSystems == null) {
+      // what generating a narrative leaves in the context can't be seen: every narrative is generated
+      records = null;
+    }
     if (!isRegen) {
       narrativesPutBack.clear();
     }
@@ -1445,6 +1450,8 @@ public class PublisherProcessor extends PublisherBase  {
     private final Set<String> systemsBefore;
     /** the code systems that generating the narrative used: the build goes by them once it has generated everything */
     private List<String> systems;
+    /** those of them that the terminology server doesn't know: the context doesn't ask it about them again */
+    private List<String> unknown;
 
     private NarrativeNote(FetchedFile f, FetchedResource r) {
       this.onResource = narrativeOnResource(r);
@@ -1460,7 +1467,18 @@ public class PublisherProcessor extends PublisherBase  {
     /** the narrative has been generated, or what is done in its place has been */
     private void done() {
       Set<String> used = pf.context.getCodeSystemsUsed();
-      systems = new ArrayList<>(new TreeSet<>(used));
+      systems = new ArrayList<>();
+      unknown = new ArrayList<>();
+      for (String system : used) {
+        if (system != null) { // a value set that only takes in other value sets is noted as using no system
+          systems.add(system);
+          if (unknownSystems.contains(system)) {
+            unknown.add(system);
+          }
+        }
+      }
+      Collections.sort(systems);
+      Collections.sort(unknown);
       used.addAll(systemsBefore);
     }
 
@@ -1540,7 +1558,7 @@ public class PublisherProcessor extends PublisherBase  {
       if (tree == null) {
         return null;
       }
-      return new RapidoNarratives.ResourceRecord(r.fhirType(), r.getId(), note.onResource, status.getValue(), tree, div.getXhtmlSource(), marked, note.systems, narrativeKey(e));
+      return new RapidoNarratives.ResourceRecord(r.fhirType(), r.getId(), note.onResource, status.getValue(), tree, div.getXhtmlSource(), marked, note.systems, note.unknown, narrativeKey(e));
     } catch (RuntimeException ex) {
       return null;
     }
@@ -1602,7 +1620,7 @@ public class PublisherProcessor extends PublisherBase  {
         e.copyUserData(before);
         r.setElement(e);
         narrativesPutBack.add(r);
-        pf.context.getCodeSystemsUsed().addAll(last.systems);
+        usedSystems(last);
         return true;
       }
       // as ResourceWrapperModel.setNarrative leaves the element
@@ -1615,7 +1633,7 @@ public class PublisherProcessor extends PublisherBase  {
       div.setXhtml(last.div);
       addNarrative(before, text);
       if (last.key.equals(narrativeKey(before))) {
-        pf.context.getCodeSystemsUsed().addAll(last.systems);
+        usedSystems(last);
         return true;
       }
       before.removeChild(text);
@@ -1633,6 +1651,36 @@ public class PublisherProcessor extends PublisherBase  {
       }
       return false;
     }
+  }
+
+  /**
+   * -rapido: the code systems the terminology server said it doesn't know, as the worker context keeps them for the
+   * build (it asks about each of them once), while narratives are generated. null if they can't be seen
+   */
+  private Set<String> unknownSystems;
+
+  /** the worker context's own set of the code systems the terminology server doesn't know, which it has no accessor for; null if it can't be read */
+  @SuppressWarnings("unchecked")
+  private Set<String> unsupportedCodeSystems() {
+    try {
+      for (Class<?> c = pf.context.getClass(); c != null; c = c.getSuperclass()) {
+        for (java.lang.reflect.Field field : c.getDeclaredFields()) {
+          if (field.getName().equals("unsupportedCodeSystems") && Set.class.isAssignableFrom(field.getType())) {
+            field.setAccessible(true);
+            return (Set<String>) field.get(pf.context);
+          }
+        }
+      }
+    } catch (RuntimeException | IllegalAccessException e) {
+      // not readable
+    }
+    return null;
+  }
+
+  /** what generating the narrative leaves in the worker context: the code systems it used, and which of them the terminology server doesn't know */
+  private void usedSystems(RapidoNarratives.ResourceRecord last) {
+    pf.context.getCodeSystemsUsed().addAll(last.systems);
+    unknownSystems.addAll(last.unknown);
   }
 
   /**

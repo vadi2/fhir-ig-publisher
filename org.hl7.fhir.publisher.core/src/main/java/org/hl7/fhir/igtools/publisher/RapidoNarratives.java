@@ -30,8 +30,9 @@ import org.hl7.fhir.utilities.xhtml.XhtmlNode;
  * the resource and converting it again.
  *
  * <p>A {@link FileRecord} holds, for each resource of the file that a narrative was generated for, the narrative as
- * the renderer built it (the tree itself, node for node: reading xhtml back from text is not the same tree), and for
- * a resource that is converted to an element afterwards, the text of the narrative as that element holds it. With
+ * the renderer built it (the tree itself, node for node: reading xhtml back from text is not the same tree), for
+ * a resource that is converted to an element afterwards, the text of the narrative as that element holds it, and
+ * the code systems that generating it used, which the worker context keeps for the build. With
  * them is a key of the whole element once it had its narrative (see {@link RapidoNativeOutputs#contentKey}): the
  * narrative is only put back if the element then has that key again.
  *
@@ -60,10 +61,13 @@ public class RapidoNarratives {
     final boolean marked;
     /** the code systems that generating the narrative used (the worker context keeps the ones a build used) */
     final List<String> systems;
+    /** those of them that the terminology server didn't know (the worker context keeps those for a build as well) */
+    final List<String> unknown;
     /** the key of the element with its narrative */
     final String key;
 
-    ResourceRecord(String type, String id, boolean onResource, String status, XhtmlNode div, String source, boolean marked, List<String> systems, String key) {
+    ResourceRecord(String type, String id, boolean onResource, String status, XhtmlNode div, String source, boolean marked, List<String> systems, List<String> unknown,
+        String key) {
       this.type = type;
       this.id = id;
       this.onResource = onResource;
@@ -72,6 +76,7 @@ public class RapidoNarratives {
       this.source = source;
       this.marked = marked;
       this.systems = systems;
+      this.unknown = unknown;
       this.key = key;
     }
   }
@@ -139,10 +144,8 @@ public class RapidoNarratives {
           string(out, r.status);
           string(out, r.source);
           out.writeBoolean(r.marked);
-          out.writeInt(r.systems.size());
-          for (String system : r.systems) {
-            string(out, system);
-          }
+          strings(out, r.systems);
+          strings(out, r.unknown);
           string(out, r.key);
           if (!writeNode(out, r.div, 0)) {
             forget(f);
@@ -189,12 +192,10 @@ public class RapidoNarratives {
           String status = string(in);
           String source = string(in);
           boolean marked = in.readBoolean();
-          List<String> systems = new ArrayList<>();
-          for (int j = count(in); j > 0; j--) {
-            systems.add(string(in));
-          }
+          List<String> systems = strings(in);
+          List<String> unknown = strings(in);
           String key = string(in);
-          rec.resources.add(new ResourceRecord(type, rid, onResource, status, readNode(in, 0), source, marked, systems, key));
+          rec.resources.add(new ResourceRecord(type, rid, onResource, status, readNode(in, 0), source, marked, systems, unknown, key));
         }
       }
       return in.readInt() == VERSION && in.read() == -1 ? rec : null;
@@ -339,6 +340,21 @@ public class RapidoNarratives {
       throw new IOException("not a count: " + n);
     }
     return n;
+  }
+
+  private static void strings(DataOutputStream out, List<String> list) throws IOException {
+    out.writeInt(list.size());
+    for (String s : list) {
+      string(out, s);
+    }
+  }
+
+  private static List<String> strings(DataInputStream in) throws IOException {
+    List<String> list = new ArrayList<>();
+    for (int n = count(in); n > 0; n--) {
+      list.add(string(in));
+    }
+    return list;
   }
 
   private static void string(DataOutputStream out, String s) throws IOException {
