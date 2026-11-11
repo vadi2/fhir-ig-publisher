@@ -94,6 +94,11 @@ class NarrativeReuseTest {
     cached.clear();
   }
 
+  /** what every build of a test does once it is ready to generate the narratives (the builds it is compared with too) */
+  private java.util.function.Consumer<PublisherFields> everyBuild = pf -> { };
+  /** between two resources of one source file */
+  private static final String NEXT = "\n---\n";
+
   private static final String CS = "CodeSystem-colours.json";
   private static final String VS = "ValueSet-colours.json";
   private static final String ALL = "ValueSet-all.json";
@@ -127,6 +132,8 @@ class NarrativeReuseTest {
     java.util.function.Consumer<FetchedResource> loaded = r -> { };
     /** called on each resource after Rapido has compared the files with the last build, before the narratives */
     java.util.function.Consumer<FetchedResource> compared = r -> { };
+    /** called once the build is ready to generate the narratives */
+    java.util.function.Consumer<PublisherFields> prepared = everyBuild;
     PublisherFields pf;
     int rendered;
 
@@ -166,19 +173,23 @@ class NarrativeReuseTest {
       pf.fileList.add(ig);
       for (Map.Entry<String, String> s : sources.entrySet()) {
         FetchedFile f = file(s.getKey(), s.getValue());
-        byte[] cnt = s.getValue().getBytes(StandardCharsets.UTF_8);
-        Element e = new JsonParser(context).parseSingle(new ByteArrayInputStream(cnt), null);
-        FetchedResource r = f.addResource(s.getKey());
-        r.setElement(e).setId(e.getIdBase());
-        if (!"Patient".equals(e.fhirType())) {
-          // a conformance resource is loaded as a resource as well, and is in the context
-          Resource res = new org.hl7.fhir.model.core.formats.JsonParser(context.getModelContext()).parse(cnt);
-          r.setResource(res);
-          res.setWebPath(e.fhirType() + "-" + e.getIdBase() + ".html");
-          context.cacheResource(res);
-          cached.add(res);
+        for (String one : s.getValue().split(NEXT)) {
+          byte[] cnt = one.getBytes(StandardCharsets.UTF_8);
+          Element e = new JsonParser(context).parseSingle(new ByteArrayInputStream(cnt), null);
+          FetchedResource r = f.addResource(s.getKey());
+          r.setElement(e).setId(e.getIdBase());
+          // what the loader keeps on an element comes with it when the element is made again
+          e.setUserData("test.loaded", s.getKey());
+          if (!"Patient".equals(e.fhirType())) {
+            // a conformance resource is loaded as a resource as well, and is in the context
+            Resource res = new org.hl7.fhir.model.core.formats.JsonParser(context.getModelContext()).parse(cnt);
+            r.setResource(res);
+            res.setWebPath(e.fhirType() + "-" + e.getIdBase() + ".html");
+            context.cacheResource(res);
+            cached.add(res);
+          }
+          loaded.accept(r);
         }
-        loaded.accept(r);
         pf.fileList.add(f);
       }
       pf.changeList.addAll(pf.fileList); // as the loader leaves it
@@ -199,7 +210,11 @@ class NarrativeReuseTest {
       for (FetchedFile f : pf.fileList) {
         f.getResources().forEach(compared);
       }
+      prepared.accept(pf);
       processor.generateNarratives(false);
+      if (pf.needsRegen) {
+        processor.generateNarratives(true); // as the build does after validation
+      }
       // the resources of the IG that a renderer was made for
       java.util.Set<String> made = new java.util.HashSet<>();
       for (org.mockito.invocation.Invocation i : mockingDetails(pf.rendererFactory).getInvocations()) {
@@ -250,8 +265,12 @@ class NarrativeReuseTest {
       return f;
     }
 
+    FetchedFile file(String file) {
+      return pf.fileList.stream().filter(f -> f.getLoadPath().equals(file)).findFirst().orElseThrow();
+    }
+
     FetchedResource resource(String file) {
-      return pf.fileList.stream().filter(f -> f.getLoadPath().equals(file)).findFirst().orElseThrow().getResources().get(0);
+      return file(file).getResources().get(0);
     }
 
     String narrative(String file) throws Exception {
@@ -263,7 +282,7 @@ class NarrativeReuseTest {
       Map<String, String> res = new LinkedHashMap<>();
       for (FetchedFile f : pf.fileList) {
         for (FetchedResource r : f.getResources()) {
-          String k = f.getLoadPath() + " ";
+          String k = f.getLoadPath() + " " + r.getId() + " ";
           Element e = r.getElement();
           res.put(k + "element json", compose(new JsonParser(context), e));
           res.put(k + "element xml", compose(new org.hl7.fhir.services.elementmodel.XmlParser(context), e));
@@ -272,10 +291,14 @@ class NarrativeReuseTest {
           res.put(k + "element key", h.finish());
           Element div = e.getNamedChild("text").getNamedChild("div");
           res.put(k + "element narrative", tree(div.getXhtml()) + " source " + div.getXhtmlSource());
-          res.put(k + "element data", new TreeSet<>(e.getUserDataNames()).toString());
+          for (String n : new TreeSet<>(e.getUserDataNames())) {
+            res.put(k + "element data " + n, String.valueOf(e.getUserData(n)));
+          }
           res.put(k + "element shape", shape(e));
           res.put(k + "generated", r.isGeneratedNarrative() + " " + r.isRegenAfterValidation());
           res.put(k + "messages", r.getErrors().size() + " " + f.getErrors().size());
+          res.put(k + "outputs", f.getOutputNames().size() + " " + pf.needsRegen + " " + pf.noNarrativeResources.size()
+              + " " + pf.otherFilesRun.stream().map(n -> java.nio.file.Path.of(n).getFileName().toString()).sorted().collect(java.util.stream.Collectors.toList()));
           if (r.getResource() != null) {
             DomainResource dr = (DomainResource) r.getResource();
             ByteArrayOutputStream b = new ByteArrayOutputStream();
@@ -336,7 +359,6 @@ class NarrativeReuseTest {
     Path root = Files.createTempDirectory(dir, "fresh");
     Build b = new Build(root, sources).langs(langs).run();
     assertTrue(b.pf.rapido.isCompleteBuild());
-    assertEquals(sources.size(), b.rendered);
     return b;
   }
 
@@ -450,7 +472,7 @@ class NarrativeReuseTest {
     Build fresh = new Build(Files.createTempDirectory(dir, "fresh"), sources);
     fresh.loaded = loaded;
     assertSameState(fresh.run(), second);
-    assertTrue(second.state().get(CS + " element json").contains("The loader"));
+    assertTrue(second.state().get(CS + " colours element json").contains("The loader"));
   }
 
   /**
@@ -474,7 +496,105 @@ class NarrativeReuseTest {
     Build fresh = new Build(Files.createTempDirectory(dir, "fresh"), sources);
     fresh.compared = compared;
     assertSameState(fresh.run(), second);
-    assertTrue(second.state().get(PATIENT + " element json").contains("\"language\""));
+    assertTrue(second.state().get(PATIENT + " p element json").contains("\"language\""));
+  }
+
+  /**
+   * A renderer that shows what validation found has its narrative generated again after validation: that narrative is
+   * not the one of the first pass, and it is not recorded. The second pass leaves the records of the others alone
+   */
+  @Test
+  void aNarrativeThatIsGeneratedAgainAfterValidationIsNotPutBack() throws Exception {
+    everyBuild = pf -> org.mockito.Mockito.doAnswer(inv -> {
+      org.hl7.fhir.services.renderers.ResourceRenderer rr = (org.hl7.fhir.services.renderers.ResourceRenderer) inv.callRealMethod();
+      if (inv.getArgument(0) instanceof org.hl7.fhir.model.core.CodeSystem) {
+        rr = spy(rr);
+        when(rr.renderingUsesValidation()).thenReturn(true);
+      }
+      return rr;
+    }).when(pf.rendererFactory).factory(any(Resource.class), any(RenderingContext.class));
+    Map<String, String> sources = sources("All the colours");
+    Build first = build(sources).run();
+    assertTrue(first.pf.needsRegen);
+    first.finish();
+
+    Build second = build(sources).run();
+    assertEquals(1, second.rendered, "the code system");
+    assertTrue(second.pf.needsRegen);
+    assertTrue(second.resource(CS).isRegenAfterValidation());
+    assertSameState(fresh(sources), second);
+  }
+
+  /** a renderer that writes files as well: the build is told of them when the narrative is generated, so it is, every build */
+  @Test
+  void aNarrativeWhoseRendererWritesFilesIsNotPutBack() throws Exception {
+    everyBuild = pf -> org.mockito.Mockito.doAnswer(inv -> {
+      org.hl7.fhir.services.renderers.utils.ResourceWrapper w = inv.getArgument(0);
+      if ("q".equals(w.getId())) {
+        Path diagram = Path.of(pf.tempDir, "q-diagram.svg");
+        Files.createDirectories(diagram.getParent());
+        Files.writeString(diagram, "<svg/>");
+        ((RenderingContext) inv.getArgument(1)).getFiles().add(diagram.toString());
+      }
+      return inv.callRealMethod();
+    }).when(pf.rendererFactory).factory(any(org.hl7.fhir.services.renderers.utils.ResourceWrapper.class), any(RenderingContext.class));
+    Map<String, String> sources = sources("All the colours");
+    build(sources).run().finish();
+
+    Build second = build(sources).run();
+    assertEquals(1, second.rendered, "the patient whose renderer writes a file");
+    assertTrue(second.file(OTHER).getOutputNames().toString().contains("q-diagram.svg"));
+    assertTrue(second.pf.otherFilesRun.toString().contains("q-diagram.svg"));
+    assertSameState(fresh(sources), second);
+  }
+
+  /** narratives made while their source is tracked have ids from a counter the whole build shares: they are generated */
+  @Test
+  void nothingIsPutBackOrKeptWhileTheNarrativeSourceIsTracked() throws Exception {
+    Map<String, String> sources = sources("All the colours");
+    build(sources).run().finish();
+    everyBuild = pf -> pf.rc.setTrackNarrativeSource(true);
+    Build second = build(sources).run();
+    assertEquals(5, second.rendered);
+    second.finish();
+
+    everyBuild = pf -> { };
+    assertEquals(5, build(sources).run().rendered, "the build that tracked kept nothing");
+  }
+
+  /** a source file with two resources: one whose narrative is put back, one that came with its own */
+  @Test
+  void theResourcesOfAFileEachGetTheirOwn() throws Exception {
+    Map<String, String> sources = sources("All the colours");
+    String own = "{\"resourceType\":\"Patient\",\"id\":\"r\",\"text\":{\"status\":\"additional\",\"div\":\"<div xmlns=\\\"http://www.w3.org/1999/xhtml\\\"><p>R</p></div>\"},\"active\":false}";
+    String third = "{\"resourceType\":\"Patient\",\"id\":\"s\",\"gender\":\"other\"}";
+    sources.put(OTHER, sources.get(OTHER) + NEXT + own + NEXT + third);
+    Build first = build(sources).run();
+    assertEquals(6, first.rendered);
+    first.finish();
+
+    Build second = build(sources).run();
+    assertEquals(0, second.rendered);
+    assertSameState(fresh(sources), second);
+    second.finish();
+
+    // one of them is not what it was when the narratives are generated: the others still get theirs back, and the
+    // file's new record has all of them
+    java.util.function.Consumer<FetchedResource> compared = r -> {
+      if (r.getId().equals("s")) {
+        r.getElement().setChildValue("language", "en");
+      }
+    };
+    for (int i = 0; i < 2; i++) {
+      Build next = build(sources);
+      next.compared = compared;
+      next.run();
+      assertEquals(i == 0 ? 1 : 0, next.rendered);
+      Build fresh = new Build(Files.createTempDirectory(dir, "fresh"), sources);
+      fresh.compared = compared;
+      assertSameState(fresh.run(), next);
+      next.finish();
+    }
   }
 
   /** a narrative that came with the resource isn't generated, and isn't put back either: it is checked, every build */

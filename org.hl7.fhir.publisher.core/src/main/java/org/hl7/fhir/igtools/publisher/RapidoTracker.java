@@ -80,10 +80,14 @@ import org.hl7.fhir.utilities.xhtml.XhtmlNode;
 /**
  * The state that Rapido keeps between builds, and the decisions made from it.
  *
- * Every build still loads every file, generates narratives and native outputs for every resource, and runs every
- * summary page and Jekyll: those are cheap enough, and they're where most of the cross-resource output comes from.
+ * Every build still loads every file, and runs every summary page and Jekyll: those are cheap enough, and they're
+ * where most of the cross-resource output comes from.
  * What a Rapido build skips, for a file whose inputs haven't changed, is
  * <ul>
+ *   <li>narrative generation: the narrative the last build generated is put back on a resource, if nothing that the
+ *   file depends on, or that refers to it, has changed, and the resource's element is then what it was (see
+ *   {@link RapidoNarratives})</li>
+ *   <li>native outputs: left as the last build wrote them, under the same conditions (see {@link RapidoNativeOutputs})</li>
  *   <li>validation: the messages from the last build are restored instead, if nothing the file depends on (see
  *   {@link RapidoDependencyAnalyser}) has changed</li>
  *   <li>html and spreadsheet generation: the outputs from the last build are still in the temp folder, and the effects
