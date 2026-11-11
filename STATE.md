@@ -1,8 +1,9 @@
 # perf3 orchestrator state (survives compaction; also pushed to origin/claude/ig-publisher-perf-41aejs-notes)
 
 ## Task (from Vadim, 2026-11-11)
-Speed up `-rapido -watch` further, toward instant. I (orchestrator) think and delegate ALL work to Opus agents
-(cloud sessions via create_session, model claude-opus-5-5, each its own VM). Each agent: implement, bench, run the
+Speed up `-rapido -watch` further, toward instant. I (orchestrator) think and delegate ALL work to FABLE agents
+(cloud sessions via create_session, model claude-fable-5-2, each its own VM; Vadim corrected Opus -> Fable 14:20,
+Fable weekly quota is usable until Tuesday). Each agent: implement, bench, run the
 pr-review-toolkit loop (code-simplifier as is; others: drop nits, verify empirically, fix confirmed only), then PR to
 vadi2/fhir-ig-publisher (never HL7), then unsubscribe from the PR. Agents must not stream results to me. Up to 10
 PRs. A 30-minute watcher checks agents aren't stuck and that open PRs' CI passes (fix via the owning agent).
@@ -18,15 +19,15 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 - Child branch names: perf3/<slug>. Plugin install verified: `claude plugin install pr-review-toolkit`.
 - Watcher: two hourly scheduled tasks firing into this session: trig_0126Fp1UmpBHLx5MBc32MKtz (min 17), trig_017gZTMAVWsXJZ2Vox7gh9So (min 47).
 
-## Sessions (wave 1, launched 14:17-14:18 UTC)
+## Sessions (wave 1, Fable, launched 14:21 UTC; the six Opus sessions from 14:17 were archived, nothing pushed)
 | slug | session id | branch | PR | status |
 |---|---|---|---|---|
-| profile (no PR) | session_013FrhV8XRGTBvwAe8rnwYGC | notes branch | n/a | running |
-| early-publish | session_013FrhV6B84dAQ6VuTFfhau6 | perf3/early-publish | - | running |
-| archives-reuse | session_013FrhV735A1az8BDKPK9h4P | perf3/archives-reuse | - | running |
-| native-skip | session_013FrhV6MXeT6tYS4V2ad9uo | perf3/native-skip | - | running |
-| summaries-reuse | session_013FrhV8M2RoL7gBNia2Y5n4 | perf3/summaries-reuse | - | running |
-| rapido-state | session_013FrhV753jLcUYVtgrMUkAv | perf3/rapido-state | - | running |
+| profile (no PR) | session_013FrhV9XtpZJzHaw5CUT5RR | notes branch | n/a | running |
+| early-publish | session_013FrhV8MAcq78uViFCFE1ve | perf3/early-publish | - | running |
+| archives-reuse | session_013FrhV89txD9eAkM8cnaV3n | perf3/archives-reuse | - | running |
+| native-skip | session_013FrhV7287Tkr83evM7MsqW | perf3/native-skip | - | running |
+| summaries-reuse | session_013FrhV9QcWhADhYPtwEjkoZ | perf3/summaries-reuse | - | running |
+| rapido-state | session_013FrhV9krvJaocgAxaWRabs | perf3/rapido-state | - | running |
 
 ## Wave 2 candidates (5 PR slots left; decide after profile.md lands)
 - narrative-skip: skip narrative generation for clean resources (6.4 s); stack on perf3/native-skip (its PR lists what
@@ -55,4 +56,4 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
    summary (PR list with numbers, what was dropped and why, no CI on fork).
 
 ## Log
-- 14:19 wave 1 launched.
+- 14:19 wave 1 launched on Opus. 14:21 archived and relaunched on Fable per Vadim.
