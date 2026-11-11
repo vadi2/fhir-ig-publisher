@@ -214,8 +214,11 @@ public class RapidoArchives {
    */
   public Previous previous(String name) {
     JsonObject rec = last == null ? null : last.getJsonObject(name);
-    JsonObject entries = rec == null ? null : rec.getJsonObject("entries");
-    JsonObject files = rec == null ? null : rec.getJsonObject("files");
+    if (rec == null) {
+      return null;
+    }
+    JsonObject entries = rec.getJsonObject("entries");
+    JsonObject files = rec.getJsonObject("files");
     if (entries == null || files == null || intact(name, files.getJsonObject(name)) != null) {
       return null;
     }
@@ -225,8 +228,9 @@ public class RapidoArchives {
   /** As {@link #written(String, String...)}, for a zip: entries is what stands for the content of each entry, by name (or null) */
   public void written(String key, JsonObject entries, String... names) {
     written(key, names);
+    // there is a record only if written() has just made it, for this key
     JsonObject rec = now.getJsonObject(names[0]);
-    if (rec != null && key != null && key.equals(rec.asString("key")) && entries != null) {
+    if (rec != null && entries != null) {
       rec.set("entries", entries);
     }
   }
