@@ -23,12 +23,12 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 | slug | session id | branch | PR | status |
 |---|---|---|---|---|
 | profile (no PR) | session_013FrhV9XtpZJzHaw5CUT5RR | notes branch | n/a | DONE (profile.md 18:16). Ignore it in ticks. |
-| replay-stamp (wave 2) | session_013FrhV8oUf4Hg2ZFmpfFFgD | perf3/replay-stamp | - | running (launched 18:52) |
+| replay-stamp (wave 2) | session_013FrhV8oUf4Hg2ZFmpfFFgD | perf3/replay-stamp | none | DROPPED: PR #39 (rapido-state) already trusts file stamps in canReplay (7.5 -> 0.3 s) |
 | early-publish | session_013FrhV8MAcq78uViFCFE1ve | perf3/early-publish | - | running |
 | archives-reuse | session_013FrhV89txD9eAkM8cnaV3n | perf3/archives-reuse | - | running |
 | native-skip | session_013FrhV7287Tkr83evM7MsqW | perf3/native-skip | - | running |
 | summaries-reuse | session_013FrhV9QcWhADhYPtwEjkoZ | perf3/summaries-reuse | - | running |
-| rapido-state | session_013FrhV9krvJaocgAxaWRabs | perf3/rapido-state | - | running |
+| rapido-state | session_013FrhV9krvJaocgAxaWRabs | perf3/rapido-state | #39 | DONE. PR open 19:54, 0 checks, mergeable clean. prof -14.8 s, inst -10.3 s, page 0 |
 | narrative-skip (wave 2, stacked: PR base perf3/native-skip) | session_013FrhV6FEdUbpxzt5WmGXJF | perf3/narrative-skip | - | running |
 | translations-dirty (wave 2; + optional System.gc commit) | session_013FrhV5h5r3K9VwTsXxmcW2 | perf3/translations-dirty | - | running |
 | qa-prep-reuse (wave 2) | session_013FrhV6SxKUeigqo6vSYCQF | perf3/qa-prep-reuse | - | running |
@@ -121,3 +121,10 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   tail-restart have no branch yet (just launched). NOTE: get_session rate_limit_info now says status allowed_warning,
   seven_day_overage_included (weekly Fable quota getting close; resets Tue 2026-11-17 12:00 UTC). Told Vadim.
   If sessions start failing on rate limits: do not relaunch; record and report.
+- 20:18 tick: PR #39 = rapido-state (state kept in memory, expansions stored once by hash, stamps before re-hash,
+  atomic state write; prof 245.1 -> 230.3, inst 234.7 -> 224.4, page unchanged; 2 review rounds). No checks (expected).
+  Its tests line: 2 ParallelFolderZipTest errors (InvalidPath, non-ASCII name under POSIX locale) "not run on the
+  base" -> I am running that class on the base in /home/user/fhir-ig-publisher (log: scratchpad/pfz-base.log); if it
+  passes on base, message rapido-state to look again. replay-stamp dropped itself (duplicate of #39), cost ~1 USD.
+  One PR slot is free (9 owners). Decision: do NOT fill it now (quota warning; reserve ideas are tail-only and would
+  conflict with tail-restart/early-publish). If tail-restart drops, launch opp 6 (full-ig.zip beside QA) from base.
