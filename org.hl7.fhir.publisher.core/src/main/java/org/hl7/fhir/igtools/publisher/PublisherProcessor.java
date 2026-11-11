@@ -1231,10 +1231,18 @@ public class PublisherProcessor extends PublisherBase  {
   public void generateNarratives(boolean isRegen) throws Exception {
     TimeTracker.Session tts = pf.tt.start("narrative generation");
     logDebugMessage(LogCategory.PROGRESS, isRegen ? "regen narratives" : "gen narratives");
+    // narratives generated again after validation aren't recorded: a resource that needs that has no record
+    RapidoNarratives records = pf.rapido == null || isRegen ? null : new RapidoNarratives(pf.tempDir);
+    int reused = 0;
     for (FetchedFile f : pf.changeList) {
       f.start("generateNarratives");
       try {
+        RapidoNarratives.FileRecord last = records == null ? null : lastNarratives(records, f);
+        List<RapidoNarratives.ResourceRecord> now = records == null ? null : new ArrayList<>();
         for (FetchedResource r : f.getResources()) {
+          // what the next build can put back on the resource, if anything
+          RapidoNarratives.ResourceRecord rec = null;
+          RapidoNarratives.ResourceRecord lastRec = last == null ? null : last.resources.get(now.size());
           if (!isRegen || r.isRegenAfterValidation()) {
             if (r.getExampleUri()==null || this.pf.genExampleNarratives) {
               if (!passesNarrativeFilter(r)) {
@@ -1244,7 +1252,10 @@ public class PublisherProcessor extends PublisherBase  {
                   ((DomainResource) r.getResource()).setText(null);
                 }
                 r.getElement().removeChild("text");
+              } else if (putBackNarrative(r, lastRec)) {
+                rec = lastRec;
               } else {
+                NarrativeNote note = records == null ? null : new NarrativeNote(r);
                 List<Locale> langs = translationLocales();
                 logDebugMessage(LogCategory.PROGRESS, "generate narrative for "+f.getLoadPath()+" : "+r.getId());
                 if (r.getResource() != null && r.getResource() instanceof DomainResource && isConvertableResource(r.getResource().fhirType())) {
@@ -1268,14 +1279,20 @@ public class PublisherProcessor extends PublisherBase  {
                         this.pf.needsRegen = true;
                       }
                       rr.setMultiLangMode(langs.size() > 1).renderResource(ResourceWrapper.forResource(lrc, r.getResource()));
+                      if (note != null) {
+                        note.rendered(lrc);
+                      }
                     } else if (r.getResource() instanceof Bundle) {
+                      note = null;
                       regen = true;
                       new BundleRenderer(lrc).setMultiLangMode(langs.size() > 1).renderResource(ResourceWrapper.forResource(lrc, r.getResource()));
                     } else if (r.getResource() instanceof Parameters) {
+                      note = null;
                       regen = true;
                       Parameters p = (Parameters) r.getResource();
                       new ParametersRenderer(lrc).setMultiLangMode(langs.size() > 1).renderResource(ResourceWrapper.forResource(lrc, p));
                     } else if (r.getResource() instanceof DomainResource) {
+                      note = null;
                       checkExistingNarrative(f, r, ((DomainResource) r.getResource()).getText().getDiv());
                     }
                   }
@@ -1285,6 +1302,7 @@ public class PublisherProcessor extends PublisherBase  {
                     e.copyUserData(r.getElement());
                     r.setElement(e);
                   }
+                  rec = recordNarrative(r, note);
                 } else {
                   boolean first = true;
                   for (Locale lang : langs) {
@@ -1307,7 +1325,11 @@ public class PublisherProcessor extends PublisherBase  {
                       rr.setMultiLangMode(langs.size() > 1).renderResource(rw);
                       this.pf.otherFilesRun.addAll(lrc.getFiles());
                       f.getOutputNames().addAll(lrc.getFiles()); // for -rapido (see RapidoOutputs)
+                      if (note != null) {
+                        note.rendered(lrc);
+                      }
                     } else if (r.fhirType().equals("Bundle")) {
+                      note = null;
                       lrc.setAddName(true);
                       for (org.hl7.fhir.services.elementmodel.Element e : r.getElement().getChildrenByName("entry")) {
                         Element res = e.getNamedChild("resource");
@@ -1326,22 +1348,254 @@ public class PublisherProcessor extends PublisherBase  {
                         }
                       }
                     } else if (isDomainResource(r) && hasNarrative(r.getElement())) {
+                      note = null;
                       checkExistingNarrative(f, r, r.getElement().getNamedChild("text").getNamedChild("div").getXhtml());
                     }
                   }
+                  rec = recordNarrative(r, note);
                 }
               }
             } else {
               logDebugMessage(LogCategory.PROGRESS, "skipped narrative for "+f.getName()+" : "+r.getId());
             }
           }
+          if (now != null) {
+            now.add(rec);
+          }
+        }
+        if (records != null && keepNarratives(records, f, last, now)) {
+          reused++;
         }
       } finally {
         f.finish("generateNarratives");
       }
     }
+    if (records != null && !pf.rapido.isCompleteBuild()) {
+      log("Rapido Mode: the narratives of " + reused + " of " + pf.changeList.size() + " files are reused");
+    }
     tts.end();
   }
+
+  /**
+   * -rapido: the narratives the last build that finished generated for the file's resources, if they can still be
+   * theirs. Rapido found that nothing the file's outputs are made from has changed since (the file, what it depends on,
+   * what refers to it: all a renderer reads of the IG to make a narrative is among that), and the record is the one
+   * that build wrote or used.
+   */
+  private RapidoNarratives.FileRecord lastNarratives(RapidoNarratives records, FetchedFile f) {
+    if (pf.rapido.isCompleteBuild() || pf.rc.isTrackNarrativeSource()) {
+      return null;
+    }
+    RapidoNarratives.FileRecord last = records.read(f, pf.rapido.narrativeRecord(f));
+    return last != null && last.resources.size() == f.getResources().size() ? last : null;
+  }
+
+  /**
+   * -rapido: once the file's resources have their narratives, keeps what the next build can put back on them: the
+   * record as it is if every resource has what the last build recorded for it, else a new record.
+   *
+   * @return true if all that is recorded for the file was put back
+   */
+  private boolean keepNarratives(RapidoNarratives records, FetchedFile f, RapidoNarratives.FileRecord last, List<RapidoNarratives.ResourceRecord> now) throws IOException {
+    if (last != null && last.resources.equals(now)) {
+      pf.rapido.setNarrativeRecord(f, last.id);
+      return true;
+    }
+    RapidoNarratives.FileRecord rec = new RapidoNarratives.FileRecord(RapidoNarratives.newId());
+    rec.resources.addAll(now);
+    if (rec.isEmpty()) {
+      records.forget(f);
+    } else if (records.save(f, rec)) {
+      pf.rapido.setNarrativeRecord(f, rec.id);
+    }
+    return false;
+  }
+
+  /**
+   * whether the narrative is generated on the resource, which is then converted to an element (true), or on the
+   * element: what generateNarratives decides
+   */
+  private boolean narrativeOnResource(FetchedResource r) {
+    return r.getResource() != null && r.getResource() instanceof DomainResource && isConvertableResource(r.getResource().fhirType());
+  }
+
+  /**
+   * -rapido: what generating a resource's narrative did, to tell whether a record can stand for it in the next build.
+   * It can if the resource had no narrative, and one was rendered for every language and nothing else was done (where
+   * something else is, generateNarratives drops the note)
+   */
+  private class NarrativeNote {
+    private final boolean onResource;
+    /** the resource had no narrative before */
+    private final boolean none;
+    private boolean rendered;
+    /** the renderer wrote files as well */
+    private boolean files;
+
+    private NarrativeNote(FetchedResource r) {
+      this.onResource = narrativeOnResource(r);
+      this.none = !r.getElement().hasChild("text") && (!onResource || !((DomainResource) r.getResource()).hasText());
+    }
+
+    /** the narrative was rendered for a language, with this context */
+    private void rendered(RenderingContext lrc) {
+      rendered = true;
+      if (!lrc.getFiles().isEmpty()) {
+        files = true;
+      }
+    }
+  }
+
+  /** the key of an element with its narrative: all that is written from it (see RapidoNativeOutputs.contentKey) */
+  private static String narrativeKey(Element e) {
+    RapidoDependencyAnalyser.Hasher h = new RapidoDependencyAnalyser.Hasher();
+    RapidoNativeOutputs.contentKey(h, e);
+    return h.finish();
+  }
+
+  /**
+   * -rapido: what the next build needs to put the narrative just generated back on the resource, or null if that
+   * can't stand for generating it: the narrative isn't plainly the one the renderer made for a resource that had none
+   * (a status and a div, nothing else), it is generated again after validation, or it can't be read back as it is.
+   */
+  private RapidoNarratives.ResourceRecord recordNarrative(FetchedResource r, NarrativeNote note) {
+    if (note == null || !note.none || !note.rendered || note.files || r.isRegenAfterValidation() || pf.rc.isTrackNarrativeSource()) {
+      return null;
+    }
+    try {
+      Element e = r.getElement();
+      List<Element> texts = e.getChildrenByName("text");
+      if (texts.size() != 1) {
+        return null;
+      }
+      Element text = texts.get(0);
+      if (text.hasComments() || text.getChildList().size() != 2) {
+        return null;
+      }
+      Element status = text.getChildList().get(0);
+      Element div = text.getChildList().get(1);
+      if (!"status".equals(status.getName()) || status.hasChildren() || status.hasComments() || status.getValue() == null
+          || !"div".equals(div.getName()) || !div.isXhtml() || div.hasChildren() || div.hasComments() || div.getXhtml() == null) {
+        return null;
+      }
+      XhtmlNode tree;
+      boolean marked = false;
+      if (note.onResource) {
+        Narrative n = ((DomainResource) r.getResource()).getText();
+        Set<String> data = n.getUserDataNames();
+        marked = data.contains(UserDataNames.renderer_is_generated);
+        if (n.hasId() || n.hasExtension() || !n.hasStatus() || n.getStatusElement().hasId() || n.getStatusElement().hasExtension() || !n.hasDiv()
+            || !status.getValue().equals(n.getStatus().toCode()) || div.getXhtmlSource() == null
+            || data.size() != (marked ? 1 : 0) || (marked && !Boolean.TRUE.equals(n.getUserData(UserDataNames.renderer_is_generated)))) {
+          return null;
+        }
+        tree = RapidoNarratives.copy(n.getDiv());
+      } else {
+        if (div.getXhtmlSource() != null) {
+          return null;
+        }
+        tree = RapidoNarratives.copy(div.getXhtml());
+      }
+      if (tree == null) {
+        return null;
+      }
+      return new RapidoNarratives.ResourceRecord(r.fhirType(), r.getId(), note.onResource, status.getValue(), tree, div.getXhtmlSource(), marked, narrativeKey(e));
+    } catch (RuntimeException ex) {
+      return null;
+    }
+  }
+
+  /**
+   * -rapido: puts the narrative that was generated for the resource in an earlier build back on it, as generating it
+   * would leave the resource: on a resource that is loaded as one, the narrative on the resource and a new element with
+   * the narrative as text; on any other, the narrative on its element. That is only right if the element then is what
+   * it was when the narrative was recorded, so its key is checked.
+   *
+   * @return false if nothing was done: then the narrative is generated
+   */
+  private boolean putBackNarrative(FetchedResource r, RapidoNarratives.ResourceRecord last) {
+    if (last == null) {
+      return false;
+    }
+    boolean onResource = narrativeOnResource(r);
+    Element before = r.getElement();
+    if (last.onResource != onResource || !last.type.equals(r.fhirType()) || !Objects.equals(last.id, r.getId())
+        || before == null || before.hasChild("text") || (onResource ? ((DomainResource) r.getResource()).hasText() : !isDomainResource(r))) {
+      return false;
+    }
+    Element text = null;
+    try {
+      if (onResource) {
+        // as converting the resource gives the element: read from json, the narrative from its text
+        JsonObject t = new JsonObject();
+        t.add("status", last.status);
+        t.add("div", last.source);
+        JsonObject j = new JsonObject();
+        j.add("resourceType", before.fhirType());
+        j.add("text", t);
+        byte[] cnt = org.hl7.fhir.utilities.json.parser.JsonParser.composeBytes(j);
+        Element read = new org.hl7.fhir.services.elementmodel.JsonParser(pf.context).parseSingle(new ByteArrayInputStream(cnt), null);
+        text = read == null ? null : read.getNamedChild("text");
+        if (text == null) {
+          return false;
+        }
+        Element e = (Element) before.copy(Base.COPY_NOTHING);
+        addNarrative(e, text);
+        e.numberChildren(); // as the parser does: a copy has no indexes
+        if (!last.key.equals(narrativeKey(e))) {
+          return false;
+        }
+        // as ResourceWrapperNative.setNarrative leaves the resource
+        DomainResource dr = (DomainResource) r.getResource();
+        dr.setText(new Narrative());
+        dr.getText().setStatusAsString(last.status);
+        if (last.marked) {
+          dr.getText().setUserData(UserDataNames.renderer_is_generated, true);
+        }
+        dr.getText().setDiv(last.div);
+        r.setGeneratedNarrative(true);
+        e.copyUserData(before);
+        r.setElement(e);
+        return true;
+      }
+      // as ResourceWrapperModel.setNarrative leaves the element
+      text = new Element("text", before.getProperty().getChild(null, "text"));
+      Element status = new Element("status", text.getProperty().getChild(null, "status"));
+      text.getChildList().add(0, status);
+      status.setValue(last.status);
+      Element div = new Element("div", text.getProperty().getChild(null, "div"));
+      text.getChildList().add(div);
+      div.setXhtml(last.div);
+      addNarrative(before, text);
+      if (last.key.equals(narrativeKey(before))) {
+        return true;
+      }
+      before.removeChild(text);
+      return false;
+    } catch (Exception | Error ex) {
+      if (ex instanceof Error && BuildFailures.isFatal(ex)) {
+        throw (Error) ex;
+      }
+      // as it was, for the narrative to be generated
+      if (onResource) {
+        ((DomainResource) r.getResource()).setText(null);
+        r.setGeneratedNarrative(false);
+      } else if (text != null) {
+        before.removeChild(text);
+      }
+      return false;
+    }
+  }
+
+  /** where the narrative of a resource goes: after id, meta, implicitRules and language */
+  private static void addNarrative(Element e, Element text) {
+    int i = 0;
+    while (i < e.getChildList().size() && Utilities.existsInList(e.getChildList().get(i).getName(), "id", "meta", "implicitRules", "language")) {
+      i++;
+    }
+    e.getChildList().add(i, text);
+  }
+
 
   private void loadLists() throws Exception {
     for (FetchedFile f : pf.fileList) {

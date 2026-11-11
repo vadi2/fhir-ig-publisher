@@ -341,6 +341,23 @@ public class RapidoTracker {
     return renderClean.contains(f);
   }
 
+  /**
+   * The id of the record of the narratives generated for the file (see {@link RapidoNarratives}) that the last build
+   * that finished wrote or used, if nothing the file's outputs are made from has changed since; else null
+   */
+  public String narrativeRecord(FetchedFile f) {
+    if (!renderClean.contains(f)) {
+      return null;
+    }
+    JsonObject of = oldFiles.getJsonObject(keys.get(f));
+    return of == null ? null : of.asString("narratives");
+  }
+
+  /** the id of the record that holds the narratives this build generated for the file, or put back on its resources */
+  public void setNarrativeRecord(FetchedFile f, String id) {
+    newFile(f).set("narratives", id);
+  }
+
   public int countValidationDirty() {
     return pf.fileList.size() - validationClean.size();
   }
