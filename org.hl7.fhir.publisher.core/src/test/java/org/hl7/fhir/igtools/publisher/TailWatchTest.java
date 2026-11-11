@@ -79,7 +79,6 @@ class TailWatchTest {
     // and nothing that changed is nothing too
     source.changes = SourceSnapshot.take(Collections.emptyList(), null, new HashSet<>()).changesSince(SourceSnapshot.take(Collections.emptyList(), null, new HashSet<>()));
     assertFalse(tail.givesWayBefore(TailWatch.Step.QA));
-    assertFalse(tail.isAbandoned());
     assertNull(tail.getAbandonedBefore());
     assertTrue(tail.notDone().isEmpty());
     assertEquals(1, source.starts);
@@ -113,7 +112,6 @@ class TailWatchTest {
     assertFalse(tail.givesWayBefore(TailWatch.Step.PACKAGES));
     source.changes = aChange();
     assertTrue(tail.givesWayBefore(TailWatch.Step.AI));
-    assertTrue(tail.isAbandoned());
     assertEquals(TailWatch.Step.AI, tail.getAbandonedBefore());
     // the steps after it aren't done either, and the files aren't looked at again
     assertTrue(tail.givesWayBefore(TailWatch.Step.FULL_ZIP));
@@ -152,7 +150,7 @@ class TailWatchTest {
     tail.pagesPublished();
     assertFalse(tail.givesWayBefore(TailWatch.Step.PACKAGES));
     assertFalse(tail.givesWayBefore(TailWatch.Step.AI));
-    assertFalse(tail.isAbandoned());
+    assertNull(tail.getAbandonedBefore());
     // said once
     assertEquals(List.of("=== File changes detected while the build finishes: it goes on to its end (only the content of pages changed) ==="), log);
     // then something else changes too
@@ -171,7 +169,7 @@ class TailWatchTest {
     source.failure = null;
     source.changes = aChange();
     assertFalse(tail.givesWayBefore(TailWatch.Step.AI), "the changes are found after the build");
-    assertFalse(tail.isAbandoned());
+    assertNull(tail.getAbandonedBefore());
     assertEquals(1, source.asked);
     assertEquals(1, source.stops, "the files aren't watched for the rest of the build");
     assertEquals(List.of("Unable to look for changes while the build finishes (it goes on to its end): java.io.IOException: input can't be read"), log);

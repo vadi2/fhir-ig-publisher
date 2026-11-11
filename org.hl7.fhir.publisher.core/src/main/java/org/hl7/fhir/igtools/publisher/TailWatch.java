@@ -146,11 +146,6 @@ class TailWatch {
     return res;
   }
 
-  /** Whether the build stopped before the end of its tail */
-  boolean isAbandoned() {
-    return abandonedBefore != null;
-  }
-
   /** The step the build stopped before, or null if it didn't */
   Step getAbandonedBefore() {
     return abandonedBefore;

@@ -70,18 +70,9 @@ class WatchTailAbandonTest {
     Files.write(f, "one".getBytes(StandardCharsets.UTF_8));
     SourceSnapshot start = SourceSnapshot.take(List.of(f.getParent()), null);
     Files.write(f, "another".getBytes(StandardCharsets.UTF_8));
-    SourceSnapshot.Changes changes = SourceSnapshot.take(List.of(f.getParent()), start).changesSince(start);
-    TailWatch tail = new TailWatch(new TailWatch.ChangeSource() {
-      public void start() {
-      }
-
-      public SourceSnapshot.Changes settledChanges() {
-        return changes;
-      }
-
-      public void stop() {
-      }
-    }, pageRebuild, null, s -> { });
+    Counting source = new Counting();
+    source.changes = SourceSnapshot.take(List.of(f.getParent()), start).changesSince(start);
+    TailWatch tail = new TailWatch(source, pageRebuild, null, s -> { });
     tail.pagesPublished();
     assertTrue(tail.givesWayBefore(before));
     return tail;
@@ -355,7 +346,7 @@ class WatchTailAbandonTest {
 
   // --- which builds can give way ---------------------------------------------------------------------------------------
 
-  /** A source of changes that counts its starts and stops */
+  /** A source of changes that says what it's told to, and counts its starts and stops */
   private static class Counting implements TailWatch.ChangeSource {
     SourceSnapshot.Changes changes;
     int starts;
