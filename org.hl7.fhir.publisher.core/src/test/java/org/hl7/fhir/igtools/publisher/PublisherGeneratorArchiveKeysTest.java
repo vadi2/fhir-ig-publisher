@@ -20,6 +20,7 @@ import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Calendar;
+import java.util.Collections;
 import java.util.GregorianCalendar;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -794,5 +795,142 @@ class PublisherGeneratorArchiveKeysTest {
       }
     }
     assertEquals(key, second.generator.expansionsKey());
+  }
+
+  /** what generating the combined package does to the value set: it leaves the expansion it made in it */
+  private static void expand(Build b, String identifier, String... codes) {
+    ValueSet vs = (ValueSet) b.resource("ValueSet-vs").getResource();
+    vs.getExpansion().setIdentifier(identifier);
+    for (String c : codes) {
+      vs.getExpansion().addContains().setSystem("http://example.org/fhir/CodeSystem/cs").setCode(c);
+    }
+  }
+
+  @Test
+  void whileTheCombinedPackageIsKeptTheValueSetsStandAsInTheLastBuild() throws Exception {
+    // the first build generates the combined package, so its value set has its expansion
+    Build first = new Build(DAY);
+    expand(first, "urn:uuid:1", "a", "b");
+    String key = first.definitions();
+    first.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
+    first.generator.generateValidationPack(spec.toString());
+    Files.setLastModifiedTime(root.resolve("output").resolve("definitions.json.zip"), THEN);
+    Map<String, String> written = entries(root.resolve("output").resolve("definitions.json.zip"));
+    assertTrue(written.get("ValueSet-vs.json").contains("urn:uuid:1"));
+    first.finish();
+
+    // the next build can keep the combined package, and doesn't generate it: its value set has no expansion, but
+    // it is as it was otherwise, so the zips are those of the first build
+    int[] generated = {0};
+    Build second = differentialBuild();
+    second.generator.pendingCombined = () -> {
+      generated[0]++;
+      expand(second, "urn:uuid:2", "a", "b");
+    };
+    jekyll(second);
+    assertEquals(key, second.definitions());
+    second.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
+    second.generator.generateValidationPack(spec.toString());
+    assertEquals(0, generated[0]);
+    assertEquals(THEN, time("definitions.json.zip"));
+    second.finish();
+
+    // another resource changes, while the combined package still isn't generated: the value set is copied from the
+    // last zip, with its expansion
+    Files.write(spec, "another spec".getBytes(StandardCharsets.UTF_8));
+    Build third = differentialBuild();
+    third.generator.pendingCombined = () -> {
+      generated[0]++;
+      expand(third, "urn:uuid:3", "a", "b");
+    };
+    jekyll(third);
+    third.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
+    assertEquals(0, generated[0]);
+    assertEquals("its content changed, 3 of its 4 entries as they were", third.pf.rapido.getArchives().getRewritten().get("definitions.json.zip"));
+    assertEquals(written.get("ValueSet-vs.json"), entries(root.resolve("output").resolve("definitions.json.zip")).get("ValueSet-vs.json"));
+    third.generator.generateValidationPack(spec.toString());
+    third.finish();
+
+    // the value set itself changes: it has to be read, so the combined package is generated first
+    ValueSet changed = (ValueSet) sources.get("ValueSet-vs");
+    changed.setTitle("changed");
+    Build fourth = differentialBuild();
+    fourth.generator.pendingCombined = () -> {
+      generated[0]++;
+      expand(fourth, "urn:uuid:4", "a", "b");
+    };
+    jekyll(fourth);
+    fourth.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
+    assertEquals(1, generated[0]);
+    String vs = entries(root.resolve("output").resolve("definitions.json.zip")).get("ValueSet-vs.json");
+    assertTrue(vs.contains("\"changed\"") && vs.contains("urn:uuid:4"), vs);
+    fourth.generator.generateValidationPack(spec.toString());
+    fourth.finish();
+
+    // the zip of the last build is gone, so every entry is made: the value set is read, with its expansion
+    Build fifth = differentialBuild();
+    fifth.generator.pendingCombined = () -> {
+      generated[0]++;
+      expand(fifth, "urn:uuid:5", "a", "b");
+    };
+    Files.delete(root.resolve("output").resolve("definitions.json.zip"));
+    jekyll(fifth);
+    fifth.generator.generateDefinitions(FhirFormat.JSON, spec.toString());
+    assertEquals(2, generated[0]);
+    assertTrue(entries(root.resolve("output").resolve("definitions.json.zip")).get("ValueSet-vs.json").contains("urn:uuid:5"));
+  }
+
+  /** the entries of a zip that is an entry of the pack */
+  private static Map<String, String> nested(Path pack, String name) throws Exception {
+    try (ZipFile zip = new ZipFile(pack.toFile())) {
+      Path tmp = Files.createTempFile("nested", ".zip");
+      try {
+        Files.write(tmp, zip.getInputStream(zip.getEntry(name)).readAllBytes());
+        return entries(tmp);
+      } finally {
+        Files.delete(tmp);
+      }
+    }
+  }
+
+  @Test
+  void thePackHoldsTheZipsOfTheSchematronsSchemasAndShex() throws Exception {
+    Path out = root.resolve("output");
+    Files.write(out.resolve("x.sch"), "<schema/>".getBytes(StandardCharsets.UTF_8));
+    Files.write(out.resolve("x.schema.json"), "{}".getBytes(StandardCharsets.UTF_8));
+    Files.write(out.resolve("x.shex"), "shex".getBytes(StandardCharsets.UTF_8));
+    List<String> names = Arrays.asList("version.info", "spec.internals", "CodeSystem-cs.json", "ValueSet-vs.json", "CodeSystem-other.json",
+        "schematron.zip", "json.schema.zip", "shex.zip");
+
+    // a build without -rapido: the entries, in the order they always had
+    Build plain = new Build(DAY);
+    plain.pf.rapido = null;
+    plain.generator.generateValidationPack(spec.toString());
+    assertEquals(names, new ArrayList<>(entries(out.resolve("validator.pack")).keySet()));
+    assertEquals(Collections.singletonMap("x.sch", "<schema/>"), nested(out.resolve("validator.pack"), "schematron.zip"));
+    assertEquals(Collections.singletonMap("x.schema.json", "{}"), nested(out.resolve("validator.pack"), "json.schema.zip"));
+    assertEquals(Collections.singletonMap("x.shex", "shex"), nested(out.resolve("validator.pack"), "shex.zip"));
+
+    Build first = new Build(DAY);
+    first.generator.generateValidationPack(spec.toString());
+    first.finish();
+
+    // a schematron changes: its zip is made again, the rest is as it was
+    Files.write(out.resolve("x.sch"), "<schema> </schema>".getBytes(StandardCharsets.UTF_8));
+    Build second = differentialBuild();
+    jekyll(second);
+    second.generator.generateValidationPack(spec.toString());
+    assertEquals("its content changed, 7 of its 8 entries as they were", second.pf.rapido.getArchives().getRewritten().get("validator.pack"));
+    assertEquals(names, new ArrayList<>(entries(out.resolve("validator.pack")).keySet()));
+    assertEquals(Collections.singletonMap("x.sch", "<schema> </schema>"), nested(out.resolve("validator.pack"), "schematron.zip"));
+    assertEquals(Collections.singletonMap("x.shex", "shex"), nested(out.resolve("validator.pack"), "shex.zip"));
+    second.finish();
+
+    // no shex files any more: no zip of them
+    Files.delete(out.resolve("x.shex"));
+    Build third = differentialBuild();
+    jekyll(third);
+    third.generator.generateValidationPack(spec.toString());
+    assertEquals(names.subList(0, 7), new ArrayList<>(entries(out.resolve("validator.pack")).keySet()));
   }
 }

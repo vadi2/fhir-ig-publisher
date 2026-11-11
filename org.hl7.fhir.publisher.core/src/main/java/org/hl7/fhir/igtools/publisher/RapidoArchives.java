@@ -136,6 +136,23 @@ public class RapidoArchives {
     return Paths.get(asideDir, name);
   }
 
+  /**
+   * Whether {@link #keep} would keep these files for this key, as things are: for a caller that has something to do
+   * first if they aren't written again. Nothing is moved, and nothing is recorded
+   */
+  public boolean canKeep(String key, String... names) {
+    return notUsable(last == null ? null : last.getJsonObject(names[0]), key, names) == null;
+  }
+
+  /**
+   * What the last build recorded for the entries of the zip of this name (see {@link #written(String, JsonObject,
+   * String...)}), whatever has become of the zip. null if it recorded none
+   */
+  public JsonObject lastEntries(String name) {
+    JsonObject rec = last == null ? null : last.getJsonObject(name);
+    return rec == null ? null : rec.getJsonObject("entries");
+  }
+
   private String notUsable(JsonObject rec, String key, String[] names) {
     if (key == null) {
       return "its content isn't known before it's written";

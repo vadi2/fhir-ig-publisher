@@ -863,6 +863,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
         // the combined package is made from package.tgz, so it has to wait until that has been written. It needs
         // terminology for the expansions, which is still loaded here unless the IG unloads it early
+        pendingCombined = null;
         if (pf.txUnloadEarly) {
           log("Not generating the combined package: terminology has been unloaded (tx-unload-early)");
         } else {
@@ -1098,14 +1099,57 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       // (the package generator writes a manifest next to the package)
       String[] names = {"package-combined.tgz", "package-combined.manifest.json"};
       String key = combinedPackageKey(npm);
-      if (keptArchive(key, names)) {
-        return;
+      CombinedPackage combined = () -> {
+        gen.generateCombinedPackage(npm);
+        wroteArchive(key, names);
+      };
+      if (archives() != null && archives().canKeep(key, names)) {
+        // the one of the last build can stay, unless the value sets need their expansions (see valueSetExpansions())
+        pendingCombined = combined;
+        pendingCombinedNames = names;
+        pendingCombinedKey = key;
+      } else {
+        combined.generate();
       }
-      gen.generateCombinedPackage(npm);
-      wroteArchive(key, names);
     } catch (Exception e) {
       log("Error generating combined package: "+e.getMessage());
     }
+  }
+
+  interface CombinedPackage {
+    void generate() throws Exception;
+  }
+
+  /** -rapido -watch: the combined package, while it isn't made because the one of the last build can stay */
+  CombinedPackage pendingCombined;
+  private String[] pendingCombinedNames;
+  private String pendingCombinedKey;
+
+  /**
+   * Generating the combined package leaves the expansion it makes of each value set that the IG's profiles bind to
+   * in the value set itself, and that is how the definitions zips and validator.pack come to hold those value sets
+   * with their expansions. So while the combined package isn't generated, the value sets of this build have none.
+   * This is called before a value set is read for what an archive holds of it: it generates the combined package
+   * after all, if it hasn't been
+   */
+  private void valueSetExpansions() {
+    CombinedPackage combined = pendingCombined;
+    pendingCombined = null;
+    if (combined != null) {
+      try {
+        combined.generate();
+      } catch (Exception e) {
+        log("Error generating combined package: "+e.getMessage());
+      }
+    }
+  }
+
+  /** when the archives that hold the value sets are done: the combined package of the last build stays, if it wasn't generated */
+  private void settleCombinedPackage() {
+    if (pendingCombined != null && keptArchive(pendingCombinedKey, pendingCombinedNames)) {
+      pendingCombined = null;
+    }
+    valueSetExpansions();
   }
 
   /**
@@ -5379,6 +5423,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     generateCsvZip();
     generateExcelZip();
     generateSchematronsZip();
+    settleCombinedPackage();
     writtenHashes.clear();
     if (archives() != null) {
       log("Rapido Mode: archives: " + archives().summary() + " (" + org.hl7.fhir.utilities.DurationUtil.presentDuration(System.nanoTime() - start) + ")");
@@ -5419,8 +5464,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
   /**
    * The archives of the package step that a build can keep (see RapidoArchives), or null if it keeps none: only a
-   * -watch build has the output of the last build to go on from (any other starts with an empty output folder), and
-   * the same build time, without which most of the archives are different every time
+   * -watch build that writes to a staging folder can have the output of the last build to go on from (any other
+   * starts with an empty output folder, and so does this one unless the Jekyll that is kept running goes on from
+   * the staging folder: see PublisherIGLoader.clearOutputUnlessKept(). Then the archives are found missing, and are
+   * written), and the same build time, without which most of the archives are different every time
    */
   private RapidoArchives archives() {
     return pf.rapido == null || pf.watchOutputDir == null ? null : pf.rapido.getArchives();
@@ -5489,63 +5536,98 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   private final Map<FhirFormat, Map<FetchedResource, String>> writtenHashes = new HashMap<>();
 
   /**
-   * -rapido: a hash of the resource as the build leaves it (as loaded, with its snapshot, its narrative and whatever
-   * else the build puts in it), composed in this format by the R5 parser: what every archive that holds the
-   * resource in the format is made from (converted to the version of the IG, for a version before R5: the same
-   * resource gives the same conversion). A value set of the IG has its expansion in it, with the identifier and the
-   * timestamp of when it was expanded: every build gives it new ones, so they are taken off the resource while it is
-   * composed here (an archive that is kept has the expansion as it was made for the build that wrote it). null if
-   * there is no resource, or it can't be composed
+   * -rapido -watch: what stands for the resource as the build leaves it (as loaded, with its snapshot, its narrative
+   * and whatever else the build puts in it) in an archive that holds it in this format: a hash of it as the R5 parser
+   * composes it in the format (for an IG of a version before R5 the archive has it converted: the same resource gives
+   * the same conversion). null if there is no resource, or it can't be composed.
+   * <p>
+   * A value set can have its expansion in it (see valueSetExpansions()), with the identifier and the timestamp of
+   * when it was expanded: every build gives it new ones, so they are left out (an archive that is kept has the
+   * expansion as it was made for the build that wrote it). And while the combined package isn't generated, the value
+   * sets have no expansions at all. That is when no conformance resource in the package changed, so each would get
+   * the expansion it got in the last build: a value set that is otherwise as that build recorded it (last, by name)
+   * stands as it stood then. If it isn't, the combined package is generated after all. So what stands for a value set
+   * is in two parts: the value set without its expansion, and all of it
    */
-  private String writtenHash(FhirFormat fmt, FetchedResource r) {
+  private String writtenHash(FhirFormat fmt, FetchedResource r, JsonObject last, String name) {
     Map<FetchedResource, String> hashes = writtenHashes.computeIfAbsent(fmt, k -> new IdentityHashMap<>());
     String res = hashes.get(r);
     if (res == null && r.getResource() != null) {
-      ValueSet.ValueSetExpansionComponent expansion = r.getResource() instanceof ValueSet && ((ValueSet) r.getResource()).hasExpansion()
-          ? ((ValueSet) r.getResource()).getExpansion() : null;
-      UriType identifier = expansion == null || !expansion.hasIdentifierElement() ? null : expansion.getIdentifierElement();
-      DateTimeType timestamp = expansion == null || !expansion.hasTimestampElement() ? null : expansion.getTimestampElement();
       try {
-        if (expansion != null) {
-          expansion.setIdentifierElement(null);
-          expansion.setTimestampElement(null);
-        }
-        ByteArrayOutputStream bs = new ByteArrayOutputStream();
-        if (fmt.equals(FhirFormat.JSON)) {
-          new JsonParser(pf.context.getModelContext()).compose(bs, r.getResource());
-        } else if (fmt.equals(FhirFormat.XML)) {
-          new XmlParser(pf.context.getModelContext()).compose(bs, r.getResource());
-        } else if (fmt.equals(FhirFormat.TURTLE)) {
-          new RdfParser(pf.context.getModelContext()).compose(bs, r.getResource());
+        if (r.getResource() instanceof ValueSet) {
+          ValueSet vs = (ValueSet) r.getResource();
+          String plain = composedHash(fmt, vs, true);
+          String before = last == null ? null : last.asString(name);
+          if (pendingCombined != null && before != null && before.startsWith(plain + ":")) {
+            res = before;
+          } else {
+            valueSetExpansions();
+            res = plain + ":" + composedHash(fmt, vs, false);
+          }
         } else {
-          return null;
+          res = composedHash(fmt, r.getResource(), false);
         }
-        res = new RapidoDependencyAnalyser.Hasher().add(bs.toByteArray()).finish();
-        hashes.put(r, res);
+        if (res != null) {
+          hashes.put(r, res);
+        }
       } catch (Exception e) {
         return null;
-      } finally {
-        if (expansion != null) {
-          expansion.setIdentifierElement(identifier);
-          expansion.setTimestampElement(timestamp);
-        }
       }
     }
     return res;
   }
 
+  /**
+   * a hash of the resource composed in the format: a value set without its expansion, or else without the identifier
+   * and the timestamp of its expansion (they are taken off it while it is composed). null for any other format
+   */
+  private String composedHash(FhirFormat fmt, Resource resource, boolean noExpansion) throws IOException {
+    ValueSet vs = resource instanceof ValueSet && ((ValueSet) resource).hasExpansion() ? (ValueSet) resource : null;
+    ValueSet.ValueSetExpansionComponent expansion = vs == null ? null : vs.getExpansion();
+    UriType identifier = expansion == null || !expansion.hasIdentifierElement() ? null : expansion.getIdentifierElement();
+    DateTimeType timestamp = expansion == null || !expansion.hasTimestampElement() ? null : expansion.getTimestampElement();
+    try {
+      if (expansion != null) {
+        expansion.setIdentifierElement(null);
+        expansion.setTimestampElement(null);
+        if (noExpansion) {
+          vs.setExpansion(null);
+        }
+      }
+      ByteArrayOutputStream bs = new ByteArrayOutputStream();
+      if (fmt.equals(FhirFormat.JSON)) {
+        new JsonParser(pf.context.getModelContext()).compose(bs, resource);
+      } else if (fmt.equals(FhirFormat.XML)) {
+        new XmlParser(pf.context.getModelContext()).compose(bs, resource);
+      } else if (fmt.equals(FhirFormat.TURTLE)) {
+        new RdfParser(pf.context.getModelContext()).compose(bs, resource);
+      } else {
+        return null;
+      }
+      return new RapidoDependencyAnalyser.Hasher().add(bs.toByteArray()).finish();
+    } finally {
+      if (expansion != null) {
+        vs.setExpansion(expansion);
+        expansion.setIdentifierElement(identifier);
+        expansion.setTimestampElement(timestamp);
+      }
+    }
+  }
+
   /** the tokens of these resources, as entries named type-id.ext: each resource as the build leaves it, in the format */
-  private Map<String, String> resourceTokens(FhirFormat fmt, Predicate<FetchedResource> included) {
+  private Map<String, String> resourceTokens(String archive, FhirFormat fmt, Predicate<FetchedResource> included) {
     if (archives() == null) {
       return null;
     }
+    JsonObject last = archives().lastEntries(archive);
     Map<String, String> res = new HashMap<>();
     for (FetchedFile f : pf.fileList) {
       for (FetchedResource r : f.getResources()) {
         if (included.test(r)) {
-          String hash = writtenHash(fmt, r);
+          String name = r.fhirType()+"-"+r.getId()+"."+fmt.getExtension();
+          String hash = writtenHash(fmt, r, last, name);
           // (two entries with the same name: the zip can't be written)
-          if (hash == null || res.put(r.fhirType()+"-"+r.getId()+"."+fmt.getExtension(), hash) != null) {
+          if (hash == null || res.put(name, hash) != null) {
             return null;
           }
         }
@@ -5759,6 +5841,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
       String entry = r.fhirType()+"-"+r.getId()+"."+fmt.getExtension();
       zip.add(entry, token(tokens, entry), () -> {
+        if (r.getResource() instanceof ValueSet) {
+          valueSetExpansions();
+        }
         ByteArrayOutputStream bs = new ByteArrayOutputStream();
         if (VersionUtilities.isR3Ver(pf.version)) {
           org.hl7.fhir.dstu3.model.Resource r3 = VersionConvertorFactory_30_N.convertResource(r.getResource());
@@ -5826,7 +5911,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * the format), and the spec file
    */
   private Map<String, String> definitionTokens(FhirFormat fmt, String specFile) {
-    Map<String, String> res = resourceTokens(fmt, r -> r.getResource() instanceof CanonicalResource
+    Map<String, String> res = resourceTokens("definitions."+fmt.getExtension()+".zip", fmt, r -> r.getResource() instanceof CanonicalResource
         && !(fmt.equals(FhirFormat.TURTLE) && !supportsRdf(r.getResource())));
     Map<String, String> spec = fileTokens(Collections.singleton(specFile));
     if (res == null || spec == null || res.put("spec.internals", spec.values().iterator().next()) != null) {
@@ -5937,6 +6022,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
             });
           } else if (r.getResource() != null && r.getResource() instanceof CanonicalResource) {
             zip.add(entry, token(tokens, entry), () -> {
+              if (r.getResource() instanceof ValueSet) {
+                valueSetExpansions();
+              }
               ByteArrayOutputStream bs = new ByteArrayOutputStream();
               if (VersionUtilities.isR3Ver(this.pf.version)) {
                 new org.hl7.fhir.dstu3.formats.JsonParser().compose(bs, VersionConvertorFactory_30_N.convertResource(r.getResource()));
@@ -5977,7 +6065,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * spec file, the resources, and the zips of the schematrons, json schemas and shex files
    */
   private Map<String, String> validationPackTokens(byte[] versionInfo, String specFile) throws IOException {
-    Map<String, String> res = resourceTokens(FhirFormat.JSON, r -> isAdditionalResource(r) || r.getResource() instanceof CanonicalResource);
+    Map<String, String> res = resourceTokens("validator.pack", FhirFormat.JSON, r -> isAdditionalResource(r) || r.getResource() instanceof CanonicalResource);
     Map<String, String> spec = fileTokens(Collections.singleton(specFile));
     if (res == null || spec == null) {
       return null;
