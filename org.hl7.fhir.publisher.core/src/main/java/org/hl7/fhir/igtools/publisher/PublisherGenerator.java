@@ -231,6 +231,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   private List<String> changedTempFiles;
   // the files in the output folder that the last Jekyll run wrote (null: all of them)
   private Set<String> jekyllWritten;
+  // whether the last Jekyll run returned an error, though it said that it had finished
+  private boolean jekyllInDoubt;
   // watch mode: where the html-checked versions of the output files that Jekyll wrote again for the template's check
   // are kept meanwhile (null: none), and those files (relative to the output folder)
   private Path checkedStash;
@@ -804,6 +806,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       if (replay != null) {
         replay.dropCheckedPackageOutputs();
       }
+    }
+    if (jekyllOk && !jekyllInDoubt) {
+      publishPagesEarly(jekyllWritten);
     }
     if (jekyllOk && replay == null) {
       keepForPageRebuild(() -> pageRebuild.afterJekyll());
@@ -4779,8 +4784,52 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /**
+   * Watch mode: Jekyll has rendered the pages, so the ones it wrote go into the output folder now, rather than when the
+   * build has finished: what follows (the template's check, the packages and zips, the html checks, the AI step, the
+   * qa pages) is most of a rebuild, and the author is waiting for a page. They are as Jekyll wrote them: what the html
+   * checks change in a page (the publish box, links, heading levels) comes with the sync at the end of the build, which
+   * compares the whole output folder with what the build made, as it always did. If the build fails after this, the
+   * output folder keeps these pages (see Publisher.recordWatchFailure()). In a page rebuild, the files Jekyll wrote
+   * again only for the template's check have their html-checked content back by now, which the output folder has.
+   *
+   * @param jekyllWritten the output files Jekyll wrote (in the staging folder), or null if it wrote all of them
+   */
+  void publishPagesEarly(Set<String> jekyllWritten) {
+    if (pf.watchOutputDir == null || settings.isGenerationOff() || settings.isSimplifierMode()) {
+      return;
+    }
+    long start = System.nanoTime();
+    List<Path> written = null;
+    if (jekyllWritten != null) {
+      written = new ArrayList<>();
+      for (String f : jekyllWritten) {
+        written.add(Paths.get(f));
+      }
+    }
+    OutputFolderSync.Result r;
+    try {
+      r = OutputFolderSync.publish(Paths.get(pf.outputDir), Paths.get(pf.watchOutputDir), written);
+    } catch (IOException e) {
+      log("Unable to put the pages in " + pf.watchOutputDir + " yet (it is updated when the build has finished): " + e);
+      return;
+    }
+    if (r.getWritten() > 0) {
+      pf.watchPagesPublished = true;
+    }
+    for (String s : r.getFailures()) {
+      log("  " + s);
+    }
+    long now = System.nanoTime();
+    log("The pages are up in " + pf.watchOutputDir + ", " + DurationUtil.presentDuration(now - pf.watchBuildStarted) + " after the build started: "
+        + r.getWritten() + " written, " + r.getUnchanged() + " unchanged"
+        + (r.getFailures().isEmpty() ? "" : ", " + r.getFailures().size() + " failed")
+        + " (" + DurationUtil.presentDuration(now - start) + "). They are as Jekyll rendered them: the html checks, the packages and the qa pages follow");
+  }
+
   private boolean runTool(PageRebuild replay) throws Exception {
     jekyllWritten = null;
+    jekyllInDoubt = false;
     if (settings.isSimplifierMode()) {
       return true;
     }
@@ -5203,6 +5252,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           log("Jekyll timeout exceeded: " + Long.toString(pf.jekyllTimeout /1000) + " seconds");
         }
         log("Jekyll claimed to succeed, but returned an error. Proceeding anyway");
+        jekyllInDoubt = true;
         if (pageRebuild != null) {
           pageRebuild.notReusable("Jekyll returned an error");
         }

@@ -436,4 +436,128 @@ class OutputFolderSyncTest {
     assertEquals("source", read(dir, "input/page.md"));
     assertEquals("new", read(staged, "index.html"));
   }
+
+  @Test
+  void publishingCopiesTheGivenFilesAndDeletesNothing() throws IOException {
+    Path staged = staged();
+    write(staged, "en/page.html", "new page");
+    write(staged, "en/other.html", "not rendered again");
+    writeOld(staged, "en/same.html", "same");
+    write(staged, "new/deep/page.html", "a new page");
+    write(target(), "en/page.html", "old page");
+    write(target(), "en/other.html", "other");
+    writeOld(target(), "en/same.html", "same");
+    write(target(), "package.tgz", "the last build's");
+    write(target(), "qa.json", "{\"errs\": 0}");
+
+    OutputFolderSync.Result r = OutputFolderSync.publish(staged, target(),
+        List.of(staged.resolve("en/page.html"), staged.resolve("en/same.html"), Path.of("new/deep/page.html"),
+            staged.resolve("gone.html"), dir.resolve("elsewhere.html"), staged.resolve("en")));
+
+    assertTrue(r.getFailures().isEmpty(), r.getFailures().toString());
+    assertEquals(2, r.getWritten());
+    assertEquals(1, r.getUnchanged());
+    assertEquals(0, r.getDeleted());
+    assertEquals("new page", read(target(), "en/page.html"));
+    assertEquals("a new page", read(target(), "new/deep/page.html"));
+    // a file that wasn't named, what the build hasn't made yet, and the unchanged file are as they were
+    assertEquals("other", read(target(), "en/other.html"));
+    assertEquals("the last build's", read(target(), "package.tgz"));
+    assertEquals("{\"errs\": 0}", read(target(), "qa.json"));
+    assertEquals(OLD, Files.getLastModifiedTime(target().resolve("en/same.html")));
+    // the staging folder still has everything, for the rest of the build
+    assertEquals(Set.of("en/", "en/page.html", "en/other.html", "en/same.html", "new/", "new/deep/", "new/deep/page.html"), contents(staged));
+    try (Stream<Path> st = Files.walk(target())) {
+      assertFalse(st.anyMatch(p -> p.getFileName().toString().startsWith(".sync-")));
+    }
+  }
+
+  @Test
+  void publishingEverythingLeavesQaJsonForTheSync() throws IOException {
+    Path staged = staged();
+    write(staged, "index.html", "home");
+    write(staged, "en/page.html", "page");
+    write(staged, "qa.json", "{\"errs\": 1}");
+    write(staged, "en/qa.json", "a page's data");
+    write(target(), "qa.json", "{\"errs\": 0}");
+    write(target(), "stale.html", "stale");
+
+    OutputFolderSync.Result r = OutputFolderSync.publish(staged, target(), null);
+
+    assertEquals(3, r.getWritten());
+    assertEquals(Set.of("index.html", "en/", "en/page.html", "en/qa.json", "qa.json", "stale.html"), contents(target()));
+    assertEquals("{\"errs\": 0}", read(target(), "qa.json"));
+    assertEquals("{\"errs\": 1}", read(staged, "qa.json"));
+
+    // and the sync that follows brings the rest
+    OutputFolderSync.sync(staged, target(), true);
+    assertEquals(Set.of("index.html", "en/", "en/page.html", "en/qa.json", "qa.json"), contents(target()));
+    assertEquals("{\"errs\": 1}", read(target(), "qa.json"));
+  }
+
+  @Test
+  void publishingReplacesAFileInOneRenameAndCreatesTheOutputFolder() throws IOException {
+    Path staged = staged();
+    write(staged, "page.html", "new");
+    OutputFolderSync.publish(staged, target(), null);
+    assertEquals("new", read(target(), "page.html"));
+
+    // what has the old file open goes on reading the old file: the new one is another file under the same name
+    write(staged, "page.html", "newer");
+    Object before = Files.readAttributes(target().resolve("page.html"), java.nio.file.attribute.BasicFileAttributes.class).fileKey();
+    try (java.io.InputStream in = Files.newInputStream(target().resolve("page.html"))) {
+      OutputFolderSync.publish(staged, target(), List.of(staged.resolve("page.html")));
+      assertEquals("new", new String(in.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8));
+    }
+    assertEquals("newer", read(target(), "page.html"));
+    if (before != null) {
+      assertFalse(before.equals(Files.readAttributes(target().resolve("page.html"), java.nio.file.attribute.BasicFileAttributes.class).fileKey()));
+    }
+  }
+
+  @Test
+  void publishingReportsWhatItCouldNotWriteAndCarriesOn() throws IOException {
+    Path staged = staged();
+    write(staged, "a/page.html", "a folder that was a file");
+    write(staged, "b.html", "b");
+    write(target(), "a", "a file");
+
+    OutputFolderSync.Result r = OutputFolderSync.publish(staged, target(), null);
+
+    assertEquals(1, r.getWritten());
+    assertEquals(1, r.getFailures().size());
+    assertTrue(r.getFailures().get(0).startsWith("Unable to update a" + File.separator + "page.html"), r.getFailures().get(0));
+    assertEquals("b", read(target(), "b.html"));
+    assertEquals("a file", read(target(), "a"));
+    // the sync at the end of the build sorts it out
+    assertTrue(OutputFolderSync.sync(staged, target(), true).getFailures().isEmpty());
+    assertEquals("a folder that was a file", read(target(), "a/page.html"));
+  }
+
+  @Test
+  void publishingFindsTheGivenFilesThroughALinkedFolder() throws IOException {
+    Path real = Files.createDirectories(dir.resolve("elsewhere").resolve("temp"));
+    Path linked = dir.resolve("temp");
+    try {
+      Files.createSymbolicLink(linked, real);
+    } catch (UnsupportedOperationException | IOException e) {
+      assumeTrue(false, "can't make a link here");
+    }
+    // the build names the files it wrote by the path it was given, not where the link leads
+    Path staged = Files.createDirectories(linked.resolve("staged"));
+    write(staged, "page.html", "new");
+
+    OutputFolderSync.Result r = OutputFolderSync.publish(staged, target(), List.of(staged.resolve("page.html")));
+
+    assertEquals(1, r.getWritten());
+    assertEquals("new", read(target(), "page.html"));
+  }
+
+  @Test
+  void publishingIntoAFolderThatHoldsTheStagingFolderIsRefused() throws IOException {
+    Path staged = Files.createDirectories(target().resolve("temp"));
+    write(staged, "page.html", "new");
+    assertThrows(IOException.class, () -> OutputFolderSync.publish(staged, target(), null));
+    assertEquals(Set.of("temp/", "temp/page.html"), contents(target()));
+  }
 }

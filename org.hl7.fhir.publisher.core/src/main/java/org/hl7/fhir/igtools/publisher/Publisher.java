@@ -176,6 +176,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   private PageRebuild carriedOver;
   /** in watch mode, the session; else null */
   private WatchSession watchSession;
+  // in watch mode, when the build or page rebuild that is running started (System.nanoTime())
+  private long watchBuildStarted;
 
   public Publisher() {
     super();
@@ -242,6 +244,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         if (session == null) {
           build(rootDir);
         } else {
+          watchBuildStarted = System.nanoTime();
           session.startBuild();
           try {
             // a page rebuild goes on from where the last build was, so the state it left is kept for it
@@ -405,6 +408,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     pf.setReportTime(Calendar.getInstance());
     // in watch mode the staging folder is synced into the output folder again at the end
     pf.watchOutputSynced = false;
+    pf.watchPagesPublished = false;
+    pf.watchBuildStarted = watchBuildStarted;
     try {
       IniFile buildTracker = new IniFile(Utilities.path(pf.vsCache, ".build-tracker.ini"));
       TimeTracker.Session tts = pf.tt.start("generate");
@@ -454,6 +459,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
 
   private void build(String rootDir) throws Exception {
     pf = fieldsForBuild(watchSession);
+    pf.watchBuildStarted = watchBuildStarted;
     loader.setPf(pf);
     processor.setPf(pf);
     generator.setPf(pf);
@@ -795,7 +801,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       r = OutputFolderSync.sync(Paths.get(pf.outputDir), Paths.get(pf.watchOutputDir), generator.keepsJekyllRunning());
       pf.watchOutputSynced = true;
     } catch (IOException e) {
-      log("Unable to update "+ pf.watchOutputDir +" (it still has the output of the last build that succeeded): "+e);
+      log("Unable to update "+ pf.watchOutputDir +" (it still has the output of the last build that succeeded"
+          +(pf.watchPagesPublished ? ", and the pages this build put there when Jekyll had rendered them" : "")+"): "+e);
       return;
     }
     for (String s : r.getFailures()) {
@@ -817,7 +824,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       // it failed after the output folder was brought up to date
       return;
     }
-    log("The build failed, so the pages in "+ pf.watchOutputDir +" are still those of the last build that succeeded");
+    log(watchFailureNote(pf.watchOutputDir, pf.watchPagesPublished));
     if (!new File(pf.outputDir, "qa.json").exists()) {
       // an Error, or a failure before the IG was loaded
       recordOutcome(e instanceof Exception ? (Exception) e : new Exception(e.toString(), e), null);
@@ -827,6 +834,18 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     } catch (IOException ex) {
       log("Unable to record the failure in "+ pf.watchOutputDir +"/qa.json: "+ex);
     }
+  }
+
+  /**
+   * what the output folder holds after a build that failed: if the build had put its pages there when Jekyll had
+   * rendered them (see PublisherGenerator.publishPagesEarly()), those are this build's
+   */
+  static String watchFailureNote(String outputDir, boolean pagesPublished) {
+    if (pagesPublished) {
+      return "The build failed after its pages were put in "+ outputDir +": the pages there are this build's, as Jekyll rendered them (not html checked)."
+          +" The rest (packages, zips, qa pages) is from the last build that succeeded. The next build that succeeds brings all of it up to date";
+    }
+    return "The build failed, so the pages in "+ outputDir +" are still those of the last build that succeeded";
   }
 
   /**

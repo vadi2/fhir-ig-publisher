@@ -13,6 +13,7 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -162,6 +163,63 @@ public class OutputFolderSync {
           } else {
             move(from, to);
           }
+          result.written++;
+        }
+      } catch (IOException ex) {
+        result.failures.add("Unable to update " + rel + ": " + describe(ex));
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Copies into the target the files of the staging folder that are new or changed there, before the build that writes
+   * to the staging folder has finished (in watch mode: the pages, once Jekyll has rendered them). Nothing is deleted,
+   * qa.json is left for the sync that follows when the build has finished (what waits for it to change then finds the
+   * whole output in place), and the files stay in the staging folder. As in a sync, a file is replaced in one rename,
+   * and one whose content is the same is left alone.
+   *
+   * @param files the files to copy, in the staging folder (those that aren't there, or aren't files, are skipped), or
+   *              null for every file in it
+   */
+  public static Result publish(Path staged, Path target, Collection<Path> files) throws IOException {
+    Result result = new Result();
+    // the files are named under the staging folder as it was given, which may be reached through a link
+    Path given = staged.toAbsolutePath().normalize();
+    staged = staged.toRealPath();
+    Files.createDirectories(target);
+    target = target.toRealPath();
+    if (staged.startsWith(target) || target.startsWith(staged)) {
+      throw new IOException("The folder " + target + " holds, or is inside, the staging folder " + staged);
+    }
+    Set<String> rels = new TreeSet<>();
+    if (files == null) {
+      Map<String, BasicFileAttributes> all = new HashMap<>();
+      list(staged, all, new HashSet<>(), null);
+      rels.addAll(all.keySet());
+    } else {
+      for (Path f : files) {
+        Path p = given.resolve(f).normalize();
+        if (p.startsWith(given) && Files.isRegularFile(p)) {
+          rels.add(given.relativize(p).toString());
+        }
+      }
+    }
+    rels.remove(QA_JSON);
+    byte[] ba = new byte[BUFFER];
+    byte[] bb = new byte[BUFFER];
+    Set<Path> dirs = new HashSet<>();
+    for (String rel : rels) {
+      Path from = staged.resolve(rel);
+      Path to = target.resolve(rel);
+      try {
+        if (dirs.add(to.getParent())) {
+          Files.createDirectories(to.getParent());
+        }
+        if (Files.isRegularFile(to) && Files.size(to) == Files.size(from) && sameContent(from, to, ba, bb)) {
+          result.unchanged++;
+        } else {
+          copy(from, to);
           result.written++;
         }
       } catch (IOException ex) {

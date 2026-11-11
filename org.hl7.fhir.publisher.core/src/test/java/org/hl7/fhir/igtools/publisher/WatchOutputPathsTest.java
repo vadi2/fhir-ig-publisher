@@ -151,6 +151,15 @@ class WatchOutputPathsTest {
   }
 
   @Test
+  void aFailedBuildSaysWhoseThePagesInTheOutputFolderAre() {
+    assertEquals("The build failed, so the pages in out are still those of the last build that succeeded",
+        Publisher.watchFailureNote("out", false));
+    String note = Publisher.watchFailureNote("out", true);
+    assertTrue(note.startsWith("The build failed after its pages were put in out: the pages there are this build's"), note);
+    assertTrue(note.contains("The rest (packages, zips, qa pages) is from the last build that succeeded"), note);
+  }
+
+  @Test
   void aFailedBuildWithoutAQaJsonRemovesTheLastOne() throws Exception {
     Path staging = Files.createDirectories(dir.resolve("staging"));
     Path output = Files.createDirectories(dir.resolve("output"));
