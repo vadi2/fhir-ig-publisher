@@ -257,7 +257,8 @@ public class JekyllDriver {
   /**
    * Whether to keep track of the content of the site's source files from the next build on, so that changedSources()
    * can tell which ones changed (null: not to): the names at the top of the source folder to leave out, which the
-   * caller writes there after Jekyll has run, and Jekyll doesn't read. The destination and Jekyll's cache are always
+   * caller writes there after Jekyll has run, and Jekyll doesn't read (a name ending in '*': the names that start with
+   * what comes before it). The destination and Jekyll's cache are always
    * left out
    */
   public synchronized void trackSources(Collection<String> untracked) {
@@ -308,19 +309,38 @@ public class JekyllDriver {
     Set<Path> skip = new HashSet<>();
     skip.add(Paths.get(destination).toAbsolutePath().normalize());
     skip.add(root.resolve(JEKYLL_CACHE));
+    List<String> prefixes = new ArrayList<>();
     for (String s : untracked) {
-      skip.add(root.resolve(s));
+      if (s.endsWith("*")) {
+        prefixes.add(s.substring(0, s.length() - 1));
+      } else {
+        skip.add(root.resolve(s));
+      }
     }
     List<Path> files = new ArrayList<>();
     Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
       @Override
       public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-        return skip.contains(dir) ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+        return skipped(dir) ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+      }
+
+      private boolean skipped(Path p) {
+        if (skip.contains(p)) {
+          return true;
+        }
+        if (root.equals(p.getParent())) {
+          for (String prefix : prefixes) {
+            if (p.getFileName().toString().startsWith(prefix)) {
+              return true;
+            }
+          }
+        }
+        return false;
       }
 
       @Override
       public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-        if (!skip.contains(file)) {
+        if (!skipped(file)) {
           files.add(file);
         }
         return FileVisitResult.CONTINUE;

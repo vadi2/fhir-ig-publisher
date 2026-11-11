@@ -4850,8 +4850,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   static final String AI_OUTPUTS_KEPT = ".ai-outputs";
 
   // the files that each build writes to the temp folder after Jekyll has run, and Jekyll doesn't read: Rapido's state
-  // (see RapidoTracker) and the final zip (see finishGenerate()); and the AI step's files kept while Jekyll runs
-  static final List<String> UNTRACKED_TEMP = Collections.unmodifiableList(Arrays.asList("_rapido", "full-ig.zip", AI_OUTPUTS_KEPT));
+  // (see RapidoTracker) and the final zip (see finishGenerate()); the AI step's files kept while Jekyll runs; and the
+  // package step's files a page rebuild moves aside while Jekyll runs (see PageRebuild.keepCheckedPackageOutputs())
+  static final List<String> UNTRACKED_TEMP = Collections.unmodifiableList(Arrays.asList("_rapido", "full-ig.zip", AI_OUTPUTS_KEPT,
+      PageRebuild.CHECKED_FOLDER_PREFIX + "*"));
 
   /**
    * Watch mode, before Jekyll writes these output files (relative to out) again for the template's check: moves aside
@@ -5134,6 +5136,20 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /**
+   * The pages at the top of the output that the spec file lists as link targets: not the *.ai.html pages if the AI
+   * step removes them (see AIProcessor.processNewTemplates()), as they aren't in the output when the build ends
+   */
+  static List<String> specTargets(String[] names, boolean aiPagesRemoved) {
+    List<String> res = new ArrayList<>();
+    for (String s : names) {
+      if (s.endsWith(".html") && !(aiPagesRemoved && s.endsWith(".ai.html"))) {
+        res.add(s);
+      }
+    }
+    return res;
+  }
+
   private File makeSpecFile() throws Exception {
     SpecMapManager map = new SpecMapManager(pf.npmName, pf.npmName +"#"+ pf.version, pf.version, Constants.VERSION, Integer.toString(ToolsVersion.TOOLS_VERSION), pf.getExecTime(), pf.igpkp.getCanonical());
     for (FetchedFile f : pf.fileList) {
@@ -5158,10 +5174,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         map.path(u, this.pf.igpkp.getLinkFor(r, true));
       }
     }
-    for (String s : new File(pf.outputDir).list()) {
-      if (s.endsWith(".html")) {
-        map.target(s);
-      }
+    for (String s : specTargets(new File(pf.outputDir).list(), !settings.isGenerationOff() && isNewML())) {
+      map.target(s);
     }
     File df = File.createTempFile("fhir", "tmp");
     df.deleteOnExit();

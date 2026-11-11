@@ -54,6 +54,9 @@ import org.hl7.fhir.utilities.validation.ValidationMessage;
  */
 public class PageRebuild {
 
+  /** The start of the name of the folder keepCheckedPackageOutputs() moves files to, next to the output folder */
+  static final String CHECKED_FOLDER_PREFIX = ".package-checked-";
+
   /**
    * Text in a page that makes the publisher do more than copy it (see PublisherGenerator.processCustomLiquid()): these
    * pages are checked against, or depend on, the resources, so a change to one is not a page-only change
@@ -632,7 +635,7 @@ public class PageRebuild {
       if (r != null && r.sameStamp() && Files.isRegularFile(f)) {
         if (checkedFolder == null) {
           // next to the output folder, so that the files are moved, not copied
-          checkedFolder = Files.createTempDirectory(out.toAbsolutePath().getParent(), ".package-checked-");
+          checkedFolder = Files.createTempDirectory(out.toAbsolutePath().getParent(), CHECKED_FOLDER_PREFIX);
         }
         Path to = checkedFolder.resolve(p);
         Files.createDirectories(to.getParent());
