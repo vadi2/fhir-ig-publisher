@@ -71,3 +71,8 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   heap (trial 7) after 2 h -> told it to stop tuning, push the recipe as is and do profile.md (profile+page edit first).
   Decided NOT to launch warm-SUSHI: r3-notes/item6 says SUSHI is only ~4 s on DHP, and item 6 (SUSHI alongside start-up,
   kept state, one package cache manager) was already tried and dropped. Wave 2 still waits for profile.md.
+- 16:47 tick: all 6 working, no PRs. Branches pushed: summaries-reuse, native-skip, rapido-state. bench-recipe.md +
+  bench/session.py landed (interim): -Xmx7600m + string dedup + swap; on this VM first build ~688 s, profile edit
+  272-295 s (~2.5x Vadim's machine), SUSHI ~49 s per FSH rebuild here (suspicious vs ~4 s in item6 notes: check
+  profile.md's SUSHI breakdown before acting), one bench session ~45 min, so an A/B (4 sessions) is ~3 h. Expect PRs
+  late. Cheap tick recipe: git ls-remote perf3/* + list PRs; get_session only for sessions whose branch didn't move.
