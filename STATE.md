@@ -32,7 +32,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 | narrative-skip (wave 2, stacked: PR base perf3/native-skip) | session_013FrhV6FEdUbpxzt5WmGXJF | perf3/narrative-skip | - | running |
 | translations-dirty (wave 2; + optional System.gc commit) | session_013FrhV5h5r3K9VwTsXxmcW2 | perf3/translations-dirty | - | running |
 | qa-prep-reuse (wave 2) | session_013FrhV6SxKUeigqo6vSYCQF | perf3/qa-prep-reuse | - | running |
-| tail-restart (wave 2, stacked on perf3/early-publish) | NOT LAUNCHED: waits for origin/perf3/early-publish to exist | perf3/tail-restart | - | pending |
+| tail-restart (wave 2, stacked: PR base perf3/early-publish) | session_013FrhV6xnSEZUwAnAQoiLim | perf3/tail-restart | - | running (launched 19:18) |
 
 ## Wave 2 (launched 18:19 from profile.md; 10 PRs max = 5 wave 1 + 5 wave 2)
 - replay-stamp = profile opp 2 (canReplay by size+mtime, ~11 s before Jekyll). Given to the profiler session by
@@ -113,3 +113,6 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   the new task "for go-ahead". LESSON: new tasks only via create_session; send_message only for info or fixes inside
   a session's own task. Launched a fresh replay-stamp session and told the profiler the task is withdrawn.
   early-publish still benchmarking (c2 done, c3 running), branch not pushed -> tail-restart still pending.
+- 19:17 tick: no PRs (highest 38). perf3/early-publish pushed (3a04f3ac) -> launched tail-restart. native-skip head
+  1686b40d (moving). All 10 PR slots now have an owner: 5 wave 1 + replay-stamp, narrative-skip, translations-dirty,
+  qa-prep-reuse, tail-restart. Launch nothing more unless a session drops (then see Reserve).
