@@ -140,6 +140,23 @@ class PageRebuildTest {
   }
 
   @Test
+  void whenItCantBeToldIfAPageRebuildCouldFollowTheLogSaysWhy() throws IOException {
+    List<String> log = new ArrayList<>();
+    pf.logger = new org.hl7.fhir.utilities.logging.ILoggingService() {
+      public void logMessage(String message) {
+        log.add(message);
+      }
+
+      public void logDebugMessage(LogCategory category, String message) {
+      }
+    };
+    pf.altMap = null;
+    assertFalse(state.pageRebuildCouldFollow(changes(() -> write("input/pagecontent/index.md", "# Home, edited"))));
+    assertEquals(1, log.size());
+    assertTrue(log.get(0).startsWith("Couldn't tell if a page rebuild can follow this build for the changes: java.lang.NullPointerException"), log.get(0));
+  }
+
+  @Test
   void noPageRebuildCouldFollowABuildThatFoundWhyNotOrDroppedItsState() throws IOException {
     state.notReusable("the template's scripts read the pages");
     assertFalse(state.pageRebuildCouldFollow(changes(() -> write("input/pagecontent/index.md", "# Home, edited"))));

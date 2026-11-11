@@ -83,27 +83,7 @@ class PublisherRapidoWatchTest {
     PublisherFields first = build("a");
     assertTrue(first.rapido.isCompleteBuild());
     generate(first, null);
-    Publisher stopping = new Publisher();
-    stopping.setPf(first);
-    TailWatch tail = new TailWatch(new TailWatch.ChangeSource() {
-      public void start() {
-      }
-
-      public SourceSnapshot.Changes settledChanges() throws java.io.IOException {
-        Files.createDirectories(dir.resolve("watched"));
-        SourceSnapshot before = SourceSnapshot.take(List.of(dir.resolve("watched")), null);
-        Files.writeString(dir.resolve("watched").resolve("a.fsh"), "edited");
-        return SourceSnapshot.take(List.of(dir.resolve("watched")), before).changesSince(before);
-      }
-
-      public void stop() {
-      }
-    }, false, null, s -> { });
-    tail.pagesPublished();
-    assertTrue(tail.givesWayBefore(TailWatch.Step.PACKAGES));
-    first.watchTail = tail;
-
-    stopping.tailAbandoned(new IniFile(dir.resolve(".build-tracker.ini").toString()), false);
+    giveWay(first, dir.resolve("watched").resolve("a.fsh"));
 
     HierarchicalTableGenerator.uuid = "a-new-session";
     PublisherFields pf = build("a2");
@@ -111,6 +91,68 @@ class PublisherRapidoWatchTest {
     assertEquals(List.of("Observation-o.json (something it depends on changed)", "Patient-a.json (changed)",
         "ig.json (always processed)", "page.md (always processed)"), pf.rapido.listRenderDirty());
     assertEquals("the-last-build", HierarchicalTableGenerator.uuid);
+  }
+
+  /**
+   * A file in the IG folder that isn't one of the IG's sources (the state has those as they are when it is saved, as
+   * the template writes some of them): one that the build gave up its tail for is recorded as the build read it, so
+   * the next build doesn't reuse what was made with the old one
+   */
+  @Test
+  void aFileTheBuildGaveWayForIsSeenAsChangedByTheNextBuild() throws Exception {
+    cache = dir.resolve("cache");
+    Files.createDirectories(cache);
+    Path other = dir.resolve("input").resolve("ignoreWarnings.txt");
+    Files.createDirectories(other.getParent());
+    Files.writeString(other, "1");
+    finish(build("a"));
+    PublisherFields second = build("a");
+    assertFalse(second.rapido.isCompleteBuild(), second.rapido.getReason());
+    generate(second, null);
+    giveWay(second, other);
+
+    PublisherFields third = build("a");
+    assertTrue(third.rapido.isCompleteBuild());
+    assertEquals("changed: input/ignoreWarnings.txt", third.rapido.getReason());
+  }
+
+  /** The build stops after Jekyll because this file was saved (see TailWatch), as Publisher.finishIg() ends it */
+  private void giveWay(PublisherFields pf, Path edited) throws Exception {
+    Files.createDirectories(edited.getParent());
+    if (!Files.exists(edited)) {
+      Files.writeString(edited, "as the build read it");
+    }
+    SourceSnapshot before = SourceSnapshot.take(List.of(edited.getParent()), null);
+    Files.writeString(edited, "edited while the build ran");
+    SourceSnapshot.Changes changes = SourceSnapshot.take(List.of(edited.getParent()), before).changesSince(before);
+    TailWatch tail = new TailWatch(new TailWatch.ChangeSource() {
+      public void start() {
+      }
+
+      public SourceSnapshot.Changes settledChanges() {
+        return changes;
+      }
+
+      public void stop() {
+      }
+    }, false, null, s -> { });
+    tail.pagesPublished();
+    assertTrue(tail.givesWayBefore(TailWatch.Step.PACKAGES));
+    pf.watchTail = tail;
+    Publisher stopping = new Publisher();
+    stopping.setPf(pf);
+    stopping.tailAbandoned(new IniFile(tracker()), false);
+  }
+
+  /** where the build keeps its tracker and its record of outputs: the IG folder, or a folder in it */
+  private Path cache;
+
+  private Path cache() {
+    return cache != null ? cache : dir;
+  }
+
+  private String tracker() {
+    return cache().resolve(".build-tracker.ini").toString();
   }
 
   /** As that build, but it failed: the tracker says it started and didn't complete */
@@ -376,7 +418,7 @@ class PublisherRapidoWatchTest {
   private RapidoOutputs.Change finish(PublisherFields pf, String failing) throws Exception {
     RapidoOutputs.Change change = generate(pf, failing);
     pf.rapido.save();
-    IniFile buildTracker = new IniFile(dir.resolve(".build-tracker.ini").toString());
+    IniFile buildTracker = new IniFile(tracker());
     buildTracker.setBooleanProperty("status", "complete", true, null);
     buildTracker.save();
     return change;
@@ -431,7 +473,7 @@ class PublisherRapidoWatchTest {
     PublisherFields pf = new PublisherFields();
     pf.logger = mock(ILoggingService.class);
     pf.rootDir = dir.toString();
-    pf.vsCache = dir.toString();
+    pf.vsCache = cache().toString();
     pf.tempDir = dir.resolve("temp").toString();
     pf.igpkp = mock(IGKnowledgeProvider.class);
     when(pf.igpkp.getCanonical()).thenReturn("http://example.org/ig");
@@ -445,7 +487,7 @@ class PublisherRapidoWatchTest {
     loader.setAccessible(true);
     ((PublisherIGLoader) loader.get(publisher)).setPf(pf);
 
-    publisher.checkDependencies(ig, new IniFile(dir.resolve(".build-tracker.ini").toString()));
+    publisher.checkDependencies(ig, new IniFile(tracker()));
     return pf;
   }
 

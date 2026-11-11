@@ -7,6 +7,7 @@ import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -203,7 +204,7 @@ class WatchTailAbandonTest {
 
     p.tailAbandoned(tracker, false);
 
-    verify(pf.rapido).save();
+    verify(pf.rapido).save(pf.watchTail.getAbandonedFor());
     assertTrue(new IniFile(dir.resolve(".build-tracker.ini").toString()).getBooleanProperty("status", "complete"),
         "or the next build would be a complete one that reuses nothing");
     assertTrue(state.isTailAbandoned());
@@ -225,7 +226,7 @@ class WatchTailAbandonTest {
 
     p.tailAbandoned(new IniFile(dir.resolve(".build-tracker.ini").toString()), true);
 
-    verify(pf.rapido, never()).save();
+    verify(pf.rapido, never()).save(any());
     assertFalse(state.isTailAbandoned(), "the next page rebuild goes on from it");
     assertTrue(log.get(0).contains(", before the AI step's files: building again"), log.get(0));
   }
@@ -255,7 +256,7 @@ class WatchTailAbandonTest {
 
     finishIg(p, tracker, false);
 
-    verify(pf.rapido).save();
+    verify(pf.rapido).save(pf.watchTail.getAbandonedFor());
     assertFalse(Files.exists(dir.resolve("output")), "the output folder is left as it is");
     assertFalse(Files.exists(dir.resolve("staging").resolve("qa.html")));
     assertFalse(pf.watchOutputSynced);
@@ -285,7 +286,7 @@ class WatchTailAbandonTest {
     assertEquals(1, asked[0]);
     assertFalse(q.takeTailGaveWay());
     assertTrue(log.stream().noneMatch(s -> s.startsWith("Stopped @")), log.toString());
-    verify(whole.rapido, never()).save();
+    verify(whole.rapido, never()).save(any());
   }
 
   @Test

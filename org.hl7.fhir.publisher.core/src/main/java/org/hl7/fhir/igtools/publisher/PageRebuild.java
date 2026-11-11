@@ -423,6 +423,8 @@ public class PageRebuild {
     try {
       return pagesIn(changes, new ArrayList<>()) != null;
     } catch (IOException | RuntimeException e) {
+      // then the build gives way, and a complete build follows
+      log("Couldn't tell if a page rebuild can follow this build for the changes: " + e);
       return false;
     }
   }

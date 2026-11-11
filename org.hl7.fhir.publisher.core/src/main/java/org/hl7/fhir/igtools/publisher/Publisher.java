@@ -1033,7 +1033,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
 
   /**
    * Watch mode: the build stopped between two steps of what follows Jekyll, because the watched files changed (see
-   * TailWatch). What it validated and generated before Jekyll is complete, and that is all Rapido's state holds, so
+   * TailWatch). What it validated and generated before Jekyll is complete, and that is all Rapido's state holds
+   * (with the other files in the IG folder as they are when it is saved, apart from those the build stopped for), so
    * the state is saved, and the build is recorded as complete: the next build reuses it as it would have if this one
    * had run to its end (a build that isn't recorded as complete is followed by a complete build that reuses nothing).
    * The staging folder is not synced into the output folder, which keeps this build's pages as Jekyll rendered them,
@@ -1043,7 +1044,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   void tailAbandoned(IniFile buildTracker, boolean pageRebuilt) throws IOException {
     tailGaveWay = true;
     if (pf.rapido != null && !pageRebuilt) {
-      pf.rapido.save();
+      // (a file saved while the build ran that isn't one of the IG's sources is recorded as the build read it)
+      pf.rapido.save(pf.watchTail.getAbandonedFor());
     }
     buildTracker.setBooleanProperty("status", "complete", true, null);
     buildTracker.save();

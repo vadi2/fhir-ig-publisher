@@ -1,8 +1,11 @@
 package org.hl7.fhir.igtools.publisher;
 
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -68,6 +71,7 @@ class TailWatch {
   private boolean started;
   private boolean closed;
   private Step abandonedBefore;
+  private SourceSnapshot.Changes abandonedFor;
   private String finishingFor;
 
   /**
@@ -127,6 +131,7 @@ class TailWatch {
       return false;
     }
     abandonedBefore = next;
+    abandonedFor = changes;
     log.accept("=== File changes detected while the build finishes: giving up the rest of this build, and building again ===");
     log.accept(changes.toString().trim());
     log.accept("This build's pages are in the output folder as Jekyll rendered them. Not done by this build: " + String.join(", ", notDone())
@@ -145,6 +150,11 @@ class TailWatch {
       }
     }
     return res;
+  }
+
+  /** The files whose change the build stopped for (none if it didn't) */
+  Set<Path> getAbandonedFor() {
+    return abandonedFor == null ? Collections.emptySet() : abandonedFor.all();
   }
 
   /** The step the build stopped before, or null if it didn't */
