@@ -22,7 +22,8 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 ## Sessions (wave 1, Fable, launched 14:21 UTC; the six Opus sessions from 14:17 were archived, nothing pushed)
 | slug | session id | branch | PR | status |
 |---|---|---|---|---|
-| profile, then replay-stamp (wave 2) | session_013FrhV9XtpZJzHaw5CUT5RR | notes branch; perf3/replay-stamp | - | profile.md done 18:16; replay-stamp running |
+| profile (no PR) | session_013FrhV9XtpZJzHaw5CUT5RR | notes branch | n/a | DONE (profile.md 18:16). Ignore it in ticks. |
+| replay-stamp (wave 2) | session_013FrhV8oUf4Hg2ZFmpfFFgD | perf3/replay-stamp | - | running (launched 18:52) |
 | early-publish | session_013FrhV8MAcq78uViFCFE1ve | perf3/early-publish | - | running |
 | archives-reuse | session_013FrhV89txD9eAkM8cnaV3n | perf3/archives-reuse | - | running |
 | native-skip | session_013FrhV7287Tkr83evM7MsqW | perf3/native-skip | - | running |
@@ -107,3 +108,8 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   19.4 / 2.6). No PRs yet (highest 38), perf3 heads unchanged. Launched wave 2 (see section). get_session create
   shape: model claude-fable-5-2, source_url https://github.com/vadi2/fhir-ig-publisher, source_revision, outcome_branch
   perf3/<slug>, permission_mode auto, tags [perf3].
+- 18:52 tick: no PRs (highest 38). Wave-2 branches exist (narrative-skip, translations-dirty, qa-prep-reuse);
+  native-skip head moved to 629ed289. The profiler did NOT take replay-stamp: a send_message is peer data, so it held
+  the new task "for go-ahead". LESSON: new tasks only via create_session; send_message only for info or fixes inside
+  a session's own task. Launched a fresh replay-stamp session and told the profiler the task is withdrawn.
+  early-publish still benchmarking (c2 done, c3 running), branch not pushed -> tail-restart still pending.
