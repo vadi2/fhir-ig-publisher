@@ -15,6 +15,7 @@ import org.hl7.fhir.services.client.FHIRToolingClient;
 import org.hl7.fhir.model.utilities.formats.OutputStyle;
 import org.hl7.fhir.services.conformance.profile.ProfileUtilities;
 import org.hl7.fhir.standalone.context.SimpleWorkerContext;
+import org.hl7.fhir.standalone.terminology.utilities.TerminologyCache;
 import org.hl7.fhir.services.elementmodel.Element;
 import org.hl7.fhir.model.extensions.ExtensionDefinitions;
 import org.hl7.fhir.model.extensions.ExtensionUtilities;
@@ -95,6 +96,39 @@ public class PublisherBase implements ILoggingService {
 
   protected void log(String s) {
     pf.logger.logMessage(s);
+  }
+
+  /**
+   * Removes what the terminology cache holds for the ValueSets and CodeSystems that changed since it was last scrubbed
+   * (see RapidoTracker.txCacheUrlsToScrub). The cache keys a ValueSet by url|version, which an edit doesn't change.
+   * Called before the first snapshot generation, which expands bindings, for the resources loaded by then, and once
+   * every resource is loaded, which records them if every scrub was written.
+   */
+  protected void scrubTxCache(boolean allLoaded) throws IOException {
+    if (pf.context == null || pf.context.getTxCache() == null) {
+      return;
+    }
+    if (pf.txCacheScrub == null) {
+      pf.txCacheScrub = new RapidoTracker(pf);
+    }
+    Set<String> urls = pf.txCacheScrub.txCacheUrlsToScrub(allLoaded);
+    if (!urls.isEmpty()) {
+      long start = System.currentTimeMillis();
+      TerminologyCache.ScrubResult result = pf.context.getTxCache().scrub(urls);
+      log("Terminology cache: removed "+result.getRemoved()+" entries for "+urls.size()+" ValueSets and CodeSystems that may have changed ("+(System.currentTimeMillis()-start)+" ms)");
+      if (!result.isComplete()) {
+        // the record stays as it was, so the next build scrubs these again
+        log("Warning: the terminology cache could not read or write "+String.join(", ", result.getFailed())+", which may still hold answers for ValueSets and CodeSystems that changed");
+        pf.txCacheScrubFailed = true;
+      }
+    }
+    if (allLoaded && !pf.txCacheScrubFailed) {
+      try {
+        pf.txCacheScrub.saveTxCacheRecord();
+      } catch (IOException e) {
+        log("Warning: could not record the ValueSets and CodeSystems scrubbed from the terminology cache ("+e.getMessage()+"), so the next build scrubs all of them"+(pf.txCacheScrub.deleteTxCacheRecord() ? "" : ", if it can read the record"));
+      }
+    }
   }
 
   protected String getTargetOutput() {

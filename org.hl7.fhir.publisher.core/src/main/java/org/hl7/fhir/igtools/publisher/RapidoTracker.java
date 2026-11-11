@@ -106,8 +106,14 @@ public class RapidoTracker {
   private Map<String, FileResult> results = new HashMap<>();
   private final Map<FetchedFile, FileNode> nodes = new IdentityHashMap<>();
   private JsonObject oldFiles;
-  /** what to record next to the tx cache once it is scrubbed (see changedTerminologyUrls) */
+  /** what to record next to the tx cache once it is scrubbed (see txCacheUrlsToScrub) */
   private JsonArray txCacheRecord;
+  private boolean txCacheRecordRead;
+  private Map<String, RecordedTerminology> recordedTerminology;
+  /** the ValueSets and CodeSystems of the IG that txCacheUrlsToScrub has looked at, so each is hashed once */
+  private final Map<FetchedResource, TerminologyResource> terminology = new IdentityHashMap<>();
+  /** the urls txCacheUrlsToScrub has returned in this build */
+  private final Set<String> txCacheScrubbed = new HashSet<>();
   private final JsonObject newFiles = new JsonObject();
   private final Map<String, String> global = new TreeMap<>();
   /** path (relative to the IG folder) to content hash, for the files behind global "other-files" */
@@ -337,78 +343,72 @@ public class RapidoTracker {
   }
 
   /**
-   * The ValueSet and CodeSystem urls whose answers in the terminology cache this build mustn't use. The cache keys a
-   * ValueSet that has a version by url|version, and a ValueSet of the IG keeps its version while it is edited, so an
-   * answer can be from before the last edit of the ValueSet or of something it uses.
+   * The ValueSet and CodeSystem urls whose answers in the terminology cache this build mustn't use and that haven't
+   * been scrubbed yet in this build. The cache keys a ValueSet that has a version by url|version, and a ValueSet of the
+   * IG keeps its version while it is edited, so an answer can be from before the last edit of the ValueSet or of
+   * something it uses.
    *
-   * <p>Those that changed since the cache was last scrubbed (see changedTerminologyUrls), and in a differential build
-   * also those in the files validated again because they changed or something they depend on did (an included or
-   * excluded ValueSet, a CodeSystem, a supplement), with the code systems that those supplements add to.
+   * <p>The urls of the IG's ValueSets and CodeSystems that changed since the cache was last scrubbed, and of those
+   * that name one of them (an included ValueSet or code system, an implicit value set, a supplement), the code systems
+   * that a changed supplement adds to (now and when it was recorded), and once every resource is loaded, the urls the
+   * IG had then and doesn't now (deleted, or the url changed). Every one of the IG's, and what their supplements add
+   * to, if nothing was recorded. What each has now is recorded next to the cache by saveTxCacheRecord(), so a build
+   * with no changes keeps every answer.
+   *
+   * @param allLoaded false for a call before every resource is loaded: a recorded url that isn't loaded yet isn't
+   *   taken as deleted
    */
-  public Set<String> txCacheUrlsToScrub() throws IOException {
-    Set<String> res = changedTerminologyUrls();
-    if (!complete) {
-      List<FetchedFile> files = new ArrayList<>();
-      for (FetchedFile f : pf.fileList) {
-        if (!validationClean.contains(f)) {
-          files.add(f);
-        }
-      }
-      res.addAll(terminologyUrls(files));
-    }
-    return res;
-  }
-
-  /**
-   * The urls of the IG's ValueSets and CodeSystems that changed since the terminology cache was last scrubbed, and of
-   * those that name one of them (an included ValueSet or code system, an implicit value set, a supplement) or a code
-   * system that a changed supplement adds to, and the urls the IG had then and doesn't now (deleted, or the url
-   * changed). Every one of the IG's if nothing was recorded. What each has now is recorded next to the cache by
-   * saveTxCacheRecord(), once they are scrubbed, so a build with no changes keeps every answer.
-   */
-  public Set<String> changedTerminologyUrls() throws IOException {
+  public Set<String> txCacheUrlsToScrub(boolean allLoaded) throws IOException {
     Map<String, String> hashes = new TreeMap<>();
     Map<String, Set<String>> names = new HashMap<>();
     Map<String, String> supplements = new HashMap<>();
     for (FetchedFile f : pf.fileList) {
       for (FetchedResource r : f.getResources()) {
-        String url = terminologyUrl(r);
-        if (url != null) {
-          ResourceNode n = resourceNode(r);
-          hashes.merge(url, n.getContentHash(), String::concat);
-          Set<String> named = names.computeIfAbsent(url, k -> new HashSet<>());
-          for (String s : n.getStrings()) {
-            int i = s.indexOf("?fhir_vs");
-            s = i < 0 ? s : s.substring(0, i);
-            i = s.indexOf('|');
-            named.add(i < 0 ? s : s.substring(0, i));
-          }
-          named.remove(url);
-          String supplemented = r.getElement() != null && "CodeSystem".equals(r.fhirType()) ? singleValue(r.getElement(), "supplements") : null;
-          if (supplemented != null) {
-            int i = supplemented.indexOf('|');
-            supplements.put(url, i < 0 ? supplemented : supplemented.substring(0, i));
+        TerminologyResource t = terminologyResource(r);
+        if (t != null) {
+          hashes.merge(t.url, t.hash, String::concat);
+          names.computeIfAbsent(t.url, k -> new HashSet<>()).addAll(t.named);
+          if (t.supplements != null) {
+            supplements.put(t.url, t.supplements);
           }
         }
       }
     }
-    txCacheRecord = new JsonArray();
-    for (Map.Entry<String, String> e : hashes.entrySet()) {
-      txCacheRecord.add(new JsonObject().add("url", e.getKey()).add("hash", e.getValue()));
-    }
-    Map<String, String> recorded = readTxCacheRecord();
-    if (recorded == null) {
-      return new TreeSet<>(hashes.keySet());
-    }
-    Set<String> res = new TreeSet<>();
-    for (Map.Entry<String, String> e : hashes.entrySet()) {
-      if (!e.getValue().equals(recorded.get(e.getKey()))) {
-        res.add(e.getKey());
+    if (allLoaded) {
+      txCacheRecord = new JsonArray();
+      for (Map.Entry<String, String> e : hashes.entrySet()) {
+        JsonObject o = new JsonObject().add("url", e.getKey()).add("hash", e.getValue());
+        if (supplements.containsKey(e.getKey())) {
+          o.add("supplements", supplements.get(e.getKey()));
+        }
+        txCacheRecord.add(o);
       }
     }
-    for (String u : recorded.keySet()) {
-      if (!hashes.containsKey(u)) {
-        res.add(u);
+    if (!txCacheRecordRead) {
+      recordedTerminology = readTxCacheRecord();
+      txCacheRecordRead = true;
+    }
+    Set<String> res = new TreeSet<>();
+    if (recordedTerminology == null) {
+      res.addAll(hashes.keySet());
+    } else {
+      for (Map.Entry<String, String> e : hashes.entrySet()) {
+        RecordedTerminology rec = recordedTerminology.get(e.getKey());
+        if (rec == null || !e.getValue().equals(rec.hash)) {
+          res.add(e.getKey());
+        }
+      }
+      if (allLoaded) {
+        for (String u : recordedTerminology.keySet()) {
+          if (!hashes.containsKey(u)) {
+            res.add(u);
+          }
+        }
+      }
+      for (Map.Entry<String, RecordedTerminology> e : recordedTerminology.entrySet()) {
+        if (e.getValue().supplements != null && res.contains(e.getKey())) {
+          res.add(e.getValue().supplements);
+        }
       }
     }
     boolean grew = !res.isEmpty();
@@ -426,33 +426,54 @@ public class RapidoTracker {
         }
       }
     }
+    res.removeAll(txCacheScrubbed);
+    txCacheScrubbed.addAll(res);
     return res;
   }
 
-  /** records what changedTerminologyUrls() found, now that the cache holds nothing older for what changed */
+  /** records what txCacheUrlsToScrub(true) found, now that the cache holds nothing older for what changed */
   public void saveTxCacheRecord() throws IOException {
     FileUtilities.stringToFile(org.hl7.fhir.utilities.json.parser.JsonParser.compose(new JsonObject().add("terminology", txCacheRecord), false), txCacheRecordFile());
+  }
+
+  /** @return false if there is a record that couldn't be deleted */
+  public boolean deleteTxCacheRecord() {
+    try {
+      return Files.deleteIfExists(txCacheRecordFile().toPath()) || !txCacheRecordFile().exists();
+    } catch (IOException e) {
+      return false;
+    }
   }
 
   private File txCacheRecordFile() throws IOException {
     return new File(Utilities.path(pf.vsCache, ".tx-cache-scrub.json"));
   }
 
-  /** url to content hash, or null if there is no record or it can't be read (so everything is scrubbed) */
-  private Map<String, String> readTxCacheRecord() throws IOException {
+  private static class RecordedTerminology {
+    final String hash;
+    final String supplements;
+
+    RecordedTerminology(String hash, String supplements) {
+      this.hash = hash;
+      this.supplements = supplements;
+    }
+  }
+
+  /** url to what was recorded, or null if there is no record or it can't be read (so everything is scrubbed) */
+  private Map<String, RecordedTerminology> readTxCacheRecord() throws IOException {
     File f = txCacheRecordFile();
     if (!f.exists()) {
       return null;
     }
     try {
-      Map<String, String> res = new HashMap<>();
+      Map<String, RecordedTerminology> res = new HashMap<>();
       for (JsonObject o : readState(f).getJsonArray("terminology").asJsonObjects()) {
         String url = o.asString("url");
         String hash = o.asString("hash");
         if (url == null || hash == null) {
           return null;
         }
-        res.put(url, hash);
+        res.put(url, new RecordedTerminology(hash, o.asString("supplements")));
       }
       return res;
     } catch (Exception e) {
@@ -460,34 +481,62 @@ public class RapidoTracker {
     }
   }
 
-  private static String terminologyUrl(FetchedResource r) {
+  private static class TerminologyResource {
+    final String url;
+    final String hash;
+    /** the urls it names, without |version or ?fhir_vs..., apart from its own */
+    final Set<String> named = new HashSet<>();
+    /** for a supplement, the code system it adds to, without |version */
+    final String supplements;
+
+    TerminologyResource(String url, String hash, String supplements) {
+      this.url = url;
+      this.hash = hash;
+      this.supplements = supplements;
+    }
+  }
+
+  /** null if it isn't a ValueSet or CodeSystem with a url. Hashed once: it is asked for before and after the load */
+  private TerminologyResource terminologyResource(FetchedResource r) {
+    if (!terminology.containsKey(r)) {
+      terminology.put(r, makeTerminologyResource(r));
+    }
+    return terminology.get(r);
+  }
+
+  private TerminologyResource makeTerminologyResource(FetchedResource r) {
     if (!Utilities.existsInList(r.fhirType(), "ValueSet", "CodeSystem")) {
       return null;
     }
     Element e = r.getElement();
-    String url = e == null ? null : singleValue(e, "url");
+    if (e == null) {
+      if (!(r.getResource() instanceof CanonicalResource) || ((CanonicalResource) r.getResource()).getUrl() == null) {
+        return null;
+      }
+      // nothing to compare, so assume it changed (as fileNode does)
+      return new TerminologyResource(((CanonicalResource) r.getResource()).getUrl(), UUID.randomUUID().toString(), null);
+    }
+    String url = singleValue(e, "url");
     if (url == null && r.getResource() instanceof CanonicalResource) {
       url = ((CanonicalResource) r.getResource()).getUrl();
     }
-    return url;
+    if (url == null) {
+      return null;
+    }
+    ResourceNode n = resourceNode(r);
+    String supplemented = "CodeSystem".equals(r.fhirType()) ? singleValue(e, "supplements") : null;
+    TerminologyResource t = new TerminologyResource(url, n.getContentHash(), supplemented == null ? null : withoutVersion(supplemented));
+    for (String s : n.getStrings()) {
+      int i = s.indexOf("?fhir_vs");
+      t.named.add(withoutVersion(i < 0 ? s : s.substring(0, i)));
+    }
+    t.named.remove(url);
+    return t;
   }
 
-  /** The urls of the ValueSets and CodeSystems in these files, and of the code systems the supplements among them add to */
-  private static Set<String> terminologyUrls(List<FetchedFile> files) {
-    Set<String> res = new TreeSet<>();
-    for (FetchedFile f : files) {
-      for (FetchedResource r : f.getResources()) {
-        String url = terminologyUrl(r);
-        if (url != null) {
-          res.add(url);
-          String supplements = r.getElement() != null && "CodeSystem".equals(r.fhirType()) ? singleValue(r.getElement(), "supplements") : null;
-          if (supplements != null) {
-            res.add(supplements);
-          }
-        }
-      }
-    }
-    return res;
+  private static String withoutVersion(String url) {
+    int i = url.indexOf('|');
+    return i < 0 ? url : url.substring(0, i);
   }
 
   private FileNode fileNode(FetchedFile f) {

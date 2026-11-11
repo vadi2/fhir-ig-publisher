@@ -2456,6 +2456,7 @@ public class PublisherIGLoader extends PublisherBase {
     pf.context.getCutils().setMasterSourceNames(pf.specMaps.get(0).getTargets());
     pf.context.getCutils().setLocalFileNames(pageTargets());
 
+    scrubTxCache(false);
     loadConformance1(true);
     for (String s : pf.resourceFactoryDirs) {
       FileUtilities.clearDirectory(s);

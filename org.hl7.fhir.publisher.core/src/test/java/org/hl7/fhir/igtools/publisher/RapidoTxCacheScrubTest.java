@@ -1,8 +1,10 @@
 package org.hl7.fhir.igtools.publisher;
 
+import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -12,6 +14,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -40,8 +43,9 @@ import org.junit.jupiter.api.io.TempDir;
  * The terminology cache keys a ValueSet that has a version by url|version, and an IG's ValueSets keep their version
  * while they're edited. So before a build expands or validates anything, what the cache holds for the ValueSets and
  * CodeSystems that may have changed is removed: those that changed since the cache was last scrubbed (a record next to
- * the cache), with those that name them, and the urls the IG no longer defines; all of the IG's own when there is no
- * record. A differential build also removes the ones it validates again.
+ * the cache), with those that name them and the code systems their supplements add to, and the urls the IG no longer
+ * defines; all of the IG's own when there is no record. That happens before the first snapshot generation, for what is
+ * loaded by then, and once everything is loaded.
  *
  * <p>A -watch rebuild runs the same checkDependencies with a new context, whose cache is read again from disk, so these
  * cover it too; the scrub on disk is tested in core's TerminologyCacheTests.
@@ -68,6 +72,12 @@ class RapidoTxCacheScrubTest {
   private TerminologyCache cache;
   /** the content of each file of the IG: file name -> its resource's (child name, value) pairs */
   private final Map<String, List<String[]>> ig = new LinkedHashMap<>();
+  /** the files whose resource has no element model, only a resource */
+  private final Set<String> noElement = new HashSet<>();
+
+  private interface ThrowingRunnable {
+    void run() throws Exception;
+  }
 
   @BeforeEach
   void setUp() throws Exception {
@@ -137,7 +147,7 @@ class RapidoTxCacheScrubTest {
     fillCache();
     PublisherFields pf = build(true);
     assertTrue(pf.rapido.isCompleteBuild());
-    assertEquals(Set.of(SCT, EXTERNAL_VS, VS_A+"x"), cached(), "a complete build removes the entries for every ValueSet and CodeSystem of the IG");
+    assertEquals(Set.of(EXTERNAL_VS, VS_A+"x"), cached(), "a complete build removes the entries for every ValueSet and CodeSystem of the IG, and what their supplements add to");
     finish(pf);
     fillCache();
   }
@@ -249,7 +259,7 @@ class RapidoTxCacheScrubTest {
 
     build(false);
 
-    assertEquals(Set.of(SCT, EXTERNAL_VS, VS_A+"x"), cached());
+    assertEquals(Set.of(EXTERNAL_VS, VS_A+"x"), cached());
   }
 
   /** a build without -rapido, which scrubs everything and records the IG's ValueSets and CodeSystems */
@@ -333,7 +343,7 @@ class RapidoTxCacheScrubTest {
 
     build(false);
 
-    assertEquals(Set.of(SCT, EXTERNAL_VS, VS_A+"x"), cached());
+    assertEquals(Set.of(EXTERNAL_VS, VS_A+"x"), cached());
   }
 
   @Test
@@ -358,7 +368,88 @@ class RapidoTxCacheScrubTest {
 
     build(false);
 
-    assertEquals(Set.of(SCT, EXTERNAL_VS, VS_A+"x"), cached());
+    assertEquals(Set.of(EXTERNAL_VS, VS_A+"x"), cached());
+  }
+
+  @Test
+  void aDeletedSupplementScrubsTheCodeSystemItAddedTo() throws Exception {
+    firstPlainBuild();
+    ig.remove("CodeSystem-sct-supp.json");
+
+    build(false);
+
+    // core sent the supplement with the SNOMED CT answers
+    assertEquals(allBut(SUPP, SCT, VS_SCT), cached());
+  }
+
+  @Test
+  void aSupplementMovedToAnotherCodeSystemScrubsBoth() throws Exception {
+    firstPlainBuild();
+    set("CodeSystem-sct-supp.json", "supplements", "http://loinc.org");
+
+    build(false);
+
+    assertEquals(allBut(SUPP, SCT, VS_SCT, VS_OTHER), cached());
+  }
+
+  @Test
+  void whatChangedIsScrubbedBeforeTheSnapshotsAndNotAgainAfterThem() throws Exception {
+    firstPlainBuild();
+    edit("ValueSet-vs-a.json", "concept", "a2");
+    edit("ValueSet-vs-other.json", "concept", "o2");
+
+    build(false, Set.of("ValueSet-vs-other.json"), () -> {
+      // vs-other isn't loaded yet, which doesn't make it deleted
+      assertEquals(allBut(VS_A, VS_B), cached(), "before the snapshots");
+      // the snapshots expand vs-a again, from its new content
+      cacheExpansion(VS_A);
+    });
+
+    assertTrue(isCached(VS_A), "vs-a's new expansion is kept");
+    assertEquals(allBut(VS_B, VS_OTHER), cached());
+  }
+
+  @Test
+  void aScrubWhoseWriteFailedIsTriedAgainNextBuild() throws Exception {
+    firstPlainBuild();
+    byte[] record = Files.readAllBytes(dir.resolve(".tx-cache-scrub.json"));
+    edit("ValueSet-vs-a.json", "concept", "a2");
+    TerminologyCache.ScrubResult failed = mock(TerminologyCache.ScrubResult.class);
+    when(failed.getFailed()).thenReturn(List.of("cs-a"));
+    TerminologyCache working = cache;
+    cache = mock(TerminologyCache.class);
+    when(cache.scrub(any())).thenReturn(failed);
+
+    build(false);
+
+    assertArrayEquals(record, Files.readAllBytes(dir.resolve(".tx-cache-scrub.json")), "the record still has vs-a as it was");
+    cache = working;
+    fillCache();
+    build(false);
+    assertEquals(allBut(VS_A, VS_B), cached());
+  }
+
+  @Test
+  void aRecordThatCannotBeWrittenDoesntStopTheBuild() throws Exception {
+    firstPlainBuild();
+    Path record = dir.resolve(".tx-cache-scrub.json");
+    Files.delete(record);
+    Files.createDirectory(record);
+
+    build(false);
+
+    assertFalse(Files.exists(record), "what was there is deleted, so the next build scrubs everything");
+  }
+
+  @Test
+  void aValueSetWithoutAnElementIsScrubbedEveryBuild() throws Exception {
+    noElement.add("ValueSet-vs-a.json");
+    firstPlainBuild();
+
+    build(false);
+
+    // nothing to compare it by, so it is taken as changed, with what includes it
+    assertEquals(allBut(VS_A, VS_B), cached());
   }
 
   /** what the rest of a rapido build does that checkDependencies needs next time */
@@ -378,6 +469,14 @@ class RapidoTxCacheScrubTest {
   }
 
   private PublisherFields build(boolean rapido) throws Exception {
+    return build(rapido, Set.of(), () -> {});
+  }
+
+  /**
+   * a build whose files in late are loaded after the first snapshot generation (as the IG's resource list and test
+   * data factories are); beforeSnapshots runs where that would be
+   */
+  private PublisherFields build(boolean rapido, Set<String> late, ThrowingRunnable beforeSnapshots) throws Exception {
     FetchedFile igf = file("ig.json", "{}", List.of());
     Publisher publisher = new Publisher();
     publisher.getSettings().setRapidoMode(rapido);
@@ -392,6 +491,7 @@ class RapidoTxCacheScrubTest {
     pf.context = mock(SimpleWorkerContext.class);
     when(pf.context.getTxCache()).thenReturn(cache);
     pf.fileList.add(igf);
+    List<FetchedFile> lateFiles = new ArrayList<>();
     for (Map.Entry<String, List<String[]>> e : ig.entrySet()) {
       String type = e.getKey().substring(0, e.getKey().indexOf('-'));
       String id = e.getKey().substring(e.getKey().indexOf('-')+1, e.getKey().length()-5);
@@ -399,16 +499,29 @@ class RapidoTxCacheScrubTest {
       for (String[] c : e.getValue()) {
         src.append(c[0]).append('=').append(c[1]).append('\n');
       }
-      pf.fileList.add(file(e.getKey(), src.toString(), List.of(resource(type, id, e.getValue()))));
+      FetchedResource r = noElement.contains(e.getKey()) ? resourceWithoutElement(type, id, e.getValue()) : resource(type, id, e.getValue());
+      (late.contains(e.getKey()) ? lateFiles : pf.fileList).add(file(e.getKey(), src.toString(), List.of(r)));
     }
-    pf.changeList.addAll(pf.fileList);
     publisher.setPf(pf);
     Field loader = Publisher.class.getDeclaredField("loader");
     loader.setAccessible(true);
     ((PublisherIGLoader) loader.get(publisher)).setPf(pf);
 
+    // what load() does before the first snapshot generation
+    publisher.scrubTxCache(false);
+    beforeSnapshots.run();
+    pf.fileList.addAll(lateFiles);
+    pf.changeList.addAll(pf.fileList);
     publisher.checkDependencies(igf, new IniFile(dir.resolve(".build-tracker.ini").toString()));
     return pf;
+  }
+
+  private static FetchedResource resourceWithoutElement(String type, String id, List<String[]> content) {
+    FetchedResource resource = mock(FetchedResource.class);
+    when(resource.fhirType()).thenReturn(type);
+    when(resource.getId()).thenReturn(id);
+    when(resource.getResource()).thenReturn(new ValueSet().setUrl(content.get(0)[1]));
+    return resource;
   }
 
   private FetchedFile file(String name, String content, List<FetchedResource> resources) {

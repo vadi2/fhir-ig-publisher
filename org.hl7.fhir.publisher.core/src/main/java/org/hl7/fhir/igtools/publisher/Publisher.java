@@ -1147,10 +1147,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     if (!settings.isRapidoMode()) {
       buildTracker.setStringProperty("status", "uuid", HierarchicalTableGenerator.uuid, null);
       buildTracker.save();
-      if (hasTxCache()) {
-        RapidoTracker tracker = new RapidoTracker(pf);
-        scrubTxCache(tracker, tracker.changedTerminologyUrls());
-      }
+      scrubTxCache(true);
       return;
     }
     pf.hasCheckedDependencies = true;
@@ -1176,27 +1173,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       }
       HierarchicalTableGenerator.uuid = pf.rapido.getUuid();
     }
-    if (hasTxCache()) {
-      scrubTxCache(pf.rapido, pf.rapido.txCacheUrlsToScrub());
-    }
-  }
-
-  private boolean hasTxCache() {
-    return pf.context != null && pf.context.getTxCache() != null;
-  }
-
-  /**
-   * Removes what the terminology cache holds for ValueSets and CodeSystems that may have changed since it was
-   * written, before anything expands or validates against them. The cache keys a ValueSet by url|version, which an
-   * edit doesn't change.
-   */
-  private void scrubTxCache(RapidoTracker tracker, Set<String> urls) throws IOException {
-    if (!urls.isEmpty()) {
-      long start = System.currentTimeMillis();
-      int n = pf.context.getTxCache().scrub(urls);
-      log("Terminology cache: removed "+n+" entries for "+urls.size()+" ValueSets and CodeSystems that may have changed ("+(System.currentTimeMillis()-start)+" ms)");
-    }
-    tracker.saveTxCacheRecord();
+    scrubTxCache(true);
   }
 
   private boolean bool(JsonObject obj, String name) throws Exception {
