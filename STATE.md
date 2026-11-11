@@ -116,3 +116,8 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 - 19:17 tick: no PRs (highest 38). perf3/early-publish pushed (3a04f3ac) -> launched tail-restart. native-skip head
   1686b40d (moving). All 10 PR slots now have an owner: 5 wave 1 + replay-stamp, narrative-skip, translations-dirty,
   qa-prep-reuse, tail-restart. Launch nothing more unless a session drops (then see Reserve).
+- 19:48 tick: no PRs (highest 38). archives-reuse pushed (498c93f3); narrative-skip moving (7d5a7513). summaries-reuse
+  (verifying list reuse in a real rebuild) and rapido-state (fresh vs watch output compare) working. replay-stamp and
+  tail-restart have no branch yet (just launched). NOTE: get_session rate_limit_info now says status allowed_warning,
+  seven_day_overage_included (weekly Fable quota getting close; resets Tue 2026-11-17 12:00 UTC). Told Vadim.
+  If sessions start failing on rate limits: do not relaunch; record and report.
