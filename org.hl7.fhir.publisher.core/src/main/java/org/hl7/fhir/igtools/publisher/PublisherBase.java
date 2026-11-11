@@ -101,8 +101,8 @@ public class PublisherBase implements ILoggingService {
   /**
    * Removes what the terminology cache holds for the ValueSets and CodeSystems that changed since it was last scrubbed
    * (see RapidoTracker.txCacheUrlsToScrub). The cache keys a ValueSet by url|version, which an edit doesn't change.
-   * Called before the first snapshot generation, which expands bindings, for the resources loaded by then, and once
-   * every resource is loaded, which records them if every scrub was written.
+   * Called before each snapshot generation, which expands bindings, for the resources loaded by then, and once every
+   * resource is loaded, which records them if every scrub was written.
    */
   protected void scrubTxCache(boolean allLoaded) throws IOException {
     if (pf.context == null || pf.context.getTxCache() == null) {
@@ -113,12 +113,16 @@ public class PublisherBase implements ILoggingService {
     }
     Set<String> urls = pf.txCacheScrub.txCacheUrlsToScrub(allLoaded);
     if (!urls.isEmpty()) {
+      String warning = pf.txCacheScrub.startTxCacheScrub(urls);
+      if (warning != null) {
+        txCacheWarning(warning);
+      }
       long start = System.currentTimeMillis();
       TerminologyCache.ScrubResult result = pf.context.getTxCache().scrub(urls);
       log("Terminology cache: removed "+result.getRemoved()+" entries for "+urls.size()+" ValueSets and CodeSystems that may have changed ("+(System.currentTimeMillis()-start)+" ms)");
       if (!result.isComplete()) {
-        // the record stays as it was, so the next build scrubs these again
-        log("Warning: the terminology cache could not read or write "+String.join(", ", result.getFailed())+", which may still hold answers for ValueSets and CodeSystems that changed");
+        // the record isn't saved, so it still has these as being scrubbed, and the next build scrubs them again
+        txCacheWarning("could not read or write "+String.join(", ", result.getFailed())+", which may still hold answers for ValueSets and CodeSystems that changed");
         pf.txCacheScrubFailed = true;
       }
     }
@@ -126,9 +130,15 @@ public class PublisherBase implements ILoggingService {
       try {
         pf.txCacheScrub.saveTxCacheRecord();
       } catch (IOException e) {
-        log("Warning: could not record the ValueSets and CodeSystems scrubbed from the terminology cache ("+e.getMessage()+"), so the next build scrubs all of them"+(pf.txCacheScrub.deleteTxCacheRecord() ? "" : ", if it can read the record"));
+        // it is as it was before this build, with what this build scrubbed marked as being scrubbed, or can't be read
+        txCacheWarning("could not record the ValueSets and CodeSystems scrubbed from it ("+e.getMessage()+"), so the next build scrubs what this one did again");
       }
     }
+  }
+
+  private void txCacheWarning(String message) {
+    log("Warning: terminology cache: "+message);
+    pf.errors.add(new ValidationMessage(ValidationMessage.Source.Publisher, ValidationMessage.IssueType.PROCESSING, "ImplementationGuide", "Terminology cache: "+message, ValidationMessage.IssueSeverity.WARNING));
   }
 
   protected String getTargetOutput() {

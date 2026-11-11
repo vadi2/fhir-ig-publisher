@@ -377,11 +377,7 @@ public class RapidoTracker {
     if (allLoaded) {
       txCacheRecord = new JsonArray();
       for (Map.Entry<String, String> e : hashes.entrySet()) {
-        JsonObject o = new JsonObject().add("url", e.getKey()).add("hash", e.getValue());
-        if (supplements.containsKey(e.getKey())) {
-          o.add("supplements", supplements.get(e.getKey()));
-        }
-        txCacheRecord.add(o);
+        txCacheRecord.add(recordEntry(e.getKey(), e.getValue(), supplements.get(e.getKey())));
       }
     }
     if (!txCacheRecordRead) {
@@ -431,13 +427,65 @@ public class RapidoTracker {
     return res;
   }
 
+  /**
+   * Called before the cache is scrubbed for urls: marks their recorded entries as being scrubbed, so if this build
+   * stops before saveTxCacheRecord(), with answers from content the record doesn't describe in the cache, the next
+   * build scrubs them again even if their content is back to what was recorded.
+   *
+   * @return a warning if the record couldn't be marked, or null
+   */
+  public String startTxCacheScrub(Set<String> urls) throws IOException {
+    if (recordedTerminology == null) {
+      // nothing (readable) recorded, so the next build scrubs everything anyway
+      return null;
+    }
+    boolean marked = false;
+    for (String u : urls) {
+      RecordedTerminology rec = recordedTerminology.get(u);
+      if (rec != null && !SCRUB_STARTED.equals(rec.hash)) {
+        recordedTerminology.put(u, new RecordedTerminology(SCRUB_STARTED, rec.supplements));
+        marked = true;
+      }
+    }
+    if (!marked) {
+      return null;
+    }
+    JsonArray record = new JsonArray();
+    for (Map.Entry<String, RecordedTerminology> e : new TreeMap<>(recordedTerminology).entrySet()) {
+      record.add(recordEntry(e.getKey(), e.getValue().hash, e.getValue().supplements));
+    }
+    File f = txCacheRecordFile();
+    try {
+      writeTxCacheRecord(record);
+      return null;
+    } catch (IOException e) {
+      if (deleteTxCacheRecord()) {
+        return "could not update "+f+" ("+e.getMessage()+"), so it is deleted and the next build scrubs every ValueSet and CodeSystem of the IG";
+      }
+      try {
+        FileUtilities.stringToFile("", txCacheStaleFile());
+        return "could not update or delete "+f+" ("+e.getMessage()+"), so the next build ignores it and scrubs every ValueSet and CodeSystem of the IG";
+      } catch (IOException e2) {
+        return "could not update, delete or mark as stale "+f+" ("+e.getMessage()+"): delete it by hand, or later builds may use answers from the content this build has for "+String.join(", ", urls);
+      }
+    }
+  }
+
   /** records what txCacheUrlsToScrub(true) found, now that the cache holds nothing older for what changed */
   public void saveTxCacheRecord() throws IOException {
-    FileUtilities.stringToFile(org.hl7.fhir.utilities.json.parser.JsonParser.compose(new JsonObject().add("terminology", txCacheRecord), false), txCacheRecordFile());
+    writeTxCacheRecord(txCacheRecord);
+    if (!txCacheStaleFile().delete() && txCacheStaleFile().exists()) {
+      throw new IOException("could not delete "+txCacheStaleFile());
+    }
+  }
+
+  void writeTxCacheRecord(JsonArray record) throws IOException {
+    // written in place: a write that fails after the file is opened leaves a record that can't be read, which is safe
+    FileUtilities.stringToFile(org.hl7.fhir.utilities.json.parser.JsonParser.compose(new JsonObject().add("terminology", record), false), txCacheRecordFile());
   }
 
   /** @return false if there is a record that couldn't be deleted */
-  public boolean deleteTxCacheRecord() {
+  boolean deleteTxCacheRecord() {
     try {
       return Files.deleteIfExists(txCacheRecordFile().toPath()) || !txCacheRecordFile().exists();
     } catch (IOException e) {
@@ -445,8 +493,41 @@ public class RapidoTracker {
     }
   }
 
+  private static JsonObject recordEntry(String url, String hash, String supplements) {
+    JsonObject o = new JsonObject().add("url", url).add("hash", hash);
+    if (supplements != null) {
+      o.add("supplements", supplements);
+    }
+    return o;
+  }
+
+  /** the record's name starts with this, then the IG's package id: IGs can share a cache folder */
+  static final String TX_CACHE_RECORD = ".tx-cache-scrub";
+  /** no content hashes to this, so an entry being scrubbed is scrubbed again until a record is saved */
+  private static final String SCRUB_STARTED = "";
+
   private File txCacheRecordFile() throws IOException {
-    return new File(Utilities.path(pf.vsCache, ".tx-cache-scrub.json"));
+    String name = pf.npmName == null ? TX_CACHE_RECORD : TX_CACHE_RECORD+"-"+pf.npmName.replaceAll("[^A-Za-z0-9._-]", "_");
+    return new File(Utilities.path(pf.vsCache, name+".json"));
+  }
+
+  /** when this exists, the record next to it can't be trusted (it couldn't be updated or deleted) */
+  private File txCacheStaleFile() throws IOException {
+    return new File(txCacheRecordFile().getPath()+".stale");
+  }
+
+  /** the files to keep when the cache folder is trimmed: keep, and the records of what was scrubbed from what is kept */
+  static String[] keepWithTxCacheRecords(String folder, String... keep) {
+    List<String> res = new ArrayList<>(List.of(keep));
+    String[] files = new File(folder).list();
+    if (files != null) {
+      for (String f : files) {
+        if (f.startsWith(TX_CACHE_RECORD)) {
+          res.add(f);
+        }
+      }
+    }
+    return res.toArray(new String[0]);
   }
 
   private static class RecordedTerminology {
@@ -465,18 +546,24 @@ public class RapidoTracker {
     if (!f.exists()) {
       return null;
     }
+    if (txCacheStaleFile().exists()) {
+      pf.logger.logMessage("Terminology cache: "+f+" is marked stale, so every ValueSet and CodeSystem of the IG is scrubbed");
+      return null;
+    }
     try {
       Map<String, RecordedTerminology> res = new HashMap<>();
       for (JsonObject o : readState(f).getJsonArray("terminology").asJsonObjects()) {
         String url = o.asString("url");
         String hash = o.asString("hash");
-        if (url == null || hash == null) {
-          return null;
+        String supplements = o.asString("supplements");
+        if (url == null || hash == null || (supplements == null && o.has("supplements"))) {
+          throw new IOException("an entry has no url or hash, or isn't as written: "+o);
         }
-        res.put(url, new RecordedTerminology(hash, o.asString("supplements")));
+        res.put(url, new RecordedTerminology(hash, supplements));
       }
       return res;
     } catch (Exception e) {
+      pf.logger.logMessage("Terminology cache: can't read "+f+" ("+e.getMessage()+"), so every ValueSet and CodeSystem of the IG is scrubbed");
       return null;
     }
   }
@@ -496,7 +583,10 @@ public class RapidoTracker {
     }
   }
 
-  /** null if it isn't a ValueSet or CodeSystem with a url. Hashed once: it is asked for before and after the load */
+  /**
+   * null if it isn't a ValueSet or CodeSystem with a url. Hashed once, as loaded (the loader sets a missing url and
+   * may pin versions): it is asked for before each snapshot generation and once everything is loaded
+   */
   private TerminologyResource terminologyResource(FetchedResource r) {
     if (!terminology.containsKey(r)) {
       terminology.put(r, makeTerminologyResource(r));
