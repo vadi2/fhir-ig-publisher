@@ -3,6 +3,7 @@ package org.hl7.fhir.igtools.publisher;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigInteger;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileVisitResult;
@@ -12,6 +13,8 @@ import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -184,8 +187,13 @@ public class OutputFolderSync {
    * @param files the files to copy, in the staging folder (those that aren't there, or aren't files, are skipped), or
    *              null for every file in it
    * @param leftOut tells, by its name, a file that isn't copied (null: none)
+   * @param offered what the calls before this one found in the staging folder, by relative path (a digest of the
+   *              content), kept up to date here; or null. A file that is as it was then isn't looked at again: the
+   *              target has it, or what the build made of it since (the html checks change the pages Jekyll
+   *              wrote), which a copy would put back to how it was before
    */
-  public static Result publish(Path staged, Path target, Collection<Path> files, Predicate<String> leftOut) throws IOException {
+  public static Result publish(Path staged, Path target, Collection<Path> files, Predicate<String> leftOut,
+      Map<String, String> offered) throws IOException {
     Result result = new Result();
     // the files are named under the staging folder as it was given, which may be reached through a link
     Path given = staged.toAbsolutePath().normalize();
@@ -219,6 +227,11 @@ public class OutputFolderSync {
       Path from = staged.resolve(rel);
       Path to = target.resolve(rel);
       try {
+        String digest = offered == null ? null : digest(from, ba);
+        if (digest != null && digest.equals(offered.get(rel))) {
+          result.unchanged++;
+          continue;
+        }
         if (dirs.add(to.getParent())) {
           Files.createDirectories(to.getParent());
         }
@@ -227,6 +240,9 @@ public class OutputFolderSync {
         } else {
           copy(from, to);
           result.written++;
+        }
+        if (digest != null) {
+          offered.put(rel, digest);
         }
       } catch (IOException ex) {
         result.failures.add("Unable to update " + rel + ": " + describe(ex));
@@ -264,6 +280,22 @@ public class OutputFolderSync {
         return FileVisitResult.CONTINUE;
       }
     });
+  }
+
+  private static String digest(Path file, byte[] buffer) throws IOException {
+    MessageDigest md;
+    try {
+      md = MessageDigest.getInstance("SHA-256");
+    } catch (NoSuchAlgorithmException e) {
+      throw new IOException(e);
+    }
+    try (InputStream in = Files.newInputStream(file)) {
+      int n;
+      while ((n = in.read(buffer)) > 0) {
+        md.update(buffer, 0, n);
+      }
+    }
+    return new BigInteger(1, md.digest()).toString(16);
   }
 
   private static boolean sameContent(Path a, Path b, byte[] ba, byte[] bb) throws IOException {

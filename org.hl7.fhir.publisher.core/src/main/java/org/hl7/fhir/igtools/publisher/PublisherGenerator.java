@@ -233,6 +233,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   private Set<String> jekyllWritten;
   // whether the last Jekyll run returned an error, though it said that it had finished
   private boolean jekyllInDoubt;
+  // watch mode: the pages as Jekyll last wrote them (a digest, by path in the output folder), as far as they were
+  // put in the output folder before the build had finished (see publishPagesEarly())
+  private final Map<String, String> earlyPages = new HashMap<>();
   // whether the memory that generating the outputs used is reclaimed once Jekyll has run, not before
   private boolean reclaimAfterJekyll;
   // watch mode: where the html-checked versions of the output files that Jekyll wrote again for the template's check
@@ -822,7 +825,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         replay.dropCheckedPackageOutputs();
       }
     }
-    if (jekyllOk && !jekyllInDoubt) {
+    if (jekyllOk) {
       publishPagesEarly(jekyllWritten);
     }
     if (reclaimAfterJekyll) {
@@ -4814,23 +4817,27 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * again only for the template's check have their html-checked content back by now, which the output folder has.
    * The .ai.html pages aren't put there: the AI step deletes them.
    *
-   * @param jekyllWritten the output files Jekyll wrote (in the staging folder), or null if it wrote all of them
+   * Jekyll writes a page again whenever it renders it, changed or not (all of them, when it renders the whole site):
+   * one that is as Jekyll wrote it for the last build is left as that build's html checks made it (see earlyPages).
+   * Nothing is put there if Jekyll returned an error, though it said that it had finished.
+   *
+   * @param files the output files Jekyll wrote (in the staging folder), or null if it wrote all of them
    */
-  void publishPagesEarly(Set<String> jekyllWritten) {
-    if (pf.watchOutputDir == null || settings.isGenerationOff() || settings.isSimplifierMode()) {
+  void publishPagesEarly(Set<String> files) {
+    if (pf.watchOutputDir == null || settings.isGenerationOff() || settings.isSimplifierMode() || jekyllInDoubt) {
       return;
     }
     long start = System.nanoTime();
     List<Path> written = null;
-    if (jekyllWritten != null) {
+    if (files != null) {
       written = new ArrayList<>();
-      for (String f : jekyllWritten) {
+      for (String f : files) {
         written.add(Paths.get(f));
       }
     }
     OutputFolderSync.Result r;
     try {
-      r = OutputFolderSync.publish(Paths.get(pf.outputDir), Paths.get(pf.watchOutputDir), written, AIProcessor::isRenderedForAiOnly);
+      r = OutputFolderSync.publish(Paths.get(pf.outputDir), Paths.get(pf.watchOutputDir), written, AIProcessor::isRenderedForAiOnly, earlyPages);
     } catch (IOException e) {
       log("Unable to put the pages in " + pf.watchOutputDir + " yet (it is updated when the build has finished): " + e);
       return;
@@ -4846,6 +4853,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         + r.getWritten() + " written, " + r.getUnchanged() + " unchanged"
         + (r.getFailures().isEmpty() ? "" : ", " + r.getFailures().size() + " failed")
         + " (" + DurationUtil.presentDuration(now - start) + "). They are as Jekyll rendered them: the html checks, the packages and the qa pages follow");
+  }
+
+  /** Jekyll said that it had finished, and then returned an error: the build goes on with what it wrote */
+  void jekyllReturnedAnError() {
+    jekyllInDoubt = true;
   }
 
   private boolean runTool(PageRebuild replay) throws Exception {
@@ -5273,7 +5285,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           log("Jekyll timeout exceeded: " + Long.toString(pf.jekyllTimeout /1000) + " seconds");
         }
         log("Jekyll claimed to succeed, but returned an error. Proceeding anyway");
-        jekyllInDoubt = true;
+        jekyllReturnedAnError();
         if (pageRebuild != null) {
           pageRebuild.notReusable("Jekyll returned an error");
         }

@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -337,6 +338,47 @@ class WatchCompleteBuildJekyllTest {
   }
 
   @Test
+  void nothingIsPutInTheOutputFolderEarlyIfJekyllReturnedAnError() throws Exception {
+    write("temp/.watch-output/a.html", "a2, or half of it");
+    write("output/a.html", "a");
+    PublisherGenerator g = generator(null);
+    g.jekyllReturnedAnError();
+
+    g.publishPagesEarly(null);
+
+    assertEquals("a", output("a.html"));
+    assertFalse(pf.watchPagesPublished);
+  }
+
+  @Test
+  void aPageJekyllWroteAgainAsItWasStaysAsTheLastBuildsHtmlChecksLeftIt() throws Exception {
+    write("temp/.watch-output/a.html", "a, as Jekyll wrote it");
+    PublisherGenerator g = generator(null);
+    g.publishPagesEarly(null);
+    // the rest of that build, and its sync
+    write("output/a.html", "a, html checked");
+    pf.watchPagesPublished = false;
+
+    // the next build: Jekyll renders the whole site again
+    g.publishPagesEarly(null);
+
+    assertEquals("a, html checked", output("a.html"));
+    assertFalse(pf.watchPagesPublished);
+  }
+
+  @Test
+  void anOutputFolderThatCantBeWrittenToEarlyDoesntFailTheBuild() throws Exception {
+    write("temp/.watch-output/a.html", "a2");
+    write("blocked", "a file where the output folder's parent would be");
+    pf.watchOutputDir = dir.resolve("blocked").resolve("output").toString();
+
+    generator(null).publishPagesEarly(null);
+
+    assertFalse(pf.watchPagesPublished);
+    verify(pf.logger).logMessage(startsWith("Unable to put the pages in " + pf.watchOutputDir + " yet"));
+  }
+
+  @Test
   void whatCantBePutInTheOutputFolderEarlyDoesntFailTheBuild() throws Exception {
     write("temp/.watch-output/a/page.html", "a is a folder now");
     write("temp/.watch-output/b.html", "b2");
@@ -347,6 +389,6 @@ class WatchCompleteBuildJekyllTest {
 
     assertEquals("b2", output("b.html"));
     verify(pf.logger).logMessage(startsWith("  Unable to update a"));
-    verify(pf.logger).logMessage(org.mockito.ArgumentMatchers.contains("1 written, 0 unchanged, 1 failed"));
+    verify(pf.logger).logMessage(contains("1 written, 0 unchanged, 1 failed"));
   }
 }

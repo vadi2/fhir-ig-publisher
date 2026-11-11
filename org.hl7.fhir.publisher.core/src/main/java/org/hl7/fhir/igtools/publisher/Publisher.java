@@ -381,6 +381,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     if (state == null) {
       return false;
     }
+    boolean pagesAhead = pagesAheadOfSync(pf);
     List<String> reason = new ArrayList<>();
     List<FetchedFile> pages;
     try {
@@ -408,7 +409,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     pf.setReportTime(Calendar.getInstance());
     // in watch mode the staging folder is synced into the output folder again at the end
     pf.watchOutputSynced = false;
-    pf.watchPagesPublished = false;
+    pf.watchPagesPublished = pagesAhead;
     pf.watchBuildStarted = watchBuildStarted;
     try {
       IniFile buildTracker = new IniFile(Utilities.path(pf.vsCache, ".build-tracker.ini"));
@@ -457,8 +458,20 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     return res;
   }
 
+  /**
+   * Watch mode: whether the output folder has pages that a build put there when Jekyll had rendered them (see
+   * PublisherGenerator.publishPagesEarly()) and no build has synced since: the build or page rebuild before this one,
+   * or one before that, failed after that (or was given up for a complete build). The next one is told, so that if
+   * it fails too it says whose pages they are
+   */
+  static boolean pagesAheadOfSync(PublisherFields last) {
+    return last != null && last.watchPagesPublished && !last.watchOutputSynced;
+  }
+
   private void build(String rootDir) throws Exception {
+    boolean pagesAhead = pagesAheadOfSync(pf);
     pf = fieldsForBuild(watchSession);
+    pf.watchPagesPublished = pagesAhead;
     pf.watchBuildStarted = watchBuildStarted;
     loader.setPf(pf);
     processor.setPf(pf);
@@ -817,14 +830,20 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * in watch mode, a failed build isn't synced, but what reads qa.json in the output folder should see that it failed
    */
   private void recordWatchFailure(Throwable e) {
-    if (pf == null || pf.watchOutputDir == null || settings.getDestDir() != null) {
+    if (pf == null || pf.watchOutputDir == null) {
       return;
     }
     if (pf.watchOutputSynced) {
       // it failed after the output folder was brought up to date
       return;
     }
-    log(watchFailureNote(pf.watchOutputDir, pf.watchPagesPublished));
+    String note = watchFailureNote(pf.watchOutputDir, pf.watchPagesPublished, settings.getDestDir() != null);
+    if (note != null) {
+      log(note);
+    }
+    if (settings.getDestDir() != null) {
+      return;
+    }
     if (!new File(pf.outputDir, "qa.json").exists()) {
       // an Error, or a failure before the IG was loaded
       recordOutcome(e instanceof Exception ? (Exception) e : new Exception(e.toString(), e), null);
@@ -837,15 +856,17 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   }
 
   /**
-   * what the output folder holds after a build that failed: if the build had put its pages there when Jekyll had
-   * rendered them (see PublisherGenerator.publishPagesEarly()), those are this build's
+   * what the output folder holds after a build that failed: if it, or a failed build before it, had put pages there
+   * when Jekyll had rendered them (see PublisherGenerator.publishPagesEarly()), those aren't the last good build's
    */
-  static String watchFailureNote(String outputDir, boolean pagesPublished) {
+  static String watchFailureNote(String outputDir, boolean pagesPublished, boolean qaElsewhere) {
     if (pagesPublished) {
-      return "The build failed after its pages were put in "+ outputDir +": the pages there are this build's, as Jekyll rendered them (not html checked)."
-          +" The rest (packages, zips, qa pages) is from the last build that succeeded. The next build that succeeds brings all of it up to date";
+      return "The build failed after pages were put in "+ outputDir +" as Jekyll rendered them (not html checked), by it or by a build that failed before it:"
+          +" those are newer than the rest there (the other pages, packages, zips, qa pages), which is from the last build that succeeded."
+          +" The next build that succeeds brings all of it up to date";
     }
-    return "The build failed, so the pages in "+ outputDir +" are still those of the last build that succeeded";
+    // (with -destination the qa files go there, and nothing was said)
+    return qaElsewhere ? null : "The build failed, so the pages in "+ outputDir +" are still those of the last build that succeeded";
   }
 
   /**
