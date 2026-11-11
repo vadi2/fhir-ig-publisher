@@ -123,7 +123,8 @@ class SavedExpansionsTest {
     SavedExpansions e = new SavedExpansions();
     e.addJournaled(notJson, SavedExpansions.hash(notJson));
     assertNotNull(e.key());
-    assertThrows(Exception.class, () -> e.resolve(parser()));
+    Error error = assertThrows(Error.class, () -> e.resolve(parser()));
+    assertTrue(error.getMessage().startsWith("Unable to read an expansion saved by the last Rapido build"), error.getMessage());
   }
 
   @Test

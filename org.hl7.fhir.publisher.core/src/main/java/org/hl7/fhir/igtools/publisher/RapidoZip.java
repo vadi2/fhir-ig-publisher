@@ -20,7 +20,7 @@ import org.hl7.fhir.utilities.json.model.JsonObject;
  * Writes one of the zips of the package step (the definitions, the examples, validator.pack, ...).
  *
  * <p>Without a zip from the last build to go on from, it is written by ZipGenerator, as it always was. In a
- * differential -rapido build that has to write the zip again (see {@link RapidoArchives}), most of its entries are
+ * differential -rapido -watch build that has to write the zip again (see {@link RapidoArchives}), most of its entries are
  * still what they were: each entry comes with a token that stands for its content, and an entry that had the same
  * token in the last build is copied from that build's zip as it is there, compressed. Only the others are made (the
  * resource composed, the file read) and compressed, the same way (deflate, level 9). So the zip holds the same

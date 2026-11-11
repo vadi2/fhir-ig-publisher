@@ -467,7 +467,7 @@ class PublisherGeneratorArchiveKeysTest {
   private void jekyll(Build b) throws Exception {
     b.pf.rapido.getArchives().beforeJekyll();
     for (String name : new String[] {"csvs.zip", "expansions.json", "expansions.xml", "expansions.json.zip", "expansions.xml.zip",
-      "definitions.json.zip", "validator.pack", "validator-ig.pack"}) {
+      "definitions.json.zip", "definitions.xml.zip", "validator.pack", "validator-ig.pack", "examples.json.zip", "examples.xml.zip"}) {
       Files.deleteIfExists(root.resolve("output").resolve(name));
     }
   }
@@ -786,5 +786,95 @@ class PublisherGeneratorArchiveKeysTest {
     jekyll(third);
     third.generator.generateValidationPack(spec.toString());
     assertEquals(names.subList(0, 7), new ArrayList<>(entries(out.resolve("validator.pack")).keySet()));
+  }
+
+  @Test
+  void theExampleZipsAreKeptWhileTheExamplesAreAsTheyWere() throws Exception {
+    Path out = root.resolve("output");
+    sources.forEach((name, r) -> {
+      try {
+        Files.write(out.resolve(name + ".json"), ("json of " + name).getBytes(StandardCharsets.UTF_8));
+        Files.write(out.resolve(name + ".xml"), ("xml of " + name).getBytes(StandardCharsets.UTF_8));
+      } catch (IOException e) {
+        throw new IllegalStateException(e);
+      }
+    });
+    Build plain = new Build(DAY);
+    plain.pf.rapido = null;
+    plain.pf.fileList.forEach(f -> f.getResources().get(0).setExampleUri("http://example.org/fhir/StructureDefinition/p"));
+    assertTrue(plain.generator.generateExampleZip(FhirFormat.JSON));
+    Map<String, String> expected = entries(out.resolve("examples.json.zip"));
+    assertEquals(3, expected.size());
+
+    Build first = new Build(DAY);
+    first.pf.fileList.forEach(f -> f.getResources().get(0).setExampleUri("http://example.org/fhir/StructureDefinition/p"));
+    assertTrue(first.generator.generateExampleZip(FhirFormat.JSON));
+    assertTrue(first.generator.generateExampleZip(FhirFormat.XML));
+    assertEquals(expected, entries(out.resolve("examples.json.zip")));
+    assertEquals("xml of CodeSystem-cs", entries(out.resolve("examples.xml.zip")).get("CodeSystem-cs.xml"));
+    assertNotEquals(first.pf.rapido.getArchives().getRecords().getJsonObject("examples.json.zip").asString("key"),
+        first.pf.rapido.getArchives().getRecords().getJsonObject("examples.xml.zip").asString("key"));
+    Files.setLastModifiedTime(out.resolve("examples.json.zip"), THEN);
+    Files.setLastModifiedTime(out.resolve("examples.xml.zip"), THEN);
+    first.finish();
+
+    // one json example changes: its zip is written again with the other entries as they were, the xml zip is kept
+    Files.write(out.resolve("CodeSystem-cs.json"), "json of CodeSystem-cs, changed".getBytes(StandardCharsets.UTF_8));
+    Build second = differentialBuild();
+    second.pf.fileList.forEach(f -> f.getResources().get(0).setExampleUri("http://example.org/fhir/StructureDefinition/p"));
+    jekyll(second);
+    assertTrue(second.generator.generateExampleZip(FhirFormat.JSON));
+    assertTrue(second.generator.generateExampleZip(FhirFormat.XML));
+    assertEquals(THEN, time("examples.xml.zip"));
+    assertEquals("its content changed, 2 of its 3 entries as they were", second.pf.rapido.getArchives().getRewritten().get("examples.json.zip"));
+    expected.put("CodeSystem-cs.json", "json of CodeSystem-cs, changed");
+    assertEquals(new java.util.TreeMap<>(expected), new java.util.TreeMap<>(entries(out.resolve("examples.json.zip"))));
+  }
+
+  @Test
+  void aBuildThatIsNotAWatchBuildKeepsNothingOfAWatchBuild() throws Exception {
+    Path out = root.resolve("output");
+    Files.write(out.resolve("one.csv"), "1".getBytes(StandardCharsets.UTF_8));
+    Build first = new Build(DAY);
+    first.generator.generateOutputZip("csvs.zip", ".csv");
+    Files.setLastModifiedTime(out.resolve("csvs.zip"), THEN);
+    first.finish();
+
+    // -rapido without -watch: the same records and the same file, but it is written as it always was
+    Build second = differentialBuild();
+    second.pf.watchOutputDir = null;
+    second.generator.generateOutputZip("csvs.zip", ".csv");
+    assertNotEquals(THEN, time("csvs.zip"));
+    assertTrue(second.pf.rapido.getArchives().getKept().isEmpty());
+    assertTrue(second.pf.rapido.getArchives().getRecords().getNames().isEmpty());
+    assertEquals(Collections.singletonMap("one.csv", "1"), entries(out.resolve("csvs.zip")));
+  }
+
+  @Test
+  void theDefinitionsInXmlAreKeptAndWrittenAgainLikeTheOnesInJson() throws Exception {
+    Path zip = root.resolve("output").resolve("definitions.xml.zip");
+    Build first = new Build(DAY);
+    first.generator.generateDefinitions(FhirFormat.XML, spec.toString());
+    assertEquals(new java.util.TreeSet<>(entries(zip).keySet()),
+        new java.util.TreeSet<>(first.pf.rapido.getArchives().getRecords().getJsonObject("definitions.xml.zip").getJsonObject("entries").getNames()));
+    Files.setLastModifiedTime(zip, THEN);
+    first.finish();
+
+    Build second = differentialBuild();
+    jekyll(second);
+    second.generator.generateDefinitions(FhirFormat.XML, spec.toString());
+    assertEquals(THEN, time("definitions.xml.zip"));
+    second.finish();
+
+    sources.put("CodeSystem-cs", codeSystem("a", "b", "c"));
+    Build third = differentialBuild();
+    jekyll(third);
+    third.generator.generateDefinitions(FhirFormat.XML, spec.toString());
+    assertEquals("its content changed, 3 of its 4 entries as they were", third.pf.rapido.getArchives().getRewritten().get("definitions.xml.zip"));
+    Build plain = new Build(DAY);
+    plain.pf.rapido = null;
+    plain.pf.outputDir = Files.createDirectories(dir.resolve("plain-xml")).toString();
+    plain.generator.generateDefinitions(FhirFormat.XML, spec.toString());
+    assertEquals(new java.util.TreeMap<>(entries(dir.resolve("plain-xml").resolve("definitions.xml.zip"))), new java.util.TreeMap<>(entries(zip)));
   }
 }

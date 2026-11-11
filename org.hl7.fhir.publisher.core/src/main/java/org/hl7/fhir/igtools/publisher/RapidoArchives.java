@@ -35,8 +35,8 @@ import org.hl7.fhir.utilities.json.model.JsonObject;
  * ({@link #previous}, see {@link RapidoZip}), if that build recorded what stands for the content of each entry.
  *
  * <p>Jekyll removes from the output folder what it didn't put there, so the files are moved aside before it runs
- * ({@link #beforeJekyll}) and moved back when they are kept. What is left over when the package step is done isn't
- * made any more, and is deleted ({@link #finish}).
+ * ({@link #beforeJekyll}) and moved back when they are kept. What is left aside when the package step is done (the
+ * archives that were written again, and the ones that aren't made any more) is deleted ({@link #finish}).
  *
  * <p>The records are part of the Rapido state (see {@link RapidoTracker#save()}), which is only written by a build
  * that finished: after a build that failed, the next one is a complete build, which has no records from the last

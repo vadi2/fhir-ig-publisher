@@ -178,7 +178,11 @@ public class SavedExpansions {
     for (int i = 0; i < items.size(); i++) {
       Object o = items.get(i);
       if (o instanceof String) {
-        o = RapidoTracker.readExpansion(parser, (String) o);
+        try {
+          o = RapidoTracker.readExpansion(parser, (String) o);
+        } catch (Exception e) {
+          throw new Error("Unable to read an expansion saved by the last Rapido build: "+e.getMessage(), e);
+        }
         items.set(i, o);
       }
       res.add((ValueSet) o);

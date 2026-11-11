@@ -5335,7 +5335,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   /**
-   * -rapido: whether these archives of the package step (one, or several made from the same content) are kept from
+   * -rapido -watch: whether these archives of the package step (one, or several made from the same content) are kept from
    * the last build, which wrote them for the same key (see RapidoArchives). If not, they are written, and then
    * wroteArchive() records them
    */
@@ -5367,18 +5367,19 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   /**
-   * The archives of the package step that a build can keep (see RapidoArchives), or null if it keeps none: only a
-   * -watch build that writes to a staging folder can have the output of the last build to go on from (any other
-   * starts with an empty output folder, and so does this one unless the Jekyll that is kept running goes on from
-   * the staging folder: see PublisherIGLoader.clearOutputUnlessKept(). Then the archives are found missing, and are
-   * written), and the same build time, without which most of the archives are different every time
+   * The archives of the package step that a build can keep (see RapidoArchives), or null if it keeps none. Only a
+   * -rapido -watch build that writes to a staging folder can have the output of the last build to go on from, and
+   * the same build time, without which most of the archives are different every time. Any other build starts with an
+   * empty output folder. So does this one, unless the Jekyll that is kept running goes on from the staging folder
+   * (see PublisherIGLoader.clearOutputUnlessKept()): where the folder was emptied, the archives are found missing,
+   * and are written
    */
   private RapidoArchives archives() {
     return pf.rapido == null || pf.watchOutputDir == null ? null : pf.rapido.getArchives();
   }
 
   /**
-   * A zip of the package step, to write. In a differential -rapido build, the entries that are what they were in the
+   * A zip of the package step, to write. In a differential -rapido -watch build, the entries that are what they were in the
    * last build are copied from the zip that build wrote (see RapidoZip)
    */
   private RapidoZip openArchive(String name) throws IOException {
@@ -5390,7 +5391,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * content (the same in two builds only if the content is). The key of the archive is made from all of them
    * (archiveKey()), and each stands for its entry when the zip is written again (see RapidoZip). There are no tokens
    * (null) in a build that keeps no archives (see archives()), or if the content of an entry can't be told. What goes
-   * into the key but not into the tokens (the format, the version of the IG, the publisher) is the same whenever
+   * into the key but not into the tokens (the format, the FHIR version, the publisher) is the same whenever
    * there is a zip of the last build to take entries from: a change in it makes the build a complete one
    */
 
@@ -5445,8 +5446,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * composes it in the format (for an IG of a version before R5 the archive has it converted: the same resource gives
    * the same conversion). null if there is no resource, or it can't be composed.
    * <p>
-   * A value set that the IG's profiles bind to has its expansion in it (generating the combined package, which every
-   * build does before this, leaves it there), with the identifier and the timestamp of when it was expanded. Every
+   * A value set that the IG's profiles bind to has its expansion in it (generating the combined package, which the
+   * build does before this unless the terminology was unloaded early, leaves it there), with the identifier and the
+   * timestamp of when it was expanded. Every
    * build gives it new ones, so they are taken off the value set while it is composed here: an archive that is kept
    * has the expansion as it was made for the build that wrote it
    */
@@ -5571,7 +5573,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
-  private boolean generateExampleZip(FhirFormat fmt) throws Exception {
+  boolean generateExampleZip(FhirFormat fmt) throws Exception {
     Set<String> files = new HashSet<String>();
     for (FetchedFile f : pf.fileList) {
       f.start("generateExampleZip");
