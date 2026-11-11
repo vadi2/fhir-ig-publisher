@@ -46,8 +46,8 @@ public class RapidoArchives {
   private static final String FORMAT = "1";
   private static final int BUFFER = 1 << 16;
 
-  private final Path output;
-  private final Path aside;
+  private final String outputDir;
+  private final String asideDir;
   /** the records of the last build by group (the name of its first file), or null in a complete build */
   private final JsonObject last;
   private final JsonObject now = new JsonObject();
@@ -63,8 +63,8 @@ public class RapidoArchives {
    * @param last what {@link #getRecords()} returned in the last build, or null if nothing can be kept from it
    */
   public RapidoArchives(String outputDir, String asideDir, JsonObject last) {
-    this.output = Paths.get(outputDir);
-    this.aside = Paths.get(asideDir);
+    this.outputDir = outputDir;
+    this.asideDir = asideDir;
     this.last = last;
   }
 
@@ -87,11 +87,11 @@ public class RapidoArchives {
         if (!isName(name)) {
           continue;
         }
-        Path from = output.resolve(name);
+        Path from = output(name);
         try {
           if (Files.isRegularFile(from)) {
-            Files.createDirectories(aside);
-            Files.move(from, aside.resolve(name), StandardCopyOption.REPLACE_EXISTING);
+            Files.createDirectories(Paths.get(asideDir));
+            Files.move(from, aside(name), StandardCopyOption.REPLACE_EXISTING);
             movedAside.add(name);
           }
         } catch (IOException e) {
@@ -125,6 +125,14 @@ public class RapidoArchives {
     return true;
   }
 
+  private Path output(String name) {
+    return Paths.get(outputDir, name);
+  }
+
+  private Path aside(String name) {
+    return Paths.get(asideDir, name);
+  }
+
   private String notUsable(JsonObject rec, String key, String[] names) {
     if (key == null) {
       return "its content isn't known before it's written";
@@ -153,7 +161,7 @@ public class RapidoArchives {
     if (f == null) {
       return "the last build wrote other files";
     }
-    Path p = aside.resolve(name);
+    Path p = aside(name);
     if (!movedAside.contains(name) || !Files.isRegularFile(p)) {
       return name + " is missing";
     }
@@ -171,7 +179,7 @@ public class RapidoArchives {
   private String putBack(String[] names) {
     try {
       for (String name : names) {
-        Files.move(aside.resolve(name), output.resolve(name), StandardCopyOption.REPLACE_EXISTING);
+        Files.move(aside(name), output(name), StandardCopyOption.REPLACE_EXISTING);
         movedAside.remove(name);
       }
       return null;
@@ -211,7 +219,7 @@ public class RapidoArchives {
     if (entries == null || files == null || intact(name, files.getJsonObject(name)) != null) {
       return null;
     }
-    return new Previous(aside.resolve(name), entries);
+    return new Previous(aside(name), entries);
   }
 
   /** As {@link #written(String, String...)}, for a zip: entries is what stands for the content of each entry, by name (or null) */
@@ -240,7 +248,7 @@ public class RapidoArchives {
     JsonObject files = new JsonObject();
     try {
       for (String name : names) {
-        Path p = output.resolve(name);
+        Path p = output(name);
         if (!isName(name) || !Files.isRegularFile(p)) {
           return;
         }
@@ -259,11 +267,11 @@ public class RapidoArchives {
   public void finish(boolean packageStepDone) {
     for (String name : movedAside) {
       try {
-        Path to = output.resolve(name);
+        Path to = output(name);
         if (packageStepDone || Files.exists(to)) {
-          Files.deleteIfExists(aside.resolve(name));
+          Files.deleteIfExists(aside(name));
         } else {
-          Files.move(aside.resolve(name), to);
+          Files.move(aside(name), to);
         }
       } catch (IOException e) {
         // it stays where it is until the next complete build clears the temp folder
