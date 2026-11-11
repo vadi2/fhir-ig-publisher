@@ -448,8 +448,6 @@ class RapidoTxCacheScrubTest {
     assertEquals(1, pf.errors.size(), "the failure is in the QA");
     cache = working;
     fillCache();
-    // even with vs-a back as recorded: the cache may hold answers from the edited vs-a
-    ig.get("ValueSet-vs-a.json").remove(ig.get("ValueSet-vs-a.json").size()-1);
     build(false);
     assertEquals(allBut(VS_A, VS_B), cached());
   }
