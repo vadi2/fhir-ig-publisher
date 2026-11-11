@@ -5935,16 +5935,21 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (res == null || spec == null) {
       return null;
     }
-    boolean clash = res.put("spec.internals", spec.values().iterator().next()) != null;
-    clash = res.put("version.info", new RapidoDependencyAnalyser.Hasher().add(versionInfo).finish()) != null || clash;
+    // (an entry that is there already: the zip can't be written)
+    if (res.put("spec.internals", spec.values().iterator().next()) != null
+        || res.put("version.info", new RapidoDependencyAnalyser.Hasher().add(versionInfo).finish()) != null) {
+      return null;
+    }
     for (String[] z : PACK_ZIPS) {
       Set<String> files = outputFilesByExtension(z[1]);
       if (!files.isEmpty()) {
         String zipped = archiveKey(z[0], outputFileTokens(files));
-        clash = zipped == null || res.put(z[0], zipped) != null || clash;
+        if (zipped == null || res.put(z[0], zipped) != null) {
+          return null;
+        }
       }
     }
-    return clash ? null : res;
+    return res;
   }
 
   String validationPackKey(String specFile) {
