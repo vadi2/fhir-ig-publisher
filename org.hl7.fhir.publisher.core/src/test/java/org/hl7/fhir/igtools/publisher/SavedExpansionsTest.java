@@ -1,6 +1,7 @@
 package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -139,48 +140,64 @@ class SavedExpansionsTest {
     assertSame(c, all.get(2));
   }
 
-  @Test
-  void whenAnExpansionWasMadeIsNotInItsHash() throws Exception {
-    ValueSet one = expansion("a", "1", "2");
-    one.getExpansion().setIdentifier("urn:uuid:9f0c2a55-0000-4000-8000-000000000001");
-    one.getExpansion().setTimestampElement(new org.hl7.fhir.model.core.DateTimeType("2026-03-04T10:00:00Z"));
-    ValueSet again = expansion("a", "1", "2");
-    again.getExpansion().setIdentifier("urn:uuid:9f0c2a55-0000-4000-8000-000000000002");
-    again.getExpansion().setTimestampElement(new org.hl7.fhir.model.core.DateTimeType("2026-03-04T11:30:00Z"));
-    String a = RapidoTracker.saveExpansion(parser(), one);
-    String b = RapidoTracker.saveExpansion(parser(), again);
-    assertNotEquals(a, b);
-    assertEquals(SavedExpansions.withoutRunDetails(one, a), SavedExpansions.withoutRunDetails(again, b));
-    assertNotEquals(a, SavedExpansions.withoutRunDetails(one, a));
+  private static ValueSet made(ValueSet vs, String identifier, String timestamp) {
+    vs.getExpansion().setIdentifier(identifier);
+    vs.getExpansion().setTimestampElement(new org.hl7.fhir.model.core.DateTimeType(timestamp));
+    return vs;
+  }
 
-    // anything else that differs still shows
-    ValueSet other = expansion("a", "1", "2", "3");
-    other.getExpansion().setIdentifier("urn:uuid:9f0c2a55-0000-4000-8000-000000000001");
-    other.getExpansion().setTimestampElement(new org.hl7.fhir.model.core.DateTimeType("2026-03-04T10:00:00Z"));
-    assertNotEquals(SavedExpansions.withoutRunDetails(one, a), SavedExpansions.withoutRunDetails(other, RapidoTracker.saveExpansion(parser(), other)));
-    // a value that only looks like the timestamp, somewhere else, stays
-    ValueSet named = expansion("a", "1", "2");
-    named.setName("2026-03-04T10:00:00Z");
-    named.getExpansion().setIdentifier("urn:uuid:9f0c2a55-0000-4000-8000-000000000001");
-    named.getExpansion().setTimestampElement(new org.hl7.fhir.model.core.DateTimeType("2026-03-04T10:00:00Z"));
-    assertTrue(SavedExpansions.withoutRunDetails(named, RapidoTracker.saveExpansion(parser(), named)).contains("\"name\":\"2026-03-04T10:00:00Z\""));
-    // no expansion, or JSON that isn't the expansion's: nothing is taken out
-    assertEquals("{}", SavedExpansions.withoutRunDetails(new ValueSet(), "{}"));
-    assertEquals("{}", SavedExpansions.withoutRunDetails(one, "{}"));
+  private static String stable(ValueSet vs) throws Exception {
+    return SavedExpansions.withoutRunDetails(RapidoTracker.saveExpansion(parser(), vs));
   }
 
   @Test
-  void whenAnExpansionWasMadeIsTakenOutOfAnyJson() {
-    String compact = "{\"resourceType\":\"ValueSet\",\"expansion\":{\"identifier\":\"urn:uuid:1\",\"timestamp\":\"2026-03-04T10:00:00Z\",\"total\":2}}";
-    String later = "{\"resourceType\":\"ValueSet\",\"expansion\":{\"identifier\":\"urn:uuid:2\",\"timestamp\":\"2026-03-04T11:00:00Z\",\"total\":2}}";
-    String other = "{\"resourceType\":\"ValueSet\",\"expansion\":{\"identifier\":\"urn:uuid:1\",\"timestamp\":\"2026-03-04T10:00:00Z\",\"total\":3}}";
-    assertEquals(SavedExpansions.withoutRunDetails(compact), SavedExpansions.withoutRunDetails(later));
-    assertNotEquals(SavedExpansions.withoutRunDetails(compact), SavedExpansions.withoutRunDetails(other));
-    assertTrue(SavedExpansions.withoutRunDetails(compact).contains("\"total\":2"));
-    String pretty = "{\n  \"expansion\" : {\n    \"identifier\" : \"urn:uuid:1\",\n    \"timestamp\" : \"2026-03-04T10:00:00Z\",\n    \"total\" : 2\n  }\n}";
+  void whenAnExpansionWasMadeIsNotInItsHash() throws Exception {
+    ValueSet one = made(expansion("a", "1", "2"), "urn:uuid:9f0c2a55-0000-4000-8000-000000000001", "2026-03-04T10:00:00Z");
+    ValueSet again = made(expansion("a", "1", "2"), "urn:uuid:9f0c2a55-0000-4000-8000-000000000002", "2026-03-04T11:30:00Z");
+    assertNotEquals(RapidoTracker.saveExpansion(parser(), one), RapidoTracker.saveExpansion(parser(), again));
+    assertEquals(stable(one), stable(again));
+    assertFalse(stable(one).contains("9f0c2a55"));
+    assertFalse(stable(one).contains("2026-03-04T10:00:00Z"));
+    // what is left is the JSON it was, without the two values
+    assertEquals(RapidoTracker.saveExpansion(parser(), one).replace("urn:uuid:9f0c2a55-0000-4000-8000-000000000001", "").replace("2026-03-04T10:00:00Z", ""), stable(one));
+
+    // anything else that differs still shows
+    assertNotEquals(stable(one), stable(made(expansion("a", "1", "2", "3"), "urn:uuid:9f0c2a55-0000-4000-8000-000000000001", "2026-03-04T10:00:00Z")));
+    // an expansion that starts with something else (one that isn't complete has extensions)
+    ValueSet unclosed = made(expansion("a", "1", "2"), "urn:uuid:9f0c2a55-0000-4000-8000-000000000001", "2026-03-04T10:00:00Z");
+    unclosed.getExpansion().addExtension("http://hl7.org/fhir/StructureDefinition/valueset-unclosed", new org.hl7.fhir.model.core.BooleanType(true));
+    ValueSet unclosedAgain = made(expansion("a", "1", "2"), "urn:uuid:9f0c2a55-0000-4000-8000-000000000002", "2026-03-04T11:30:00Z");
+    unclosedAgain.getExpansion().addExtension("http://hl7.org/fhir/StructureDefinition/valueset-unclosed", new org.hl7.fhir.model.core.BooleanType(true));
+    assertTrue(RapidoTracker.saveExpansion(parser(), unclosed).contains("\"expansion\":{\"extension\""));
+    assertEquals(stable(unclosed), stable(unclosedAgain));
+    assertNotEquals(stable(one), stable(unclosed));
+  }
+
+  @Test
+  void onlyTheExpansionsOwnIdentifierAndTimestampAreLeftOut() throws Exception {
+    // the same values, and the same names, anywhere else stay
+    ValueSet vs = made(expansion("a", "1"), "urn:uuid:1", "2026-03-04T10:00:00Z");
+    vs.setName("2026-03-04T10:00:00Z");
+    vs.addIdentifier().setValue("urn:uuid:1");
+    vs.getExpansion().addParameter().setName("identifier").setValue(new org.hl7.fhir.model.core.StringType("urn:uuid:1"));
+    vs.getExpansion().getContainsFirstRep().setDisplay("a \"timestamp\": \"x\" in text, and a \\ too");
+    String json = RapidoTracker.saveExpansion(parser(), vs);
+    String stable = SavedExpansions.withoutRunDetails(json);
+    assertEquals(json.replace("{\"identifier\":\"urn:uuid:1\",\"timestamp\":\"2026-03-04T10:00:00Z\"", "{\"identifier\":\"\",\"timestamp\":\"\""), stable);
+    assertTrue(stable.contains("\"name\":\"2026-03-04T10:00:00Z\""));
+    assertTrue(stable.contains("\"valueString\":\"urn:uuid:1\""));
+    assertTrue(stable.contains("\"identifier\":[{\"value\":\"urn:uuid:1\"}]"));
+  }
+
+  @Test
+  void whenAnExpansionWasMadeIsTakenOutHoweverTheJsonIsLaidOut() {
+    String pretty = "{\n  \"resourceType\" : \"ValueSet\",\n  \"expansion\" : {\n    \"identifier\" : \"urn:uuid:1\",\n    \"timestamp\" : \"2026-03-04T10:00:00Z\",\n    \"total\" : 2\n  }\n}";
     assertEquals(pretty.replace("urn:uuid:1", "").replace("2026-03-04T10:00:00Z", ""), SavedExpansions.withoutRunDetails(pretty));
-    // only the expansion's own: an identifier anywhere else stays
-    String elsewhere = "{\"identifier\":\"urn:uuid:1\",\"timestamp\":\"2026-03-04T10:00:00Z\",\"expansion\":{\"total\":2}}";
+    // not a value set's expansion, or not JSON that can be read: as it is
+    String elsewhere = "{\"identifier\":\"urn:uuid:1\",\"timestamp\":\"2026-03-04T10:00:00Z\",\"contained\":[{\"expansion\":{\"identifier\":\"urn:uuid:1\"}}]}";
     assertEquals(elsewhere, SavedExpansions.withoutRunDetails(elsewhere));
+    assertEquals("{}", SavedExpansions.withoutRunDetails("{}"));
+    assertEquals("{\"expansion\":{\"identifier\":\"never ends", SavedExpansions.withoutRunDetails("{\"expansion\":{\"identifier\":\"never ends"));
+    assertEquals("this is not a ValueSet", SavedExpansions.withoutRunDetails("this is not a ValueSet"));
   }
 }

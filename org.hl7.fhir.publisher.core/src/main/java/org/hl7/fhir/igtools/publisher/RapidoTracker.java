@@ -1795,7 +1795,7 @@ public class RapidoTracker {
       try {
         String json = saveExpansion(new JsonParser(pf.context.getModelContext()), vs);
         exp.add(json);
-        stable.add(SavedExpansions.withoutRunDetails(vs, json));
+        stable.add(SavedExpansions.withoutRunDetails(json));
       } catch (Exception e) {
         return;
       }

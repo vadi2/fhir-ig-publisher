@@ -455,7 +455,7 @@ class PublisherGeneratorArchiveKeysTest {
     gen.addFile(NPMPackageGenerator.Category.RESOURCE, "StructureDefinition-p.json",
         ("{\"resourceType\":\"StructureDefinition\",\"id\":\"p\",\"title\":\"" + profile + "\"}").getBytes(StandardCharsets.UTF_8));
     gen.addFile(NPMPackageGenerator.Category.RESOURCE, "ValueSet-v.json",
-        ("{\"resourceType\":\"ValueSet\",\"id\":\"v\",\"expansion\":{\"identifier\":\"" + expansionId + "\",\"timestamp\":\"2026-03-04T10:00:0"
+        ("{\"resourceType\":\"ValueSet\",\"id\":\"v\",\"expansion\":{\"extension\":[{\"url\":\"x\"}],\"identifier\":\"" + expansionId + "\",\"timestamp\":\"2026-03-04T10:00:0"
             + expansionId.substring(expansionId.length() - 1) + "Z\",\"contains\":[{\"code\":\"" + code + "\"}]}}").getBytes(StandardCharsets.UTF_8));
     gen.addFile(NPMPackageGenerator.Category.EXAMPLE, "Patient-e.json",
         ("{\"resourceType\":\"Patient\",\"id\":\"e\",\"gender\":\"" + example + "\"}").getBytes(StandardCharsets.UTF_8));
