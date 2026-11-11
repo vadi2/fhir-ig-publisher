@@ -60,3 +60,6 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 - 14:48 tick: all 6 working, no PRs, no profile yet. Several hit bench OOM (7g heap OOM, 9g cgroup kill). Found: cgroup
   caps RAM at 14.3 GB but swap is uncapped and swapon works as root -> added to PROCESS.md and sent to all 6
   (send_message priority next). Future wave-2 briefs: PROCESS.md already carries the swap fix.
+- 15:18 tick: all 6 working (rapido-state shows IDLE between background builds: normal, bucket still working). No PRs,
+  no profile/bench-recipe yet; sessions still settling on a heap (8g/7600m/9g). Swap fix now truly verified: a process
+  touched 16 GiB under the 14.3 GB cap with a swap file on and survived.
