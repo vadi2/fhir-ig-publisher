@@ -24,7 +24,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 |---|---|---|---|---|
 | profile (no PR) | session_013FrhV9XtpZJzHaw5CUT5RR | notes branch | n/a | DONE (profile.md 18:16). Ignore it in ticks. |
 | replay-stamp (wave 2) | session_013FrhV8oUf4Hg2ZFmpfFFgD | perf3/replay-stamp | none | DROPPED: PR #39 (rapido-state) already trusts file stamps in canReplay (7.5 -> 0.3 s) |
-| early-publish | session_013FrhV8MAcq78uViFCFE1ve | perf3/early-publish | - | running |
+| early-publish | session_013FrhV8MAcq78uViFCFE1ve | perf3/early-publish | #42 | DONE. PR 22:29, 0 checks, clean. page in output: prof 270.2 -> 170.1, inst 262.8 -> 156.1, page 23.8 -> 2.7 s. Also moves System.gc() after early publish. |
 | archives-reuse | session_013FrhV89txD9eAkM8cnaV3n | perf3/archives-reuse | #41 | DONE. PR 22:14, 0 checks, clean. archive step 28.7 -> 4.2 s (prof), 28.9 -> 3.5 (inst); whole-rebuild delta 46-52 s has ~20-25 s unexplained (disturbed base runs). +2732 lines. Combined package NOT kept (core mutates resources). |
 | native-skip | session_013FrhV7287Tkr83evM7MsqW | perf3/native-skip | - | running |
 | summaries-reuse | session_013FrhV9QcWhADhYPtwEjkoZ | perf3/summaries-reuse | - | running |
@@ -145,3 +145,5 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 - 22:17 tick: PRs #40 (qa-prep-reuse) and #41 (archives-reuse) opened, no checks (expected), both mergeable clean.
   Open PRs: #39, #40, #41. Dropped: replay-stamp. Still working: early-publish, native-skip, summaries-reuse,
   narrative-skip, translations-dirty, tail-restart.
+- 22:49 tick: PR #42 (early-publish) opened, no checks, clean. Open: #39 #40 #41 #42. #42 moves System.gc() ->
+  told translations-dirty to leave out its optional GC commit. tail-restart stacks on #42 (its PR base perf3/early-publish).
