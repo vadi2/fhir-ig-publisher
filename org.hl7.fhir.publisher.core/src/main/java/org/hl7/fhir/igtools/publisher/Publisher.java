@@ -178,6 +178,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   private WatchSession watchSession;
   // in watch mode, when the build or page rebuild that is running started (System.nanoTime())
   private long watchBuildStarted;
+  /** in watch mode, what tells the build that is running whether the watched files changed since it started; else null */
+  private TailWatch.ChangeSource tailChanges;
 
   public Publisher() {
     super();
@@ -246,6 +248,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         } else {
           watchBuildStarted = System.nanoTime();
           session.startBuild();
+          tailChanges = tailChanges(monitor, session, watchRoot, moduleOutputs);
           try {
             // a page rebuild goes on from where the last build was, so the state it left is kept for it
             if (!rebuildPages(session)) {
@@ -270,6 +273,11 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
               session.buildFailed();
             } catch (IOException e2) {
               log("Unable to read the watched files after the failure (saving a file without changing it won't build again): " + e2.getMessage());
+            }
+          } finally {
+            // the changes are looked for below, as after any build
+            if (pf != null && pf.watchTail != null) {
+              pf.watchTail.close();
             }
           }
         }
@@ -352,6 +360,66 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     pageRebuild.finished();
   }
 
+  /**
+   * Watch mode: how the build that is starting is told, once its pages are in the output folder, whether the watched
+   * files changed since it started (see TailWatch). The files aren't watched while the build runs (see
+   * waitForChanges()); for the rest of it they are, in the same way as between builds: what the build itself wrote in
+   * the watched folders doesn't count, the files have to have been quiet for a moment, and their content has to be
+   * different from what the build started with
+   */
+  TailWatch.ChangeSource tailChanges(FileChangeMonitor monitor, WatchSession session, Path watchRoot, Set<Path> moduleOutputs) {
+    return new TailWatch.ChangeSource() {
+      @Override
+      public void start() throws IOException {
+        if (pf.moduleWrites != null) {
+          // as after the build: what the module wrote in input is the build's, not a change
+          moduleOutputs.addAll(pf.moduleWrites);
+          session.buildWrote(moduleOutputs);
+        }
+        monitor.startMonitoring(buildOutputs(watchRoot), moduleWrites(watchRoot, moduleOutputs));
+      }
+
+      @Override
+      public SourceSnapshot.Changes settledChanges() throws IOException, InterruptedException {
+        if (!monitor.hasChanges()) {
+          return null;
+        }
+        waitUntilQuiet(monitor);
+        return session.changesSinceBuildStart();
+      }
+
+      @Override
+      public void stop() {
+        monitor.stopMonitoring();
+      }
+    };
+  }
+
+  /**
+   * Watch mode: what lets the rest of this build or page rebuild give way to a change (see TailWatch), or null. A
+   * complete build goes on to its end if a page rebuild can follow it for the change: that is quicker than giving up
+   * the rest of it for another complete build
+   */
+  private TailWatch newTailWatch(boolean pageRebuilt) {
+    if (tailChanges == null) {
+      return null;
+    }
+    PageRebuild state = pageRebuild;
+    return new TailWatch(tailChanges, pageRebuilt, pageRebuilt || state == null ? null
+        : changes -> state.pageRebuildCouldFollow(changes) ? "only the content of pages changed, so the pages are rebuilt when it has finished" : null,
+        this::log);
+  }
+
+  /** Waits until the watched files have been quiet for a moment (see waitForChanges()) */
+  static void waitUntilQuiet(FileChangeMonitor monitor) throws InterruptedException {
+    // (an editor or a git checkout often writes several), but not for ever, in case something keeps writing
+    long giveUp = System.currentTimeMillis() + 5000;
+    do {
+      monitor.clearChanges();
+      Thread.sleep(250);
+    } while (monitor.hasChanges() && System.currentTimeMillis() < giveUp);
+  }
+
   private static boolean isOutputRewriteFailure(Throwable e) {
     for (Throwable t = e; t != null; t = t.getCause()) {
       if (t instanceof HTMLInspector.OutputRewriteFailure) {
@@ -411,6 +479,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     pf.watchOutputSynced = false;
     pf.watchPagesPublished = pagesAhead;
     pf.watchBuildStarted = watchBuildStarted;
+    pf.watchTail = newTailWatch(true);
     try {
       IniFile buildTracker = new IniFile(Utilities.path(pf.vsCache, ".build-tracker.ini"));
       TimeTracker.Session tts = pf.tt.start("generate");
@@ -473,6 +542,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     pf = fieldsForBuild(watchSession);
     pf.watchPagesPublished = pagesAhead;
     pf.watchBuildStarted = watchBuildStarted;
+    pf.watchTail = newTailWatch(false);
     loader.setPf(pf);
     processor.setPf(pf);
     generator.setPf(pf);
@@ -562,13 +632,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       }
       while (changes.isEmpty()) {
         if (monitor.hasChanges()) {
-          // wait until the files have been quiet for a moment (an editor or a git checkout often writes several),
-          // but not for ever, in case something keeps writing
-          long giveUp = System.currentTimeMillis() + 5000;
-          do {
-            monitor.clearChanges();
-            Thread.sleep(250);
-          } while (monitor.hasChanges() && System.currentTimeMillis() < giveUp);
+          waitUntilQuiet(monitor);
           changes = session.changesSinceBuildStart();
           if (changes.isEmpty() && session.savedSinceFailure()) {
             System.out.println("=== File saved after the build failed: building again ===");
@@ -891,6 +955,11 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
    * changed pages again
    */
   private void finishIg(Map<String, String> uncsList, IniFile buildTracker, TimeTracker.Session tts, boolean pageRebuilt) throws Exception {
+    if (givesWayBefore(TailWatch.Step.QA)) {
+      tts.end();
+      tailAbandoned(buildTracker, pageRebuilt);
+      return;
+    }
     clean();
     pf.dependentIgFinder.finish(pf.outputDir, pf.sourceIg.present());
     List<FetchedResource> fragments = new ArrayList<>();
@@ -913,6 +982,14 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
             pf.ipStmt, pf.inspector.getVisibleFragments().get("1"), pf.context).execute(), Utilities.path(pf.outputDir, "qa-ipreview.html"));
     tts.end();
     log("Built. "+ pf.tt.report());
+    if (givesWayBefore(TailWatch.Step.QA)) {
+      tailAbandoned(buildTracker, pageRebuilt);
+      return;
+    }
+    if (pf.watchTail != null) {
+      // from here on the build runs to its end: its qa pages, its state and the output folder go together
+      pf.watchTail.close();
+    }
     log("Generating QA");
     log("Validation output in "+val.generate(pf.sourceIg.getName(), pf.errors, pf.fileList, Utilities.path(settings.getDestDir() != null ? settings.getDestDir() : pf.outputDir, "qa.html"), pf.suppressedMessages, pinSummary()));
     recordOutcome(null, val);
@@ -923,6 +1000,35 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     buildTracker.save();
     syncWatchOutput();
     log("Finished @ "+nowString()+". Max Memory Used = "+Utilities.describeSize(pf.maxMemory)+logSummary());
+  }
+
+  private boolean givesWayBefore(TailWatch.Step next) {
+    return pf.watchTail != null && pf.watchTail.givesWayBefore(next);
+  }
+
+  /**
+   * Watch mode: the build stopped between two steps of what follows Jekyll, because the watched files changed (see
+   * TailWatch). What it validated and generated before Jekyll is complete, and that is all Rapido's state holds, so
+   * the state is saved, and the build is recorded as complete: the next build reuses it as it would have if this one
+   * had run to its end (a build that isn't recorded as complete is followed by a complete build that reuses nothing).
+   * The staging folder is not synced into the output folder, which keeps this build's pages as Jekyll rendered them,
+   * and the last finished build's packages, zips and qa pages, until a build finishes. A page rebuild leaves Rapido's
+   * state as it is, as always
+   */
+  void tailAbandoned(IniFile buildTracker, boolean pageRebuilt) throws IOException {
+    if (pf.rapido != null && !pageRebuilt) {
+      pf.rapido.save();
+    }
+    buildTracker.setBooleanProperty("status", "complete", true, null);
+    buildTracker.save();
+    if (!pageRebuilt && pageRebuild != null) {
+      pageRebuild.tailAbandoned();
+      if (!pf.txUnloadEarly) {
+        // nothing goes on from this build's fields: its context is unloaded when the next build starts
+        pageRebuild.unloadContextWhenDiscarded();
+      }
+    }
+    log("Stopped @ "+nowString()+", before "+pf.watchTail.notDone().get(0)+": building again for the changes. Max Memory Used = "+Utilities.describeSize(pf.maxMemory)+logSummary());
   }
 
   /**

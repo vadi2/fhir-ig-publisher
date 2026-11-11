@@ -825,6 +825,17 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         replay.dropCheckedPackageOutputs();
       }
     }
+    // watch mode: and the files that builds before this one wrote, and then gave up the rest of their tails before
+    // the AI step and the html checks got to them (see TailWatch)
+    PageRebuild state = replay != null ? replay : pageRebuild;
+    if (state != null) {
+      int left = state.countUnprocessed();
+      fresh = state.withUnprocessed(fresh);
+      if (left != 0 && freshFrom != null) {
+        freshFrom.append(fresh == null ? "; and all the files, as a build that gave up its html checks for a change had them all to check"
+            : ", " + left + " left by the builds that gave up their html checks for a change");
+      }
+    }
     if (jekyllOk) {
       publishPagesEarly(jekyllWritten);
     }
@@ -832,6 +843,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       reclaimAfterJekyll = false;
       System.gc();
       printMemUsage();
+    }
+    if (givesWayBefore(replay == null ? TailWatch.Step.PACKAGES : TailWatch.Step.AI)) {
+      return;
     }
     if (jekyllOk && replay == null) {
       keepForPageRebuild(() -> pageRebuild.afterJekyll());
@@ -886,10 +900,16 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
         // the combined package is made from package.tgz, so it has to wait until that has been written. It needs
         // terminology for the expansions, which is still loaded here unless the IG unloads it early
+        if (givesWayBefore(TailWatch.Step.PACKAGES)) {
+          return;
+        }
         if (pf.txUnloadEarly) {
           log("Not generating the combined package: terminology has been unloaded (tx-unload-early)");
         } else {
           genCombinedPackage();
+        }
+        if (givesWayBefore(TailWatch.Step.PACKAGES)) {
+          return;
         }
 
         if (settings.getMode() == null || settings.getMode() == PublisherUtils.IGBuildMode.MANUAL) {
@@ -918,7 +938,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           //generatePackageVersion(npm.filename(), s);
         }
         FileUtilities.bytesToFile(org.hl7.fhir.utilities.json.parser.JsonParser.composeBytes(json), Utilities.path(pf.outputDir, "sub-package-list.json"));
+        if (givesWayBefore(TailWatch.Step.PACKAGES)) {
+          return;
+        }
         generateZips(df);
+      }
+      if (givesWayBefore(TailWatch.Step.AI)) {
+        return;
       }
       keepForPageRebuild(() -> pageRebuild.afterPackage());
       if (fresh != null) {
@@ -1033,6 +1059,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       throw new FHIRException("The auto-build infrastructure does not publish IGs unless the publish-box is present ("+ pf.inspector.getPublishboxParsingSummary()+"). For further information, see note at http://wiki.hl7.org/index.php?title=FHIR_Implementation_Guide_Publishing_Requirements#HL7_HTML_Standards_considerations");
     }
     generateFragmentUsage();
+    if (givesWayBefore(TailWatch.Step.FULL_ZIP)) {
+      return;
+    }
     log("Build final .zip");
     if (settings.getMode() == PublisherUtils.IGBuildMode.PUBLICATION) {
       IGReleaseVersionUpdater igvu = new IGReleaseVersionUpdater(pf.outputDir, null, null, new ArrayList<>(), new ArrayList<>(), null, pf.outputDir);
@@ -4851,6 +4880,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (r.getWritten() > 0) {
       pf.watchPagesPublished = true;
     }
+    if (pf.watchTail != null && r.getFailures().isEmpty()) {
+      // the author has the pages: what's left of the build can give way to the next change
+      pf.watchTail.pagesPublished();
+    }
     for (String s : r.getFailures()) {
       log("  " + s);
     }
@@ -4859,6 +4892,14 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         + r.getWritten() + " written, " + r.getUnchanged() + " unchanged"
         + (r.getFailures().isEmpty() ? "" : ", " + r.getFailures().size() + " failed")
         + " (" + DurationUtil.presentDuration(now - start) + "). They are as Jekyll rendered them: the html checks, the packages and the qa pages follow");
+  }
+
+  /**
+   * Watch mode, between two steps of what follows Jekyll: whether the build stops here, before this step, because the
+   * watched files changed since it started (see TailWatch). Publisher.finishIg() then ends the build
+   */
+  private boolean givesWayBefore(TailWatch.Step next) {
+    return pf.watchTail != null && pf.watchTail.givesWayBefore(next);
   }
 
   /** Jekyll said that it had finished, and then returned an error: the build goes on with what it wrote */

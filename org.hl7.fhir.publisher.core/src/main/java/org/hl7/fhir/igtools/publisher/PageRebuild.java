@@ -120,6 +120,11 @@ public class PageRebuild {
   // what the html checks found, and what the AI step worked out, in the last build or rebuild (for the next rebuild)
   private HtmlCheckRecords htmlRecords;
   private final AIProcessor.Cache aiCache;
+  // the output files written since those ran to their end (see withUnprocessed()), or all of them
+  private final Set<String> unprocessed = new HashSet<>();
+  private boolean allUnprocessed;
+  // the build gave up the rest of its tail for a change (see TailWatch)
+  private boolean tailAbandoned;
   /** the languages that the pages are also written in, from their translations if they have one */
   private List<String> pageLanguages = Collections.emptyList();
   /** the folders in the input folder that the template reads before Jekyll, and how */
@@ -139,10 +144,50 @@ public class PageRebuild {
    * what its AI step worked out, which the next build can use for the output files that are the same (see
    * HTMLInspector.recordSignature()). Nothing else of this build is kept: not its fields, nor its html check. Only
    * if this build finished, and kept its state in this: else the output may have changed since its html checks and AI
-   * step ran
+   * step ran. A build that gave up the rest of its tail for a change (see TailWatch) stopped between steps: what it
+   * has is from the last html checks and AI step that ran to their end, in it or before it, and it knows which output
+   * files were written since (see withUnprocessed()), so that goes on as well
    */
   public PageRebuild carryOver() {
-    return complete && !dropped ? new PageRebuild(htmlRecords, aiCache.carryOver()) : new PageRebuild();
+    if (!(complete || tailAbandoned) || dropped) {
+      return new PageRebuild();
+    }
+    PageRebuild res = new PageRebuild(htmlRecords, aiCache.carryOver());
+    res.unprocessed.addAll(unprocessed);
+    res.allUnprocessed = allUnprocessed;
+    return res;
+  }
+
+  /**
+   * The output files that are new for the AI step and the html checks of this build or rebuild: fresh, the files
+   * written since the last build or rebuild (null: all of them), and those that builds before it wrote and then gave
+   * up their tails before the AI step and the html checks got to them (see TailWatch). They are remembered here until
+   * the html checks have run to their end (see setHtmlRecords()): the AI step goes by this list alone for what it
+   * reads again, so a file left out would keep what was made from an older version of it
+   */
+  public Set<String> withUnprocessed(Set<String> fresh) {
+    if (fresh == null || allUnprocessed) {
+      allUnprocessed = true;
+      unprocessed.clear();
+      return null;
+    }
+    unprocessed.addAll(fresh);
+    fresh.addAll(unprocessed);
+    return fresh;
+  }
+
+  /** How many output files builds that gave up their tails left for the AI step and html checks; -1: all of them */
+  public int countUnprocessed() {
+    return allUnprocessed ? -1 : unprocessed.size();
+  }
+
+  /** The build gave up the rest of its tail for a change, between two steps (see TailWatch) */
+  public void tailAbandoned() {
+    tailAbandoned = true;
+  }
+
+  public boolean isTailAbandoned() {
+    return tailAbandoned;
   }
 
   /**
@@ -166,8 +211,11 @@ public class PageRebuild {
     return htmlRecords;
   }
 
+  /** What the html checks found, when they have run to their end (the AI step ran before them) */
   void setHtmlRecords(HtmlCheckRecords htmlRecords) {
     this.htmlRecords = htmlRecords;
+    unprocessed.clear();
+    allUnprocessed = false;
   }
 
   public AIProcessor.Cache getAiCache() {
@@ -205,6 +253,9 @@ public class PageRebuild {
   public String getNotReusable() {
     if (notReusable != null) {
       return notReusable;
+    }
+    if (tailAbandoned) {
+      return "the last build gave up its packages, html checks and qa for a change";
     }
     if (!complete) {
       return "the last build didn't finish";
@@ -354,6 +405,26 @@ public class PageRebuild {
       reason.add(nr);
       return null;
     }
+    return pagesIn(changes, reason);
+  }
+
+  /**
+   * While the build this keeps the state of is still running, after Jekyll: whether a page rebuild could follow it
+   * for these changes, if it finishes without finding a reason why not. Then finishing it and rebuilding the pages
+   * is quicker than giving up the rest of it for a complete build (see TailWatch)
+   */
+  public boolean pageRebuildCouldFollow(SourceSnapshot.Changes changes) {
+    if (notReusable != null || dropped || tailAbandoned || pf == null) {
+      return false;
+    }
+    try {
+      return pagesIn(changes, new ArrayList<>()) != null;
+    } catch (IOException | RuntimeException e) {
+      return false;
+    }
+  }
+
+  private List<FetchedFile> pagesIn(SourceSnapshot.Changes changes, List<String> reason) throws IOException {
     if (!sameDay(pf.getExecTime(), Calendar.getInstance())) {
       // the pages say what day they were built on (and other files too), and a page rebuild keeps the last build's date
       reason.add("the day changed since the last build");
