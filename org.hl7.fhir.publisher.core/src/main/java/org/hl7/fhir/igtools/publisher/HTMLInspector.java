@@ -357,6 +357,10 @@ public class HTMLInspector {
     public OutputRewriteFailure(String message) {
       super(message);
     }
+
+    public OutputRewriteFailure(String message, Throwable cause) {
+      super(message, cause);
+    }
   }
 
   public HTMLInspector(IWorkerContext context, String rootFolder, List<SpecMapManager> specs, List<LinkedSpecification> linkSpecs, ILoggingService log,

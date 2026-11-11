@@ -281,7 +281,7 @@ class HtmlCheckReplayTest {
     r.setPath("StructureDefinition-sd.html");
     List<FetchedFile> sources = new ArrayList<>(Collections.singletonList(f));
     Mockito.when(context.fetchResource(Mockito.eq(Requirements.class), Mockito.anyString(), Mockito.any())).thenReturn(new Requirements());
-    HTMLInspector res = new HTMLInspector(context, dir.resolve("out").toString(), specs, new ArrayList<>(), logger, "http://example.org/ig",
+    HTMLInspector res = new HTMLInspector(context, dir.resolve("out").toString(), specs, new ArrayList<>(linkSpecs), logger, "http://example.org/ig",
         "example.ig", "0.1.0", new HashMap<>(), sources, new NullModule(), false, fragmentUses, relatedIGs, false, new ArrayList<>(), null);
     res.setIg(new ImplementationGuide().setUrl("http://example.org/ig/ImplementationGuide/example.ig"));
     res.setExemptHtmlPatterns(new ArrayList<>());
@@ -348,6 +348,55 @@ class HtmlCheckReplayTest {
     check(next);
     assertTrue(log.contains("Rapido Mode: the html checks of 0 of 2 files are reused; not the others: the check is set up "
         + "differently (relatedIGs)"), log.toString());
+  }
+
+  /** A specification with this page, as a linked specification or related IG has */
+  private static SpecMapManager otherSpec(String target) {
+    SpecMapManager res = new SpecMapManager("other.ig", "1.0.0", "1.0.0", "1", "1", Calendar.getInstance(), "http://example.org/other");
+    res.setBase("http://example.org/other");
+    res.target(target);
+    return res;
+  }
+
+  /** The new build is checked again, and the log tells why */
+  private void checkedAgainBecauseOf(HtmlCheckRecords records, String why) throws IOException {
+    HTMLInspector next = newBuildInspector("patient.html", "http://example.org/ig/StructureDefinition/a");
+    next.recordChecks(records, new HashSet<>(), files -> Collections.emptySet());
+    check(next);
+    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 2 files are reused; not the others: the check is set up "
+        + "differently (" + why + ")"), log.toString());
+  }
+
+  @Test
+  void aNewBuildWithAChangedLinkedSpecificationChecksEverythingAgain() throws IOException {
+    linkSpecs.add(new LinkedSpecification(otherSpec("a.html"), null));
+    HtmlCheckRecords records = firstBuild();
+    linkSpecs.set(0, new LinkedSpecification(otherSpec("b.html"), null));
+    checkedAgainBecauseOf(records, "linkSpecs");
+  }
+
+  @Test
+  void aNewBuildThatTracksOtherFragmentsChecksEverythingAgain() throws IOException {
+    fragmentUses = new HashMap<>(Map.of("X", Mockito.mock(PublisherBase.FragmentUseRecord.class)));
+    HtmlCheckRecords records = firstBuild();
+    fragmentUses = new HashMap<>(Map.of("Y", Mockito.mock(PublisherBase.FragmentUseRecord.class)));
+    checkedAgainBecauseOf(records, "fragmentUses");
+  }
+
+  @Test
+  void aNewBuildWithARelatedIgThatChangedChecksEverythingAgain() throws IOException {
+    relatedIGs.add(relatedIg(otherSpec("a.html")));
+    HtmlCheckRecords records = firstBuild();
+    relatedIGs.set(0, relatedIg(otherSpec("b.html")));
+    checkedAgainBecauseOf(records, "relatedIGs");
+  }
+
+  private static RelatedIG relatedIg(SpecMapManager spm) throws IOException {
+    RelatedIG res = Mockito.mock(RelatedIG.class);
+    Mockito.when(res.getCode()).thenReturn("other");
+    Mockito.when(res.getWebLocation()).thenReturn("http://example.org/other");
+    Mockito.when(res.getSpm()).thenReturn(spm);
+    return res;
   }
 
   @Test
