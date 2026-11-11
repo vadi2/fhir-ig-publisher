@@ -1,0 +1,58 @@
+# perf3 orchestrator state (survives compaction; also pushed to origin/claude/ig-publisher-perf-41aejs-notes)
+
+## Task (from Vadim, 2026-11-11)
+Speed up `-rapido -watch` further, toward instant. I (orchestrator) think and delegate ALL work to Opus agents
+(cloud sessions via create_session, model claude-opus-5-5, each its own VM). Each agent: implement, bench, run the
+pr-review-toolkit loop (code-simplifier as is; others: drop nits, verify empirically, fix confirmed only), then PR to
+vadi2/fhir-ig-publisher (never HL7), then unsubscribe from the PR. Agents must not stream results to me. Up to 10
+PRs. A 30-minute watcher checks agents aren't stuck and that open PRs' CI passes (fix via the owning agent).
+Commit style: terse, no footers/attribution/model names, no em dashes.
+
+## Setup done
+- Base branch (PR base): `claude/ig-publisher-perf-41aejs` @a4d1e90f = weak-edges + watch-fsh-tail + native-outputs-threads
+  + rapido-reused-signposts (#1460). NOT in base: rapido-ig-entry-text (#1466, conflicts in RapidoTracker). Compiles.
+- Notes branch: `claude/ig-publisher-perf-41aejs-notes` (PROCESS.md, this file; profiler adds bench-recipe.md, profile.md).
+  Local worktree: /home/user/perf3-state/notes-wt (main repo: /home/user/fhir-ig-publisher).
+- Fork has no CI: fork PRs show 0 check runs (workflows only target master; real tests are HL7's Azure pipeline).
+  So "CI" = the agent's local full publisher.core suite; watcher still checks get_check_runs/get_status in case.
+- Child branch names: perf3/<slug>. Plugin install verified: `claude plugin install pr-review-toolkit`.
+- Watcher: two hourly scheduled tasks firing into this session: trig_0126Fp1UmpBHLx5MBc32MKtz (min 17), trig_017gZTMAVWsXJZ2Vox7gh9So (min 47).
+
+## Sessions (wave 1, launched 14:17-14:18 UTC)
+| slug | session id | branch | PR | status |
+|---|---|---|---|---|
+| profile (no PR) | session_013FrhV8XRGTBvwAe8rnwYGC | notes branch | n/a | running |
+| early-publish | session_013FrhV6B84dAQ6VuTFfhau6 | perf3/early-publish | - | running |
+| archives-reuse | session_013FrhV735A1az8BDKPK9h4P | perf3/archives-reuse | - | running |
+| native-skip | session_013FrhV6MXeT6tYS4V2ad9uo | perf3/native-skip | - | running |
+| summaries-reuse | session_013FrhV8M2RoL7gBNia2Y5n4 | perf3/summaries-reuse | - | running |
+| rapido-state | session_013FrhV753jLcUYVtgrMUkAv | perf3/rapido-state | - | running |
+
+## Wave 2 candidates (5 PR slots left; decide after profile.md lands)
+- narrative-skip: skip narrative generation for clean resources (6.4 s); stack on perf3/native-skip (its PR lists what
+  reads a clean resource's narrative).
+- tail-restart: a change arriving during the post-publish tail (or mid-build) abandons it and starts the next build;
+  stack on perf3/early-publish.
+- warm SUSHI (keep node + FHIR definitions loaded between runs) if SUSHI is >= ~5 s of an FSH rebuild.
+- load phase: whatever profile.md shows is redone per rebuild (context init, tx cache parse 0.7 s, snapshots).
+- Jekyll / html check / AI / full-ig.zip residue after item 2, per profile.md.
+- zips on a worker thread while Jekyll runs (round2-C idea 3) if Jekyll still leaves the JVM idle.
+- The profiler session keeps its bench rig: give it a wave-2 idea via send_message when profile is done.
+
+## Watcher procedure (each tick; keep it cheap)
+1. get_session for each session not marked done/dropped. status_bucket working -> fine. If idle/blocked/failed and no
+   PR: read its last assistant message (list_events kinds=["assistant"], limit 100) and decide: nudge with
+   send_message (specific), or mark dropped/blocked here. If working but updated_at is > 45 min old: check events,
+   interrupt + nudge if stuck in a loop.
+2. list_pull_requests vadi2/fhir-ig-publisher state=open, fields number,title,head; for head perf3/*: record PR in the
+   table; get_check_runs (and get_status). If a check fails: send_message to the owning session with the failure,
+   asking it to fix, push, and unsubscribe again. No checks at all is expected on the fork.
+3. If profile.md is on the notes branch and wave 2 not launched: `git fetch origin claude/ig-publisher-perf-41aejs-notes`,
+   read profile.md, pick wave 2 (max 10 PRs total), launch with create_session (same shape as wave 1; brief = read
+   PROCESS.md + idea-specific text; stacked ideas use the parent branch as source_revision and PR base).
+4. Update this file, commit, push (plain push, notes branch).
+5. When all sessions are done/dropped and every PR is recorded: delete both scheduled tasks, give Vadim the final
+   summary (PR list with numbers, what was dropped and why, no CI on fork).
+
+## Log
+- 14:19 wave 1 launched.
