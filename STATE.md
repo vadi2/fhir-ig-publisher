@@ -140,3 +140,5 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   archives-reuse and native-skip now run on claude-opus-5-5 (get_session: user_switched_model) and this orchestrator
   was switched to Opus 5.5 by Vadim at ~21:00: so Vadim is moving work off Fable (quota). Do not switch models
   myself; new sessions, if any, should use claude-opus-5-5 unless Vadim says otherwise.
+- 21:47 tick (cheap): no new PRs (highest 39). Moving: narrative-skip 43e03258, qa-prep-reuse 8e8b5861. All sessions
+  were seen working at 20:47/21:17; no get_session this tick.
