@@ -381,7 +381,10 @@ public class PageRebuild {
     outputAfterJekyll = null;
   }
 
-  /** Called when the build (including qa) has finished without an error */
+  /**
+   * Called when the build has ended without an error: it finished (including qa), or, in watch mode, gave up the rest
+   * of its tail for a change (see tailAbandoned(), which getNotReusable() looks at first)
+   */
   public void finished() {
     complete = true;
   }

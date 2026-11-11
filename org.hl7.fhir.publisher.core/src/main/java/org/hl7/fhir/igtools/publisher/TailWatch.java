@@ -25,7 +25,8 @@ class TailWatch {
   /**
    * The steps of the tail, in the order they run, for saying what a build that stopped didn't do. A build stops only
    * before PACKAGES (or between two of them), AI, FULL_ZIP or QA: never between the AI step and the html checks (see
-   * PageRebuild.withUnprocessed()), nor once it has started on the qa pages
+   * PageRebuild.withUnprocessed()), nor once it has started on qa.html (qa-tx.html and qa-ipreview.html may be in the
+   * staging folder already when it stops before QA)
    */
   enum Step {
     PACKAGES("the packages and zips (not all of them, if some were written already)", false),
@@ -152,7 +153,7 @@ class TailWatch {
   }
 
   /**
-   * The build has finished, or is past the last point where it can stop (it is about to write its qa pages, save its
+   * The build has finished, or is past the last point where it can stop (it is about to write qa.html, save its
    * state and bring the output folder up to date, which go together): the changes are looked for after it, as
    * without this
    */
