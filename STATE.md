@@ -79,3 +79,8 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 - 17:18 tick: no PRs. Heads: native-skip aaa2fcfa (unchanged), rapido-state faa64d37 (moved), summaries-reuse bceb1113
   (unchanged). Profiler now in profiling runs; early-publish in A/B chain; archives-reuse 51 tests pass, building jars.
   Next tick: get_session native-skip + summaries-reuse if their heads still haven't moved.
+- 17:48 tick: no PRs (highest PR# is 38). All 6 working: profiler session A rebuilds (~30 min left, profile.md after);
+  early-publish A/B + review round 2; archives-reuse fixing 4 tests, reviewers launched; native-skip base run b1
+  (change cuts native phase 30 -> 10 s on the VM); summaries-reuse and rapido-state: review done, A/B running, ~3 h.
+  PRs expected ~20:30-21:00 UTC. Until ~20:00 ticks can be just: notes branch ls-tree (profile.md?) + ls-remote
+  refs/pull (new PR# > 38?) + perf3 heads; skip get_session unless something looks off.
