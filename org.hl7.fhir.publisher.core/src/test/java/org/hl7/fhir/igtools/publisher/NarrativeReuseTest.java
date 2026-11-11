@@ -125,6 +125,8 @@ class NarrativeReuseTest {
     final List<String> langs = new ArrayList<>();
     /** called on each resource once it is loaded */
     java.util.function.Consumer<FetchedResource> loaded = r -> { };
+    /** called on each resource after Rapido has compared the files with the last build, before the narratives */
+    java.util.function.Consumer<FetchedResource> compared = r -> { };
     PublisherFields pf;
     int rendered;
 
@@ -194,6 +196,9 @@ class NarrativeReuseTest {
       PublisherProcessor processor = new PublisherProcessor(publisher.getSettings());
       processor.setPf(pf);
       pf.rc.setParser(processor.getTypeLoader(pf.version));
+      for (FetchedFile f : pf.fileList) {
+        f.getResources().forEach(compared);
+      }
       processor.generateNarratives(false);
       // the resources of the IG that a renderer was made for
       java.util.Set<String> made = new java.util.HashSet<>();
@@ -446,6 +451,30 @@ class NarrativeReuseTest {
     fresh.loaded = loaded;
     assertSameState(fresh.run(), second);
     assertTrue(second.state().get(CS + " element json").contains("The loader"));
+  }
+
+  /**
+   * The same for a resource that only has an element: a step between loading and the narratives gives it a language
+   * (as checkLanguage does) in one build and not in the other
+   */
+  @Test
+  void aNarrativeIsGeneratedWhenTheElementIsNotTheOneItWasGeneratedOn() throws Exception {
+    Map<String, String> sources = sources("All the colours");
+    build(sources).run().finish();
+
+    java.util.function.Consumer<FetchedResource> compared = r -> {
+      if (r.getId().equals("p")) {
+        r.getElement().setChildValue("language", "en");
+      }
+    };
+    Build second = build(sources);
+    second.compared = compared;
+    second.run();
+    assertEquals(1, second.rendered, "the patient");
+    Build fresh = new Build(Files.createTempDirectory(dir, "fresh"), sources);
+    fresh.compared = compared;
+    assertSameState(fresh.run(), second);
+    assertTrue(second.state().get(PATIENT + " element json").contains("\"language\""));
   }
 
   /** a narrative that came with the resource isn't generated, and isn't put back either: it is checked, every build */
