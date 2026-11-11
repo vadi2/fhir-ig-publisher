@@ -63,3 +63,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 - 15:18 tick: all 6 working (rapido-state shows IDLE between background builds: normal, bucket still working). No PRs,
   no profile/bench-recipe yet; sessions still settling on a heap (8g/7600m/9g). Swap fix now truly verified: a process
   touched 16 GiB under the 14.3 GB cap with a swap file on and survived.
+- 15:47 tick: all 6 working, no PRs, no bench-recipe/profile yet. Profiler: 7g + string dedup got through a first
+  build with swap (java 8.1 GiB, Jekyll 3.5 GiB), now timing rebuilds. native-skip: tests pass, mutation checks.
+  NOTE: list_events is expensive (~10k tokens per 25 events, thinking signatures). Use it only for a session that is
+  idle without a PR or silent > 45 min; get_session's task_summary is enough otherwise.
