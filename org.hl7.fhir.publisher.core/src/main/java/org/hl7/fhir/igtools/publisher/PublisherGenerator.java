@@ -843,6 +843,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     TailWatch.Step afterPages = replay == null ? TailWatch.Step.PACKAGES : TailWatch.Step.AI;
     if (givesWayBefore(afterPages)) {
       reclaimAfterJekyll = false;
+      releasePackages(replay);
       return;
     }
     if (reclaimAfterJekyll) {
@@ -851,6 +852,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       printMemUsage();
     }
     if (givesWayBefore(afterPages)) {
+      releasePackages(replay);
       return;
     }
     if (jekyllOk && replay == null) {
@@ -4898,6 +4900,29 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         + r.getWritten() + " written, " + r.getUnchanged() + " unchanged"
         + (r.getFailures().isEmpty() ? "" : ", " + r.getFailures().size() + " failed")
         + " (" + DurationUtil.presentDuration(now - start) + "). They are as Jekyll rendered them: the html checks, the packages and the qa pages follow");
+  }
+
+  /**
+   * Watch mode: a complete build gave up the rest of its tail before the package step (see TailWatch). The packages
+   * it was filling hold an index in a file in the system's temp folder until they are finished, so they are finished
+   * here: what that writes in the staging folder is written again by the next build. Not in a page rebuild, whose
+   * packages the build before it finished
+   */
+  void releasePackages(PageRebuild replay) {
+    if (replay != null || pf.npm == null || pf.changeList.isEmpty()) {
+      return;
+    }
+    List<NPMPackageGenerator> packages = new ArrayList<>();
+    packages.add(pf.npm);
+    packages.addAll(pf.vnpms.values());
+    packages.addAll(pf.lnpms.values());
+    for (NPMPackageGenerator p : packages) {
+      try {
+        p.finish();
+      } catch (IOException | RuntimeException e) {
+        log("Unable to close the package " + p.filename() + ", which the build didn't get to (its index stays in the temp folder): " + e);
+      }
+    }
   }
 
   /** Jekyll said that it had finished, and then returned an error: the build goes on with what it wrote */

@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -24,6 +25,7 @@ import java.util.Arrays;
 import java.util.Collections;
 
 import org.hl7.fhir.igtools.templates.Template;
+import org.hl7.fhir.services.utilities.NPMPackageGenerator;
 import org.hl7.fhir.utilities.logging.ILoggingService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -380,6 +382,32 @@ class WatchCompleteBuildJekyllTest {
 
     assertEquals("a2", output("a.html"));
     assertTrue(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES));
+  }
+
+  @Test
+  void aBuildThatGivesWayBeforeItsPackagesClosesThem() throws Exception {
+    // a package keeps its index in a file in the temp folder until it is finished
+    pf.npm = mock(NPMPackageGenerator.class);
+    NPMPackageGenerator r4 = mock(NPMPackageGenerator.class);
+    NPMPackageGenerator ru = mock(NPMPackageGenerator.class);
+    doThrow(new IOException("disk full")).when(r4).finish();
+    when(r4.filename()).thenReturn("package.r4.tgz");
+    pf.vnpms.put("r4", r4);
+    pf.lnpms.put("ru", ru);
+    pf.changeList.add(new FetchedFile("a.json"));
+
+    generator(null).releasePackages(null);
+
+    verify(pf.npm).finish();
+    verify(r4).finish();
+    verify(ru).finish();
+    verify(pf.logger).logMessage(contains("Unable to close the package package.r4.tgz"));
+
+    // a page rebuild has no packages of its own: the last build's are finished
+    NPMPackageGenerator last = mock(NPMPackageGenerator.class);
+    pf.npm = last;
+    generator(null).releasePackages(new PageRebuild());
+    verify(last, never()).finish();
   }
 
   @Test

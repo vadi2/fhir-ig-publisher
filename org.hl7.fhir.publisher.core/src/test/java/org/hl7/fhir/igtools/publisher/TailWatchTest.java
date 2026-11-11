@@ -173,6 +173,7 @@ class TailWatchTest {
     assertFalse(tail.givesWayBefore(TailWatch.Step.AI), "the changes are found after the build");
     assertFalse(tail.isAbandoned());
     assertEquals(1, source.asked);
+    assertEquals(1, source.stops, "the files aren't watched for the rest of the build");
     assertEquals(List.of("Unable to look for changes while the build finishes (it goes on to its end): java.io.IOException: input can't be read"), log);
   }
 
