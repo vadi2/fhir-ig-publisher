@@ -76,3 +76,6 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   272-295 s (~2.5x Vadim's machine), SUSHI ~49 s per FSH rebuild here (suspicious vs ~4 s in item6 notes: check
   profile.md's SUSHI breakdown before acting), one bench session ~45 min, so an A/B (4 sessions) is ~3 h. Expect PRs
   late. Cheap tick recipe: git ls-remote perf3/* + list PRs; get_session only for sessions whose branch didn't move.
+- 17:18 tick: no PRs. Heads: native-skip aaa2fcfa (unchanged), rapido-state faa64d37 (moved), summaries-reuse bceb1113
+  (unchanged). Profiler now in profiling runs; early-publish in A/B chain; archives-reuse 51 tests pass, building jars.
+  Next tick: get_session native-skip + summaries-reuse if their heads still haven't moved.
