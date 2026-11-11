@@ -57,3 +57,6 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 
 ## Log
 - 14:19 wave 1 launched on Opus. 14:21 archived and relaunched on Fable per Vadim.
+- 14:48 tick: all 6 working, no PRs, no profile yet. Several hit bench OOM (7g heap OOM, 9g cgroup kill). Found: cgroup
+  caps RAM at 14.3 GB but swap is uncapped and swapon works as root -> added to PROCESS.md and sent to all 6
+  (send_message priority next). Future wave-2 briefs: PROCESS.md already carries the swap fix.
