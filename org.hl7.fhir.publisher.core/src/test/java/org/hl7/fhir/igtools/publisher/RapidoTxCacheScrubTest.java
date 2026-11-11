@@ -53,8 +53,9 @@ import org.junit.jupiter.api.io.TempDir;
  * while they're edited. So before a build expands or validates anything, what the cache holds for the ValueSets and
  * CodeSystems that may have changed is removed: those that changed since the cache was last scrubbed (a record next to
  * the cache), with those that name them and the code systems their supplements add to, and the urls the IG no longer
- * defines; all of the IG's own when there is no record. That happens before the first snapshot generation, for what is
- * loaded by then, and once everything is loaded.
+ * defines; all of the IG's own when there is no record. That happens before each snapshot generation, for what is
+ * loaded by then, and once everything is loaded. The record marks what is being scrubbed first, so a build that stops
+ * leaves it to the next. Each IG has its own record, as IGs can share a cache folder.
  *
  * <p>A -watch rebuild runs the same checkDependencies with a new context, whose cache is read again from disk, so these
  * cover it too; the scrub on disk is tested in core's TerminologyCacheTests.
