@@ -44,6 +44,7 @@ STEPS = {
 }
 DEFAULT_STEPS = "first,prof1,prof2,restore-prof,inst1,inst2,restore-inst,page1,restore-page"
 # the publisher's timed log lines end like "(00:12.345 / 01:02.345, 1Gb)" or "(12.3sec / 01:02, 1Gb)"
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 PHASE_RE = re.compile(r"^(?P<msg>.*?)\s+\((?P<d>[^()/]+) / (?P<t>[^(),]+), (?P<mem>[^()]+)\)\s*$")
 
 
@@ -75,7 +76,7 @@ class Session:
         with open(os.path.join(self.a.out, "publisher.log"), "w") as log:
             for line in self.p.stdout:
                 t = time.time() - self.t0
-                line = line.rstrip("\n")
+                line = ANSI_RE.sub("", line.rstrip("\n"))  # the publisher colours what the libraries log
                 log.write("%9.3f %s\n" % (t, line))
                 log.flush()
                 with self.cv:
@@ -139,7 +140,10 @@ class Session:
     def stop(self):
         try:
             os.killpg(self.p.pid, signal.SIGTERM)
-            time.sleep(2)
+            try:
+                self.p.wait(60)  # (a flight recording is written on the way out)
+            except subprocess.TimeoutExpired:
+                pass
             os.killpg(self.p.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
@@ -214,6 +218,13 @@ def main():
     shutil.copytree(a.seed, a.work, symlinks=True,
                     ignore=lambda d, names: [n for n in names if d == a.seed and n in
                                              ("output", "temp", "template", "fsh-generated")])
+    # Rapido's records of an earlier build travel with the tx cache: without them the first build is always a
+    # complete build with no state
+    for n in (".build-tracker.ini", ".build-outputs.json"):
+        try:
+            os.remove(os.path.join(a.work, "input-cache", "txcache", n))
+        except OSError:
+            pass
     originals = {}
     for step in STEPS.values():
         with open(os.path.join(a.work, step[0])) as f:
@@ -300,7 +311,7 @@ def main():
         if not a.keep_running or not ok:
             s.stop()
 
-    res = {"label": a.label, "cmd": " ".join(s.cmd), "ok": ok, "builds": builds}
+    res = {"label": a.label, "cmd": " ".join(s.cmd), "ok": ok, "t0_epoch": s.t0, "builds": builds}
     with open(os.path.join(a.out, "result.json"), "w") as f:
         json.dump(res, f, indent=1)
     with open(os.path.join(a.out, "summary.txt"), "w") as f:
