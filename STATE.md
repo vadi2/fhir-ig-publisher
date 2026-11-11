@@ -135,3 +135,8 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   1 settled, waiting on last two bench sessions. tail-restart pushed a branch (451d3bf1); narrative-skip moving.
   Not checked this tick: early-publish, archives-reuse, native-skip, narrative-skip, tail-restart (check next tick
   if no PR/head movement).
+- 21:17 tick: no new PRs (highest 39). early-publish: waiting on base session b2, then "drill" + fresh build (still
+  Fable). archives-reuse: base session 2 running (cost ~99 USD so far). native-skip: n2 rerun after a tx.fhir.org 502.
+  archives-reuse and native-skip now run on claude-opus-5-5 (get_session: user_switched_model) and this orchestrator
+  was switched to Opus 5.5 by Vadim at ~21:00: so Vadim is moving work off Fable (quota). Do not switch models
+  myself; new sessions, if any, should use claude-opus-5-5 unless Vadim says otherwise.
