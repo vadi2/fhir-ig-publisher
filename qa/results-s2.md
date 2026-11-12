@@ -12,7 +12,7 @@ Status: in progress (Phase C)
 | HL7/aitransparency-ig | 6d0a39f | 7600m | 119 | 0/0/0 | 63 | 46 | 1.2/26.6/22.3/36.6/36.4/27.0 (all edits shown) | 57 | 56 | REGRESSION: spec.internals targets drop 43 *.ai.html pages (PR #48 perf/watch-fsh-tail, commit 349fc124, also in base); pre-existing diffs: en.tgz package/.index.db 0 vs 16 rows (master M1 vs R1 differs too), warm tx cache narrative of Bundle-b3c1f2d4 identifier type "MedicareHIC" vs "United States Medicare Number" + qa-txservers use count (master 2nd build same folder shows it too) |
 | FHIR/ig-guidance | e77c2fb | 7600m | 72 | 77/53/40 | 44 | 34 | not runnable: watch never settles (see notes) | | | REGRESSION (watch): no -rapido -watch build ever finishes, PR #45 perf3/tail-restart; pre-existing diffs: test data factory output (random languages, ids, signatures; second build in same folder adds 36 files), qa-txservers use count |
 | hl7-be/medication | 6b4450d | 7600m | 108 | 4/39/93 | 82 | 65 | 1.4/36.6/29.6/52.6/50.0/34.9 (all edits shown) | 69 | 66 | REGRESSION: spec.internals targets drop 50 *.ai.html pages (PR #48, as aitransparency); pre-existing diffs: en.tgz package/.index.db, qa-txservers use count |
-| hl7au/au-fhir-ps | 85e161a | 7600m | 267 (invalid) | 5463/936/3771 | | | | | | R1 rerun pending: tx.fhir.org 502 during build |
+| hl7au/au-fhir-ps | 85e161a | 7600m | 229 | 1928/346/2244 | 171 | 110 | pending (try1: W1 4.2, W2 95.9 shown; W3 hit a tx.fhir.org timeout, rerun queued) | 240 | | REGRESSION: spec.internals targets drop 28 *.ai.html pages (PR #48, as aitransparency); pre-existing diffs: terminology.hl7.org version in identifier links of 2 Bundles varies per build (R1 7.1.0, I1 5.5.0, I2 7.5.0; master M1 7.2.0, M2 5.5.0), Signature when/data timestamps |
 | sfaassn2025-source/CRA-IG | 7dc650f | | 25 (fail) | | | | | | | skip: SUSHI 3 errors at HEAD (Claim.supportingInfo category; CodeSystem url conflict with twss base dependency) |
 | sfaassn2025-source/VFS-IG | 4afd1fe | | 14 (fail) | | | | | | | skip: SUSHI 1 error at HEAD (twss-case-type CodeSystem url conflict with twss base dependency) |
 | KIP-infrastructure/implementation-guide | 5b5773c | 7600m | 236 | 40/2349/3539 | | | | | | |
@@ -33,3 +33,10 @@ Status: in progress (Phase C)
 ### be-medication
 - R1 vs I1/I2: only spec.internals (387 targets on master, 337 on integration, the 50 *.ai.html) and en.tgz package/.index.db (also differs R1 vs M1).
 - Watch: F2 vs W2, F6 vs W6 and I1 vs W6 differ only in qa-txservers.html use count and qa.compare.txt, whose lines name temp/pages/.watch-output/ instead of output/ (same content otherwise; a QA report file). No stale output.
+
+### au-ps
+- R1 is the rerun from 10:10 (tx.fhir.org returns errors for AU SNOMED edition and au-core ci-build, same on master; no 502).
+- R1 vs I1/I2: only spec.internals (267 targets on master, 239 on integration, the 28 *.ai.html) and the 2 Bundles below. R1 vs M1 and R1 vs M2 show the same 2 Bundles.
+- Bundle-aups-gpvisit-retrieval and Bundle-aups-referral-endoconsult-autogen: narrative link to NamingSystem-uri picks a different terminology.hl7.org version each build (7.1.0, 7.2.0, 5.5.0, 7.5.0, master and integration alike), plus Signature.when and the signature data, which embeds the signing time.
+- F2 vs W2 (try1): only those 2 Bundles.
+
