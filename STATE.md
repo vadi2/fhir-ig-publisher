@@ -182,3 +182,9 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   All sessions done or dropped. Both scheduled tasks deleted (trig_0126..., trig_017g...). Watcher OFF.
   RESULT: 8 PRs (#39-#46), 2 dropped (replay-stamp: duplicate of #39; narrative-skip: ~2 s, not provably equal).
   #45 is stacked on #42 (base perf3/early-publish); all others target claude/ig-publisher-perf-41aejs.
+
+## 2026-11-12 follow-up (after Vadim added #47-#51)
+- Closed fork #10, #21 (merged upstream #1446/#1447), #11, #20 (inside upstream #1461). #24 already closed (upstream #1445).
+- #50, #51: merged master (3d0196c2, f41ac1e5), core suite OK except known GitUtilitiesTests[4]. Not re-benchmarked.
+- Timestamp/cache-busting fix is #48 (watch builds dated at day's first build); waits on upstream #1461.
+- Stale PRs being updated by local subagents: #22 then #25 (one agent; #22 base -> watch-page-rebuild or master, #25 stacked on #22), #38 (other agent). mvn serialized via flock scratchpad/mvn.lock. #29 not for upstream, left alone.
