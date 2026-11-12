@@ -1,6 +1,9 @@
 # QA results, shard s6
 
-(in progress)
+**Summary s6: 6 IGs done, 1 skipped (twcore: no reachable source). One regression: lars L2a, watch only, HL7 #1466
+d6af077. A profile description edit becomes a Differential Build whose package-combined.tgz has a dependency SD
+with rewritten links. QA counts and messages are equal everywhere. F-IDX (package .index.db) is pre-existing
+nondeterminism, not a regression.**
 
 Setup: master 32046bc (master.jar), integration `qa/integration-ready` 6c1abf4 (int.jar). 16 GB swap (4 GB from 14:00, disk), Jekyll 4.4.1,
 SUSHI 3.21.0, JDK 21. Every build: `LC_ALL=C.UTF-8` (the container's default locale is ASCII; omni/lars has
@@ -52,7 +55,7 @@ skip: source not reachable. The qas.json repo path is base64 (MOHW-TWCoreIG / "T
   page has conformance clauses), W2 98 (Differential, 81 of 264 to render), W3 160, W4 154, W5 154, W6 165 (Complete
   Builds, "changed: ig"); F2 164, F6 163.
 - every edit reached output/en/. F2 = W2, F6 = W6, W6 = I1 (no differences after masking).
-- verdict: **FINDING F-IDX (package .index.db), see below**: I1, I2, W6 differ from R1 only in
+- verdict: **F-IDX only (pre-existing, see F-IDX below)**: I1, I2, W6 differ from R1 only in
   `hl7.fhir.uv.crmi.en.tgz` (and its copy in full-ig.zip): `package/.index.db` table ResourceList is empty in master,
   filled in int (rows match `.index.json`). With `.index.db` ignored, I1 = R1 (0 differing files). The main
   package.tgz has an empty ResourceList on both jars (129 entries in `.index.json`).
@@ -117,3 +120,14 @@ skip: source not reachable. The qas.json repo path is base64 (MOHW-TWCoreIG / "T
   (R1, I1, W6 Monthly first; F2, F6, W2 and master W2 Daily first). This explains F6 vs W6.
 - verdict: **REGRESSION L2a (watch only; #1466 exposes the differential path for this edit) + F-IDX**. L2b is
   pre-existing.
+
+## F-IDX: package `.index.db` ResourceList (all IGs except ee-qre and ucum-test): pre-existing
+- Int fills ResourceList in some package tgz files where master R1 left it empty (lars package.tgz; crmi, cqm and
+  cpg `*.en.tgz`).
+- Master reruns (R1b, master.jar, same source) of crmi (174s) and cqm (145s) give filled `*.en.tgz`, .r4.tgz and
+  .r4b.tgz (crmi 129 rows, cqm 121), with an empty package.tgz. So R1 and R1b differ on the same jar.
+- The db is rebuilt per package by core SQLiteINpmPackageIndexBuilderDBImpl.start(), which deletes and recreates
+  the file. Whether a package ends up empty depends on timing and order. Int's output matches `.index.json` and
+  is the correct one, but the bug is not the integration's.
+- cqm R1b vs R1 (both master): 82 files differ, all in identifier-type displays ("NPI" vs "United States National
+  Provider Identifier"). This confirms the cqm terminology nondeterminism on master.
