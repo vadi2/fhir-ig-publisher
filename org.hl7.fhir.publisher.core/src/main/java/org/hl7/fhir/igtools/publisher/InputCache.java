@@ -817,10 +817,6 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     if (s != null && !s.replay) {
       // validation reads the date (FHIRPath today() and now(), and status and date checks)
       s.read("date", today);
-      if (pf.validator.isCheckIPSCodes()) {
-        // the check runs on every coding the validator has seen in the build so far
-        s.uncacheable("IPS code check");
-      }
     }
     return s;
   }
@@ -2258,7 +2254,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     "val.validationContext",
     // memos that tell the cache what their answers were worked out from
     "val.crLookups",
-    // the codings the validator saw, only looked at for the IPS code check, which isn't cached
+    // the codings the validator saw, which nothing looks at
     "val.codingObserver.list",
     // set by the dependent IG finder's own thread as it works, whatever step is running then
     "pf.dependentIgFinder.*"
