@@ -18,7 +18,7 @@ Status: in progress (Phase C)
 | HL7/davinci-pdex-formulary | 549af4d87a | 7600m | 116 | 0/0/22 | 117 | 95 | 114, 5/61/59/76/74/63 (all edits seen, see notes) | 115 | 114 | 0/0/22 | pending master watch: W2-only link difference. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48 |
 | ahdis/ch-ekm | cb48773900 | 7600m | 315 | 794/8352/4461 | 292 | 210 | 284, 8/218/222/230/232/229 (all edits seen) | 270 | 258 | 794/8352/4461 | pending master M1/M2: mapping column order, NamingSystem version links. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48 |
 | HL7/phd | 565d3336a2 | 7600m | 100 | 0/0/2 | 100 | 88 | 108, 1/42/36/72/75/40 (all edits seen) | 101 | 95 | 0/0/2 | pending master M1/M2: child-profile and used-by list order. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48. pre-existing: package .index.db rows |
-| TWNHIFHIR/empd | 988d8dbbaf | 7600m | 209 | 0/0/0 | | | | | | | |
+| TWNHIFHIR/empd | 988d8dbbaf | 7600m | 209 | 0/0/0 | 228 | 216 | 212, 9/148/146/187/183/137 (all edits seen) | 208 | 198 | 0/0/0 | REGRESSION (order only, looks intended): llms.txt/llms.md page order, HL7 #1461 (as dis). pre-existing: used-by list order |
 | hl7-eu/eps | 3314660fc5 | 7600m | 188 | 0/51/15 | | | | | | | |
 
 ## Notes per IG
@@ -46,6 +46,11 @@ Status: in progress (Phase C)
 - W2 = F2, W6 = F6, W6 = I1: no content difference, order only.
 - Order only, in every pair including int vs int: used-by lists in *-ref-*list.csv/json and package.db Resources, and the "Child profiles" list of the abstract PhdBaseObservation (narrative and pages). Master M1/M2 pending.
 - I1, I2 vs R1: spec.internals (#48, .ai.html targets) and package .index.db ResourceList rows.
+
+### empd
+- QA SAME (0/0/0) in every build. No content difference in any comparison (differ=0 everywhere).
+- I1, I2 vs R1: order only, llms.txt/llms.md page order (#1461) and used-by lists in *-ref-*list.csv/json.
+- W2 = F2, W6 = F6, W6 = I1: order only, used-by lists and the order of a list in package-combined.tgz StructureDefinition-Observation-vitalSigns-twcore-0.3.2.json (same kind of run-to-run list order as phd).
 
 ### formulary
 - QA counts and messages equal in every build.
