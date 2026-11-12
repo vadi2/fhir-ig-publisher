@@ -17,7 +17,7 @@ Status: in progress (Phase C)
 | hl7germany/medication-ig-de-r4 | 06c8d75d78 | 7600m | 174 | 1673/2112/815 | 150 | 168 | 143, 12/107/98/131/130/106 (all edits seen) | 144 | 144 | 1673/2112/815 | REGRESSION (order only, looks intended): llms.txt/llms.md page order, HL7 #1461 (as dis). pre-existing diffs: package .index.db rows, tx.fhir.org bcp:47 expansion display in package-combined.tgz, used-by list order |
 | HL7/davinci-pdex-formulary | 549af4d87a | 7600m | 116 | 0/0/22 | 117 | 95 | 114, 5/61/59/76/74/63 (all edits seen, see notes) | 115 | 114 | 0/0/22 | pending master watch: W2-only link difference. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48 |
 | ahdis/ch-ekm | cb48773900 | 7600m | 315 | 794/8352/4461 | 292 | 210 | 284, 8/218/222/230/232/229 (all edits seen) | 270 | 258 | 794/8352/4461 | REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48. pre-existing diffs: mapping column order (QA line numbers), NamingSystem version links in narratives, package .index.db rows |
-| HL7/phd | 565d3336a2 | 7600m | 100 | 0/0/2 | 100 | 88 | 108, 1/42/36/72/75/40 (all edits seen) | 101 | 95 | 0/0/2 | pending master M1/M2: child-profile and used-by list order. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48. pre-existing: package .index.db rows |
+| HL7/phd | 565d3336a2 | 7600m | 100 | 0/0/2 | 100 | 88 | 108, 1/42/36/72/75/40 (all edits seen) | 101 | 95 | 0/0/2 | REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48. pre-existing diffs: child-profile and used-by list order, package .index.db rows |
 | TWNHIFHIR/empd | 988d8dbbaf | 7600m | 209 | 0/0/0 | 228 | 216 | 212, 9/148/146/187/183/137 (all edits seen) | 208 | 198 | 0/0/0 | REGRESSION (order only, looks intended): llms.txt/llms.md page order, HL7 #1461 (as dis). pre-existing: used-by list order |
 | hl7-eu/eps | 3314660fc5 | 7600m | 188 | 0/51/15 | 183 | 147 | 181, 2/98/76/124/131/93 (all edits seen) | 176 | 197 | 0/51/15 | pending master watch: comparison error pages in watch builds have 2 extra stack frames (as formulary). REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48; llms.txt/llms.md page order, HL7 #1461. pre-existing: used-by list order |
 
@@ -44,7 +44,7 @@ Status: in progress (Phase C)
 ### phd
 - QA SAME (0/0/2) in every build.
 - W2 = F2, W6 = F6, W6 = I1: no content difference, order only.
-- Order only, in every pair including int vs int: used-by lists in *-ref-*list.csv/json and package.db Resources, and the "Child profiles" list of the abstract PhdBaseObservation (narrative and pages). Master M1/M2 pending.
+- Order only, in every pair including int vs int: used-by lists in *-ref-*list.csv/json and package.db Resources, and the "Child profiles" list of the abstract PhdBaseObservation (narrative and pages). Master varies too: R1 lists PhdNumericObservation first, master rerun M1 (fresh, 91 s) PhdBitsEnumerationObservation, and the used-by row in valueset-ref-list.csv differs between R1 and M1, so pre-existing.
 - I1, I2 vs R1: spec.internals (#48, .ai.html targets) and package .index.db ResourceList rows.
 
 ### empd
