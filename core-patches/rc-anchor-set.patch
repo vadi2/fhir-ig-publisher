@@ -1,0 +1,104 @@
+From f83ae3dd7708ec80db0da183baab2d352a2b907d Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Thu, 12 Nov 2026 19:06:08 +0000
+Subject: [PATCH] Add a setter for the rendering context's anchor set
+
+A host application that renders incrementally (the IG publisher's
+differential builds) needs to know which anchors a page's rendering
+found already taken, so it can tell whether that page would render the
+same again. RenderingContext.setAnchors lets it give the context a set
+it tracks. copy(true) shares the set as before, and copy(false) still
+starts an empty one.
+---
+ .../r5/renderers/utils/RenderingContext.java  | 10 ++++
+ .../RenderingContextAnchorsTest.java          | 57 +++++++++++++++++++
+ 2 files changed, 67 insertions(+)
+ create mode 100644 org.hl7.fhir.r5/src/test/java/org/hl7/fhir/r5/test/rendering/RenderingContextAnchorsTest.java
+
+diff --git a/org.hl7.fhir.r5/src/main/java/org/hl7/fhir/r5/renderers/utils/RenderingContext.java b/org.hl7.fhir.r5/src/main/java/org/hl7/fhir/r5/renderers/utils/RenderingContext.java
+index 4cb79a67..252b49a5 100644
+--- a/org.hl7.fhir.r5/src/main/java/org/hl7/fhir/r5/renderers/utils/RenderingContext.java
++++ b/org.hl7.fhir.r5/src/main/java/org/hl7/fhir/r5/renderers/utils/RenderingContext.java
+@@ -1170,6 +1170,16 @@ public class RenderingContext extends RenderingI18nContext {
+     return anchors;
+   }
+ 
++  /**
++   * Replaces the set of anchors already used in the output (see hasAnchor and addAnchor). Copies made with
++   * copy(true) afterwards share the new set; copies made before keep the old one. A host application can use this
++   * to give the context a set of its own, to track which anchors rendering uses
++   */
++  public RenderingContext setAnchors(Set<String> anchors) {
++    this.anchors = anchors;
++    return this;
++  }
++
+   public void clearAnchors() {
+     anchors.clear();
+   }
+diff --git a/org.hl7.fhir.r5/src/test/java/org/hl7/fhir/r5/test/rendering/RenderingContextAnchorsTest.java b/org.hl7.fhir.r5/src/test/java/org/hl7/fhir/r5/test/rendering/RenderingContextAnchorsTest.java
+new file mode 100644
+index 00000000..c9b09e6f
+--- /dev/null
++++ b/org.hl7.fhir.r5/src/test/java/org/hl7/fhir/r5/test/rendering/RenderingContextAnchorsTest.java
+@@ -0,0 +1,57 @@
++package org.hl7.fhir.r5.test.rendering;
++
++import static org.junit.jupiter.api.Assertions.assertFalse;
++import static org.junit.jupiter.api.Assertions.assertNotSame;
++import static org.junit.jupiter.api.Assertions.assertSame;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++import java.util.HashSet;
++import java.util.Locale;
++import java.util.Set;
++
++import org.hl7.fhir.r5.renderers.utils.RenderingContext;
++import org.hl7.fhir.r5.renderers.utils.RenderingContext.GenerationRules;
++import org.hl7.fhir.r5.renderers.utils.RenderingContext.ResourceRendererMode;
++import org.junit.jupiter.api.Test;
++
++public class RenderingContextAnchorsTest {
++
++  private RenderingContext context() {
++    return new RenderingContext(null, null, null, null, "http://hl7.org/fhir", "", Locale.ENGLISH, ResourceRendererMode.END_USER, GenerationRules.VALID_RESOURCE);
++  }
++
++  @Test
++  public void testSetAnchorsIsUsedAndSharedByCopies() {
++    RenderingContext rc = context();
++    rc.addAnchor("old");
++    Set<String> anchors = new HashSet<>();
++    assertSame(rc, rc.setAnchors(anchors));
++    assertSame(anchors, rc.getAnchors());
++    assertFalse(rc.hasAnchor("old"));
++
++    rc.addAnchor("a");
++    assertTrue(anchors.contains("a"));
++
++    RenderingContext shared = rc.copy(true);
++    assertSame(anchors, shared.getAnchors());
++    shared.addAnchor("b");
++    assertTrue(rc.hasAnchor("b"));
++
++    RenderingContext separate = rc.copy(false);
++    assertNotSame(anchors, separate.getAnchors());
++    assertFalse(separate.hasAnchor("a"));
++    separate.addAnchor("c");
++    assertFalse(rc.hasAnchor("c"));
++  }
++
++  @Test
++  public void testCopiesMadeBeforeKeepTheOldSet() {
++    RenderingContext rc = context();
++    RenderingContext before = rc.copy(true);
++    Set<String> old = rc.getAnchors();
++    rc.setAnchors(new HashSet<>());
++    rc.addAnchor("a");
++    assertSame(old, before.getAnchors());
++    assertFalse(before.hasAnchor("a"));
++  }
++}
+-- 
+2.43.0
+
