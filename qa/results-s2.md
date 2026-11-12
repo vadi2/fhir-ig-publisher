@@ -1,9 +1,9 @@
 # QA results, shard s2
 
-Status: in progress (Phase A: reference builds with master.jar)
+Status: in progress (Phase C)
 
 - master.jar: origin/master 32046bcdd9b0ec91d93db76f9897b745e406139b
-- int.jar: (waiting for qa/integration-ready)
+- int.jar: qa/integration-ready 6c1abf463d8ae87d30871898c6abdaa63c7df673
 - VM: 4 CPU, 15 GB, 16 GB swap file. Heap 7600m unless noted. Times in seconds, wall clock of the whole java run.
 - R1 times of the first IGs include filling the empty package cache.
 
@@ -16,3 +16,4 @@ Status: in progress (Phase A: reference builds with master.jar)
 | sfaassn2025-source/CRA-IG | 7dc650f | | 25 (fail) | | | | | | | skip: SUSHI 3 errors at HEAD (Claim.supportingInfo category; CodeSystem url conflict with twss base dependency) |
 | sfaassn2025-source/VFS-IG | 4afd1fe | | 14 (fail) | | | | | | | skip: SUSHI 1 error at HEAD (twss-case-type CodeSystem url conflict with twss base dependency) |
 | KIP-infrastructure/implementation-guide | 5b5773c | 7600m | 236 | 40/2349/3539 | | | | | | |
+| uzinfocom-org/digital-health-integration | fa87466 | 7600m | 1197 | 25/363/7650 | | | | | | |
