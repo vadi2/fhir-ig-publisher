@@ -936,22 +936,14 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     // watch mode: what the last build or rebuild kept of the steps below
     PageRebuild kept = replay != null ? replay : pageRebuild;
     HTMLInspector.OutputRewriter rewriter = files -> rewriteOutputs(replay, files);
-    if (!settings.isGenerationOff()) {
-      AIProcessor.Cache aiCache = lastAi;
-      if (aiCache != null) {
-        aiCache.prepare(fresh, rewriter);
-      }
-      AIProcessor ai = new AIProcessor(pf.inspector.getRootFolder(), aiCache);
-      if (isNewML()) {
-        ai.processNewTemplates(allLangs());
-      } else {
-        ai.processOldTemplates();
-      }
-      if (aiCache != null && fresh != null) {
-        // the AI step's files are new, and so are the pages it had Jekyll write again
-        fresh.addAll(aiCache.getWritten());
-        freshFrom.append(", ").append(aiCache.getWritten().size()).append(" by the AI step");
-      }
+    AIProcessor.Cache aiCache = settings.isGenerationOff() ? null : lastAi;
+    if (aiCache != null) {
+      aiCache.prepare(fresh, rewriter);
+    }
+    if (runAiStep(pf.inspector.getRootFolder(), aiCache) && aiCache != null && fresh != null) {
+      // the AI step's files are new, and so are the pages it had Jekyll write again
+      fresh.addAll(aiCache.getWritten());
+      freshFrom.append(", ").append(aiCache.getWritten().size()).append(" by the AI step");
     }
 
     pf.inspector.setReqFolder(pf.repoRoot);
@@ -5044,7 +5036,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * the package step's files from the copies the page rebuild keeps, the others by Jekyll. Returns the ones that
    * can't be written again
    */
-  private Set<String> rewriteOutputs(PageRebuild replay, Collection<String> files) throws IOException {
+  Set<String> rewriteOutputs(PageRebuild replay, Collection<String> files) throws IOException {
     Set<String> res = new HashSet<>();
     String temp = new File(pf.tempDir).getAbsolutePath();
     String out = new File(pf.outputDir).getAbsolutePath();
@@ -5065,7 +5057,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     try {
       r = jekyllDriver.rewrite(temp, out, byRelative.keySet(), pf.jekyllTimeout, new MyFilterHandler()::line);
     } catch (IOException e) {
-      throw new HTMLInspector.OutputRewriteFailure("Jekyll could not write output files again: " + e.getMessage());
+      throw new HTMLInspector.OutputRewriteFailure("Jekyll could not write output files again: " + e.getMessage(), e);
     }
     if (!r.isOk()) {
       throw new HTMLInspector.OutputRewriteFailure("Jekyll could not write output files again: " + r.getError());
@@ -5231,7 +5223,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
 
-  private void addFileToNpm(NPMPackageGenerator.Category other, String name, byte[] cnt) throws IOException {
+  void addFileToNpm(NPMPackageGenerator.Category other, String name, byte[] cnt) throws IOException {
     if (pf.rapido != null) {
       pf.rapido.recordNpm(other.name(), null, name, cnt);
     }
@@ -5249,6 +5241,25 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     for (NPMPackageGenerator vnpm : pf.vnpms.values()) {
       vnpm.addFile(other, name, cnt);
     }
+  }
+
+  /** The AI step, unless generation is off (then it returns false) */
+  boolean runAiStep(String root, AIProcessor.Cache aiCache) throws IOException {
+    if (settings.isGenerationOff()) {
+      return false;
+    }
+    AIProcessor ai = new AIProcessor(root, aiCache);
+    if (isNewML()) {
+      ai.processNewTemplates(allLangs());
+    } else {
+      ai.processOldTemplates();
+    }
+    return true;
+  }
+
+  /** Whether the AI step removes the top-level *.ai.html pages */
+  boolean aiPagesRemoved() {
+    return !settings.isGenerationOff() && isNewML();
   }
 
   /**
@@ -5289,7 +5300,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         map.path(u, this.pf.igpkp.getLinkFor(r, true));
       }
     }
-    for (String s : specTargets(new File(pf.outputDir).list(), !settings.isGenerationOff() && isNewML())) {
+    for (String s : specTargets(new File(pf.outputDir).list(), aiPagesRemoved())) {
       map.target(s);
     }
     File df = File.createTempFile("fhir", "tmp");
@@ -5642,10 +5653,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
-  private byte[] validationSummaryOO() throws IOException {
+  byte[] validationSummaryOO() throws IOException {
     Bundle bnd = new Bundle();
     bnd.setType(Bundle.BundleType.COLLECTION);
-    bnd.setTimestamp(new Date());
+    bnd.setTimestamp(pf.getExecTime().getTime());
     for (FetchedFile f : pf.fileList) {
       for (FetchedResource r : f.getResources()) {
         OperationOutcome oo = new OperationOutcome();

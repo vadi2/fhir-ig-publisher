@@ -242,6 +242,35 @@ class AIProcessorTest {
     assertThrows(HTMLInspector.OutputRewriteFailure.class, () -> process(new AIProcessor(out.toString(), cache), false));
   }
 
+  @Test
+  void theSpecFileListsTheTopLevelPagesTheAiStepLeaves() throws IOException {
+    for (boolean generationOff : new boolean[] {false, true}) {
+      for (boolean old : new boolean[] {false, true}) {
+        Path out = dir.resolve("spec-" + generationOff + "-" + old);
+        if (old) {
+          oldSite(out);
+        } else {
+          site(out);
+        }
+        write(out, "index.html", page("Home", "the home page"));
+        write(out, "index.ai.html", page("Home", "the home page for the AI step"));
+        PublisherSettings settings = new PublisherSettings();
+        settings.setGenerationOff(generationOff);
+        settings.setNewMultiLangTemplateFormat(!old);
+        PublisherGenerator gen = new PublisherGenerator(settings);
+        PublisherFields pf = new PublisherFields();
+        pf.defaultTranslationLang = "en";
+        gen.setPf(pf);
+        assertEquals(!generationOff, gen.runAiStep(out.toString(), null));
+        String[] names = out.toFile().list();
+        List<String> left = Stream.of(names).filter(n -> n.endsWith(".html")).sorted().toList();
+        String c = "generation off: " + generationOff + ", old template: " + old;
+        assertEquals(generationOff || old, left.contains("index.ai.html"), c);
+        assertEquals(left, PublisherGenerator.specTargets(names, gen.aiPagesRemoved()).stream().sorted().toList(), c);
+      }
+    }
+  }
+
   private void run(Path out, AIProcessor.Cache cache, Set<String> fresh) throws IOException {
     run(out, cache, fresh, false);
   }

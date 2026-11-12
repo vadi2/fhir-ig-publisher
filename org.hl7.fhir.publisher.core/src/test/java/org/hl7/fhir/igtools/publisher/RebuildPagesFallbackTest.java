@@ -12,6 +12,7 @@ import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.List;
 
@@ -108,6 +109,51 @@ class RebuildPagesFallbackTest {
     assertNull(f.get(p));
     assertEquals("Rapido Mode: the page rebuild failed (java.lang.Error: Output file x is being generated more than once), so doing a complete build",
         log.get(log.size() - 1));
+  }
+
+  @Test
+  void aPageRebuildReportsItsOwnTime() throws Exception {
+    PublisherFields pf = new PublisherFields();
+    pf.vsCache = dir.toString();
+    pf.logger = new ILoggingService() {
+      public void logMessage(String message) {
+      }
+
+      public void logDebugMessage(LogCategory category, String message) {
+      }
+    };
+    Calendar first = Calendar.getInstance();
+    first.add(Calendar.HOUR, -1);
+    pf.pinExecTime(first);
+    pf.setReportTime(first);
+    Calendar[] reported = {null};
+    PageRebuild state = new PageRebuild() {
+      @Override
+      public List<FetchedFile> pagesFor(SourceSnapshot.Changes changes, List<String> reason) {
+        return new ArrayList<>();
+      }
+
+      @Override
+      public PublisherFields getPf() {
+        return pf;
+      }
+
+      @Override
+      public void restore() throws IOException {
+        reported[0] = pf.getReportTime();
+        throw new IOException("stop here");
+      }
+    };
+    Publisher p = new Publisher();
+    p.setPf(pf);
+    Field f = Publisher.class.getDeclaredField("pageRebuild");
+    f.setAccessible(true);
+    f.set(p, state);
+
+    p.rebuildPages(new WatchSession(dir, Collections.emptyList()));
+    assertTrue(reported[0].after(first), reported[0].getTime().toString());
+    // (the package and spec files keep the first build's time)
+    assertSame(first, pf.getExecTime());
   }
 
   @Test
