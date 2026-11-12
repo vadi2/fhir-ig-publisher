@@ -115,4 +115,16 @@ pr-review-toolkit code-reviewer and silent-failure-hunter, run over `git show --
 
 ## Smoke test
 
-SMOKE_PLACEHOLDER
+CLI jar from 32f9658 (code identical to this head apart from comments), HL7/aitransparency-ig @ 6d0a39f, 16 GB swap,
+`IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx7600m -XX:+UseStringDeduplication -jar int.jar -ig . -tx https://tx.fhir.org`.
+
+- Full build without -rapido: finished in 110 s, 930 files in output/, QA 0 errors, 0 warnings, 0 hints.
+- `-rapido -watch`, fresh copy:
+  - first build (complete): 54 s, QA 0/0/0;
+  - page edit (a sentence appended to input/pagecontent/about.md): Page Rebuild, finished 2 s after the save, the
+    sentence is in output/en/about.html;
+  - resource edit (AIModelCard profile Description in input/fsh/AIDevice.fsh): Differential Build, 32 s; reused 8 of 43
+    validations, native outputs of 20 of 60 files, 152 of 154 resource lists, 2 of 11 archives; the new text is in
+    output/en/StructureDefinition-AI-ModelCard.html and StructureDefinition-AI-ModelCard.json; QA 0/0/0.
+
+This only shows the combined jar works end to end; output equality with fresh builds is what the QA sessions check.
