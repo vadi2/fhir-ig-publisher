@@ -603,6 +603,25 @@ class InputCacheTest {
   }
 
   @Test
+  void reads_thatCantBeWorkedOut_neverMatch() {
+    Map<String, String> reads = new java.util.LinkedHashMap<>();
+    reads.put("ig", "d1");
+    Map<String, String> now = new HashMap<>();
+    now.put("ig", "?java.lang.IllegalStateException: boom");
+    assertEquals("ig", InputCache.firstChange(reads, now::get));
+    now.remove("ig");
+    assertEquals("ig", InputCache.firstChange(reads, now::get));
+    // failing the same way twice isn't the same input
+    reads.put("ig", "?java.lang.IllegalStateException: boom");
+    now.put("ig", "?java.lang.IllegalStateException: boom");
+    assertEquals("ig", InputCache.firstChange(reads, now::get));
+    assertFalse(InputCache.readable("?"));
+    assertFalse(InputCache.readable(null));
+    assertTrue(InputCache.readable(InputCache.ABSENT));
+    assertTrue(InputCache.readable(InputCache.ABSENT_OR + "x"));
+  }
+
+  @Test
   void verify_selectsTheSameKeysEveryTime() {
     assertFalse(InputCache.selected("abc", 0));
     assertTrue(InputCache.selected("abc", 1));

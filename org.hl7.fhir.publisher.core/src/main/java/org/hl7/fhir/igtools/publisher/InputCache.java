@@ -60,6 +60,9 @@ import org.hl7.fhir.utilities.IniFile;
 import org.hl7.fhir.utilities.UserDataNames;
 import org.hl7.fhir.utilities.Utilities;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
+import org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity;
+import org.hl7.fhir.utilities.validation.ValidationMessage.IssueType;
+import org.hl7.fhir.utilities.validation.ValidationMessage.Source;
 import org.hl7.fhir.utilities.xhtml.HierarchicalTableGenerator;
 import org.hl7.fhir.validation.BaseValidator;
 import org.hl7.fhir.validation.instance.InstanceValidator;
@@ -165,6 +168,8 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   private int verified;
   private int mismatches;
   private int misses;
+  /** entries the store could read but that couldn't be decoded, or whose hit couldn't be replayed */
+  private final AtomicInteger undecodable = new AtomicInteger();
   private final AtomicInteger stored = new AtomicInteger();
   /**
    * entries are compressed and written on a thread of their own, so the build doesn't wait for them. At most
@@ -221,8 +226,11 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
    */
   public static InputCache create(PublisherFields pf, PublisherSettings settings, IniFile ini, Consumer<String> log) {
     String on = setting(PROP, ini, "input-cache");
-    if (on != null && !"true".equalsIgnoreCase(on)) {
+    if (on != null && "false".equalsIgnoreCase(on.trim())) {
       return null;
+    }
+    if (on != null && !"true".equalsIgnoreCase(on.trim())) {
+      log.accept("Input cache: ignoring input-cache value '" + on + "' (it's true or false), so it's on");
     }
     if (settings.isRapidoMode() || settings.isWatchMode() || settings.isGenerationOff() && settings.isValidationOff()) {
       return null;
@@ -796,7 +804,9 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     }
 
     private void read(String k, String v) {
-      if (!reads.containsKey(k)) {
+      if (!readable(v)) {
+        uncacheable("unable to read " + k + (v == null ? "" : ": " + v));
+      } else if (!reads.containsKey(k)) {
         reads.put(k, v);
       }
     }
@@ -942,6 +952,16 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
         }
       }
       if (s.hit != null) {
+        String why = unreplayable(s);
+        if (why != null) {
+          // run and stored again, which replaces it
+          undecodable.incrementAndGet();
+          log.accept("Input cache: unable to replay " + description + ", running it instead: " + why);
+          s.hit = null;
+          s.hitJournal = null;
+        }
+      }
+      if (s.hit != null) {
         s.verify = selected(key, verifyFraction);
         s.replay = !s.verify;
       }
@@ -960,6 +980,93 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       current = null;
       return null;
     }
+  }
+
+  /**
+   * why the hit's journal can't be replayed, or null if it can: everything the replay reads from it is checked first,
+   * so that a corrupt entry is a miss, not a replay that fails half way
+   */
+  private String unreplayable(Step s) {
+    Journal j;
+    try {
+      j = s.hitJournal();
+    } catch (IOException | RuntimeException e) {
+      return "the stored journal can't be read: " + e;
+    }
+    try {
+      Set<String> elementKeys = new HashSet<>();
+      for (Journal.Rec r : j.recs) {
+        if (r.tag == null || (r.a == null && !"valctx".equals(r.tag))) {
+          return "the stored journal has an empty record";
+        }
+        switch (r.tag) {
+          case "list": {
+            InputCacheCodec.In in = new InputCacheCodec.In(r.b);
+            int n = in.integer();
+            for (int i = 0; i < n; i++) {
+              int id = in.integer();
+              if (!j.decoded.containsKey(id)) {
+                return "the stored list " + r.a + " has a message that isn't there";
+              }
+            }
+            if (!in.atEnd()) {
+              return "the stored list " + r.a + " is corrupt";
+            }
+            if (r.a.startsWith(ELEMENT_MESSAGES)) {
+              elementKeys.add(r.a.substring(ELEMENT_MESSAGES.length()));
+            }
+            break;
+          }
+          case "found": {
+            String[] p = r.a.split(SEP, 5);
+            if (p.length != 5) {
+              return "a stored example is corrupt";
+            }
+            resource(p[0], Integer.parseInt(p[1]));
+            resource(p[2], Integer.parseInt(p[3]));
+            break;
+          }
+          case "set":
+          case "file":
+            if (r.b == null) {
+              return "a stored " + r.tag + " is empty";
+            }
+            break;
+          case "npm":
+            if (r.b == null || r.a.split(SEP, 3).length != 3) {
+              return "a stored package file is corrupt";
+            }
+            break;
+          case "track":
+            if (r.a.split(SEP, 2).length != 2) {
+              return "a stored fragment is corrupt";
+            }
+            break;
+          case "frag":
+            Long.parseLong(new String(r.b, StandardCharsets.UTF_8));
+            break;
+          case "conv": {
+            int i = Integer.parseInt(r.a);
+            if (i < 0 || i >= s.file.getResources().size()) {
+              return "a stored conversion is of a resource that isn't there";
+            }
+            break;
+          }
+          default:
+            break;
+        }
+      }
+      if (!elementKeys.isEmpty()) {
+        forEachElement(s.file, (k, e) -> elementKeys.remove(k));
+        if (!elementKeys.isEmpty()) {
+          return "the stored messages are on an element that isn't there (" + elementKeys.iterator().next() + ")";
+        }
+      }
+      decodeExtras(s.hit.extras);
+    } catch (IOException | RuntimeException e) {
+      return "the stored journal is corrupt: " + e;
+    }
+    return null;
   }
 
   /** whether the hit is one of the fraction verified: the same keys every build, so a mismatch shows up again */
@@ -1071,9 +1178,6 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
             }
           }
         });
-        if (!elementMessages.isEmpty()) {
-          throw new IllegalStateException("no element " + elementMessages.keySet().iterator().next());
-        }
       }
       hits++;
       savedMillis += j.millis;
@@ -1706,7 +1810,12 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   }
 
   private List<Variant> readEntry(String key) {
-    return decodeEntry(store.read(key));
+    byte[] b = store.read(key);
+    List<Variant> res = decodeEntry(b);
+    if (b != null && res.isEmpty()) {
+      undecodable.incrementAndGet();
+    }
+    return res;
   }
 
   /** the variants in an entry; none if there's no entry, or it can't be decoded */
@@ -1805,6 +1914,10 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     for (Map.Entry<String, String> e : reads.entrySet()) {
       String now = evaluate.apply(e.getKey());
       String was = e.getValue();
+      if (!readable(now) || !readable(was)) {
+        // what can't be read now isn't known to be the same (and isn't stored, but an entry can be corrupt)
+        return e.getKey();
+      }
       if (was.startsWith(ABSENT_OR)) {
         if (!ABSENT.equals(now) && !was.substring(1).equals(now)) {
           return e.getKey();
@@ -1814,6 +1927,11 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       }
     }
     return null;
+  }
+
+  /** false for a read that couldn't be worked out (evaluating it failed, and says why after the "?") */
+  static boolean readable(String v) {
+    return v != null && !v.startsWith("?");
   }
 
   private static String readKind(String key) {
@@ -2539,8 +2657,9 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     if (verifyFraction > 0) {
       b.append(", ").append(verified).append(" hits verified, ").append(mismatches).append(" mismatches");
     }
-    if (store.getCorrupt() > 0) {
-      b.append(", ").append(store.getCorrupt()).append(" unreadable entries ignored");
+    int unreadable = store.getCorrupt() + undecodable.get();
+    if (unreadable > 0) {
+      b.append(", ").append(unreadable).append(" unreadable entries ignored");
     }
     long total = 0;
     StringBuilder parts = new StringBuilder();
@@ -2570,5 +2689,17 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
 
   public int getMismatches() {
     return mismatches;
+  }
+
+  /**
+   * an error for the QA page when a verified hit ran differently from what was stored (the log has where they
+   * differ); null when none did
+   */
+  public ValidationMessage verificationMessage() {
+    if (mismatches == 0) {
+      return null;
+    }
+    return new ValidationMessage(Source.Publisher, IssueType.EXCEPTION, "input-cache", "The input cache's verification found that " + mismatches + " of the "
+      + (verified + mismatches) + " hits verified ran differently from what was stored, so a cached build can differ from an uncached one. The entries are dropped, and the log says where they differed (INPUT CACHE MISMATCH)", IssueSeverity.ERROR);
   }
 }

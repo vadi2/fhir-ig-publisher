@@ -588,6 +588,10 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       generator.generate();
       if (pf.inputCache != null) {
         pf.inputCache.finish();
+        ValidationMessage mismatches = pf.inputCache.verificationMessage();
+        if (mismatches != null) {
+          pf.errors.add(mismatches);
+        }
       }
       clean();
       pf.dependentIgFinder.finish(pf.outputDir, pf.sourceIg.present());
