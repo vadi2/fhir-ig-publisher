@@ -2182,8 +2182,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   private void redoElementMaps(FetchedFile f, List<String> urls) {
     StructureDefinition src = null;
     for (FetchedResource r : f.getResources()) {
-      if (src == null && r.getResource() instanceof StructureDefinition) {
-        src = (StructureDefinition) r.getResource();
+      if (r.getResource() instanceof StructureDefinition sd) {
+        src = sd;
+        break;
       }
     }
     org.hl7.fhir.services.renderers.StructureDefinitionRenderer sdr = null;

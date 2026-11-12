@@ -1507,8 +1507,8 @@ public class RapidoTracker {
     @Override
     public Map<String, ElementDefinition> get(Object key) {
       Map<String, ElementDefinition> res = super.get(key);
-      if (res != null && listener != null && key instanceof String) {
-        listener.accept((String) key);
+      if (res != null && listener != null && key instanceof String url) {
+        listener.accept(url);
       }
       return res;
     }
