@@ -15,7 +15,7 @@ Status: in progress (Phase C)
 | hl7au/au-fhir-ps | 85e161a | 7600m | 229 | 1928/346/2244 | 171 | 110 | pending (try1: W1 4.2, W2 95.9 shown; W3 hit a tx.fhir.org timeout, rerun queued) | 240 | | REGRESSION: spec.internals targets drop 28 *.ai.html pages (PR #48, as aitransparency); pre-existing diffs: terminology.hl7.org version in identifier links of 2 Bundles varies per build (R1 7.1.0, I1 5.5.0, I2 7.5.0; master M1 7.2.0, M2 5.5.0), Signature when/data timestamps |
 | sfaassn2025-source/CRA-IG | 7dc650f | | 25 (fail) | | | | | | | skip: SUSHI 3 errors at HEAD (Claim.supportingInfo category; CodeSystem url conflict with twss base dependency) |
 | sfaassn2025-source/VFS-IG | 4afd1fe | | 14 (fail) | | | | | | | skip: SUSHI 1 error at HEAD (twss-case-type CodeSystem url conflict with twss base dependency) |
-| KIP-infrastructure/implementation-guide | 5b5773c | 7600m | 236 | 40/2349/3539 | | | | | | |
+| KIP-infrastructure/implementation-guide | 5b5773c | 7600m | 236 | 40/2349/3539 | 224 | 227 | 82.8/167.5/162.7/230.0/239.5/169.0 (all edits shown) | 212 | 220 | PASS: only masked diffs (expansion ids/timestamps) and pre-existing en.tgz package/.index.db, qa-txservers use count; no *.ai.html pages so spec.internals is identical |
 | uzinfocom-org/digital-health-integration | fa87466 | 7600m | 1197 | 25/363/7650 | | | | | | |
 
 ## Notes
@@ -39,4 +39,9 @@ Status: in progress (Phase C)
 - R1 vs I1/I2: only spec.internals (267 targets on master, 239 on integration, the 28 *.ai.html) and the 2 Bundles below. R1 vs M1 and R1 vs M2 show the same 2 Bundles.
 - Bundle-aups-gpvisit-retrieval and Bundle-aups-referral-endoconsult-autogen: narrative link to NamingSystem-uri picks a different terminology.hl7.org version each build (7.1.0, 7.2.0, 5.5.0, 7.5.0, master and integration alike), plus Signature.when and the signature data, which embeds the signing time.
 - F2 vs W2 (try1): only those 2 Bundles.
+
+### kip
+- R1 vs I1/I2/M1/M2: expansions.* differ only in Bundle id, lastUpdated and expansion identifier (masked; compare.py reported them because its timestamp mask overlapped the UUID). en.tgz package/.index.db and qa-txservers.html as on other IGs, master too.
+- Watch (no examples in this IG: W3 edits a CodeSystem concept, W4 adds a CodeSystem, W5 deletes it): all edits shown. F2 vs W2, F6 vs W6 and I1 vs W6: same masked expansions diff plus qa-txservers use count. No stale output.
+- Watch steps are slow (W1 page edit 83 s): every step after the first was a Complete Build or a large partial rebuild; master not timed in watch mode for this IG.
 
