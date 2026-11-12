@@ -622,11 +622,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   /**
-   * Watch mode: saves what this build claims in the temp folder and, in a Rapido differential build, deletes the files
-   * there that the last build claimed and this one neither wrote nor claims (see StaleTempFiles), so that Jekyll sees
-   * what it would see after a complete build
+   * Rapido: saves what this build claims in the temp folder and, in a differential build, deletes the files there that
+   * the last build claimed and this one neither wrote nor claims (see StaleTempFiles), so that Jekyll sees what it would
+   * see after a complete build
    */
-  private void deleteStaleTempFiles() throws IOException {
+  void deleteStaleTempFiles() throws IOException {
     if (pf.staleTemp == null) {
       return;
     }
@@ -4139,7 +4139,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
-  /** watch mode: the template's onGenerate script sees the temp folder as it would in a stock build (see StaleTempFiles) */
+  /** Rapido: the template's onGenerate script sees the temp folder as it would in a stock build (see StaleTempFiles) */
   private void beforeTemplateGenerate() throws IOException {
     if (pf.staleTemp == null) {
       return;
@@ -4153,7 +4153,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       pf.staleTemp.delete(left);
     }
     try {
-      pf.staleTemp.markTemplate();
+      if (!pf.staleTemp.markTemplate()) {
+        log("Rapido Mode: the file system's status-change times didn't move, so what the template's onGenerate writes isn't recorded, and the next build doesn't delete it before onGenerate runs");
+      }
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
       throw new IOException(e);

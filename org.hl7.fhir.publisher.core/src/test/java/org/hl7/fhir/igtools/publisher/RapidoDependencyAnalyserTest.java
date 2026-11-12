@@ -4,6 +4,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -416,11 +417,21 @@ class RapidoDependencyAnalyserTest {
   }
 
   @Test
-  void buildStateIsReadFromSuperclasses() {
+  void buildStateIsReadFromSuperclasses() throws Exception {
     assertEquals(Set.of("a"), RapidoTracker.readSet(new Sub1(), "hidden"));
-    assertNull(RapidoTracker.readSet(new Sub1(), "notASet"));
-    assertNull(RapidoTracker.readSet(new Sub1(), "missing"));
+    assertThrows(NoSuchFieldException.class, () -> RapidoTracker.readSet(new Sub1(), "notASet"));
+    assertThrows(NoSuchFieldException.class, () -> RapidoTracker.readSet(new Sub1(), "missing"));
     assertNull(RapidoTracker.readSet(null, "hidden"));
+  }
+
+  /** what buildState() reads is in core, as sets (else no validation is reused) */
+  @Test
+  void theBuildStateIsInCore() throws Exception {
+    for (String[] f : new String[][] {{"org.hl7.fhir.validation.BaseValidator", "statusWarnings"},
+        {"org.hl7.fhir.standalone.context.BaseWorkerContext", "unsupportedCodeSystems"},
+        {"org.hl7.fhir.standalone.context.BaseWorkerContext", "codeSystemsUsed"}}) {
+      assertEquals(Set.class, Class.forName(f[0]).getDeclaredField(f[1]).getType(), f[0] + "." + f[1]);
+    }
   }
 
   private static JsonObject state(String set, String... added) {

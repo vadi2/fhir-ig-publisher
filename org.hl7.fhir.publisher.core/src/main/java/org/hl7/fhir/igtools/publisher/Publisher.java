@@ -1263,6 +1263,15 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     }
   }
 
+  /**
+   * What tracks the files each build claims in the temp folder. The output staging folder is the output, not what
+   * Jekyll reads (see PublisherIGLoader.setUpWatchOutput())
+   */
+  StaleTempFiles newStaleTempFiles() throws IOException {
+    return new StaleTempFiles(pf.tempDir, Arrays.asList(Utilities.path(pf.tempDir, "_rapido"),
+        Utilities.path(pf.tempDir, PublisherIGLoader.WATCH_OUTPUT_STAGING)));
+  }
+
   public void checkDependencies(FetchedFile igf, IniFile buildTracker) throws Exception {
     if (!settings.isRapidoMode()) {
       buildTracker.setStringProperty("status", "uuid", HierarchicalTableGenerator.uuid, null);
@@ -1279,24 +1288,18 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     buildTracker.setBooleanProperty("status", "started", true, null);
     buildTracker.save();
 
-    // in watch mode, each build saves what it claims in the temp folder; in a differential build, what the last build
-    // claimed and this one neither writes nor claims is deleted before Jekyll runs (see
-    // PublisherGenerator.deleteStaleTempFiles()). The output staging folder is the output, not what Jekyll reads (see
-    // PublisherIGLoader.setUpWatchOutput())
-    StaleTempFiles staleTemp = new StaleTempFiles(pf.tempDir, Arrays.asList(Utilities.path(pf.tempDir, "_rapido"),
-        Utilities.path(pf.tempDir, PublisherIGLoader.WATCH_OUTPUT_STAGING)));
-    if (!settings.isWatchMode()) {
-      // this build won't save what it claims, nor clean up after the last build
-      staleTemp.forget();
-    }
+    // each build saves what it claims in the temp folder; in a differential build, what the last build claimed and this
+    // one neither writes nor claims is deleted before Jekyll runs (see PublisherGenerator.deleteStaleTempFiles()). A
+    // differential build without a record of what the last one claimed is a complete one (see RapidoTracker.analyse())
+    StaleTempFiles staleTemp = newStaleTempFiles();
+    pf.staleTemp = staleTemp.isSupported() ? staleTemp : null;
     pf.rapido = new RapidoTracker(pf);
     pf.rapido.analyse(igf, failure);
-    // without status-change times (Windows), what the last build left can't be told from what this one wrote, so nothing
-    // is deleted; nor is anything after a build that didn't save what it claimed (StaleTempFiles.find() finds nothing)
-    if (settings.isWatchMode() && StaleTempFiles.isSupported(pf.tempDir)) {
-      pf.staleTemp = staleTemp;
-      if (!pf.rapido.isCompleteBuild()) {
-        staleTemp.mark();
+    if (!pf.rapido.isCompleteBuild()) {
+      if (pf.staleTemp != null) {
+        pf.staleTemp.mark();
+      } else {
+        log("Rapido Mode: the file system has no status-change times, so what the last build wrote in the temp folder and this one doesn't isn't removed");
       }
     }
     if (pf.rapido.isCompleteBuild()) {

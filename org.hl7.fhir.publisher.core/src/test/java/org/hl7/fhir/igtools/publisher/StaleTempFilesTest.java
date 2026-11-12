@@ -16,6 +16,7 @@ import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.attribute.FileTime;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -105,11 +106,11 @@ class StaleTempFilesTest {
     StaleTempFiles st = tracker();
     tick();
     st.mark();
+    assertFalse(st.hasClaims());
     assertTrue(st.find(Collections.emptyList()).isEmpty());
     st.save(names(p));
+    assertTrue(st.hasClaims());
     assertEquals(Collections.singletonList(p.toAbsolutePath().normalize()), st.find(Collections.emptyList()));
-    st.forget();
-    assertTrue(st.find(Collections.emptyList()).isEmpty());
   }
 
   @Test
@@ -209,7 +210,7 @@ class StaleTempFilesTest {
    */
   @Test
   void theTemplatesWritesAreFoundWhateverTheirNames() throws Exception {
-    assumeTrue(StaleTempFiles.isSupported(temp.toString()));
+    assumeTrue(tracker().isSupported());
     StaleTempFiles st = tracker();
     st.markTemplate();
     // a name java can't write: the shell's, from octal escapes
@@ -229,30 +230,14 @@ class StaleTempFilesTest {
     }
   }
 
-  /**
-   * A file system without status-change times (no 'unix' view: Windows, or here a zip file system): the template's
-   * writes are still recorded, by modification time. Watch mode on Windows used to stop at the template, in the first
-   * build ("View 'unix' not available")
-   */
+  /** a file system without status-change times (no 'unix' view: Windows, or here a zip file system) isn't supported */
   @Test
-  void theTemplatesWritesAreRecordedWithoutStatusChangeTimes() throws Exception {
+  void aFileSystemWithoutStatusChangeTimesIsntSupported() throws Exception {
     try (FileSystem zip = FileSystems.newFileSystem(temp.resolve("temp.zip"), Map.of("create", "true"))) {
-      assertFalse(zip.supportedFileAttributeViews().contains("unix"));
       Path t = zip.getPath("/temp");
-      Files.createDirectories(t.resolve("pages/_includes"));
-      Path before = Files.write(t.resolve("pages/_includes/artifacts.xml"), new byte[] {'a'});
-      StaleTempFiles st = new StaleTempFiles(t, Collections.singletonList(t.resolve("_rapido")));
-      st.markTemplate();
-      Path svg = Files.write(t.resolve("pages/_includes/sample.svg"), new byte[] {'s'});
-      st.saveTemplateWrites();
-      assertEquals(Collections.singletonList("pages/_includes/sample.svg"), Files.readAllLines(t.resolve("_rapido/template-written.txt")));
-      tick();
-
-      st = new StaleTempFiles(t, Collections.singletonList(t.resolve("_rapido")));
-      st.mark();
-      assertEquals(Collections.singletonList(svg), st.findTemplateLeftovers());
-      assertTrue(Files.exists(before));
+      assertFalse(new StaleTempFiles(t, Collections.singletonList(t.resolve("_rapido"))).isSupported());
     }
+    assertTrue(tracker().isSupported());
   }
 
   /** a temp folder that can't be made is the build's error, not a file system without status-change times */
@@ -260,6 +245,114 @@ class StaleTempFilesTest {
   void aTempFolderThatCantBeMadeIsAnError() throws Exception {
     Path file = write("not-a-folder", "x");
 
-    assertThrows(IOException.class, () -> StaleTempFiles.isSupported(file.resolve("temp").toString()));
+    assertThrows(IOException.class, () -> new StaleTempFiles(file.resolve("temp"), Collections.emptyList()).isSupported());
+  }
+
+  /**
+   * A claimed file the build wrote again, with its modification time set back to before the build started (as a copy
+   * that keeps the source's time does): it's this build's, by its status-change time
+   */
+  @Test
+  void aFileWrittenAfterTheMarkIsKeptWhateverItsModificationTime() throws Exception {
+    assumeTrue(tracker().isSupported());
+    Path p = write("pages/copied.html", "old");
+    StaleTempFiles st = tracker();
+    st.save(names(p));
+    tick();
+    st = tracker();
+    st.mark();
+    FileTime before = Files.getLastModifiedTime(temp.resolve("_rapido/build-start"));
+    tick();
+    write("pages/copied.html", "new");
+    Files.setLastModifiedTime(p, FileTime.fromMillis(before.toMillis() - 60000));
+    assertTrue(st.find(Collections.emptyList()).isEmpty());
+  }
+
+  /** The temp folder is a link (e.g. to a faster disk): what's in it is found by the paths the publisher uses */
+  @Test
+  void aLinkedTempFolderIsWalked() throws Exception {
+    Path real = Files.createDirectories(temp.resolve("real"));
+    Path link;
+    try {
+      link = Files.createSymbolicLink(temp.resolve("temp"), real);
+    } catch (UnsupportedOperationException | IOException e) {
+      assumeTrue(false, "no symbolic links: " + e);
+      return;
+    }
+    Path stale = link.resolve("pages").resolve("old.html");
+    Files.createDirectories(stale.getParent());
+    Files.write(stale, new byte[] {'o'});
+    StaleTempFiles st = new StaleTempFiles(link.toString(), Collections.singletonList(link.resolve("_rapido").toString()));
+    st.save(names(stale));
+    tick();
+
+    st = new StaleTempFiles(link.toString(), Collections.singletonList(link.resolve("_rapido").toString()));
+    st.mark();
+    assertEquals(Collections.singletonList(stale), st.find(Collections.emptyList()));
+
+    assertTrue(st.markTemplate());
+    Path svg = Files.write(link.resolve("sample.svg"), new byte[] {'s'});
+    st.saveTemplateWrites();
+    tick();
+    st = new StaleTempFiles(link.toString(), Collections.singletonList(link.resolve("_rapido").toString()));
+    st.mark();
+    assertEquals(Collections.singletonList(svg), st.findTemplateLeftovers());
+  }
+
+  /**
+   * The template's onGenerate script changes a file that was there (here, one a build wrote): it's not the script's. A
+   * differential build that reuses the file doesn't delete it before the script runs (the script wouldn't write it)
+   */
+  @Test
+  void aFileTheTemplateOnlyChangedIsntItsWrite() throws Exception {
+    Path page = write("pages/Patient-a.html", "a");
+    StaleTempFiles st = tracker();
+    st.markTemplate();
+    Path script = write("pages/_includes/sample.svg", "s");
+    st.saveTemplateWrites();
+    tick();
+
+    // the next build writes both before the script runs; the script changes the page in place, and writes its file again
+    st = tracker();
+    st.mark();
+    tick();
+    write("pages/Patient-a.html", "a");
+    write("pages/_includes/sample.svg", "s");
+    st.markTemplate();
+    write("pages/Patient-a.html", "a, changed by the script");
+    write("pages/_includes/sample.svg", "s again");
+    st.saveTemplateWrites();
+    tick();
+
+    // a build that reuses the page: only the script's file is deleted before the script runs
+    st = tracker();
+    st.mark();
+    assertEquals(Collections.singletonList(script.toAbsolutePath().normalize()), st.findTemplateLeftovers());
+    assertTrue(Files.exists(page));
+  }
+
+  /**
+   * Where the status-change times don't move (a file system whose clock is too coarse), what the template's onGenerate
+   * writes can't be told from what was there: it's not recorded, so the next build deletes nothing before the script runs
+   */
+  @Test
+  void whenTheClockDoesntMoveTheTemplatesWritesArentRecorded() throws Exception {
+    StaleTempFiles st = tracker();
+    st.markTemplate();
+    write("pages/_includes/old.svg", "s");
+    st.saveTemplateWrites();
+    tick();
+
+    st = tracker();
+    st.probes = 0;
+    st.mark();
+    assertFalse(st.markTemplate());
+    write("pages/_includes/sample.svg", "s");
+    st.saveTemplateWrites();
+    tick();
+
+    st = tracker();
+    st.mark();
+    assertTrue(st.findTemplateLeftovers().isEmpty());
   }
 }
