@@ -1,6 +1,8 @@
 # QA results: shard s3
 
-Status: Phase C in progress (xshare, madfsh, usps, sact, hroute, vris, fr.core done; pct waiting on master watch check).
+**Summary: shard s3 done, 8/8 IGs built and compared. One regression, F1 (llms.txt/llms.md page order, HL7 #1461, looks intended), seen in every IG's I1/I2. No other regressions: every watch session saw all edits, W6 equals F6 and I1 everywhere, W2 equals F2 everywhere except pre-existing master watch behavior (pct). QA counts unchanged in all builds.**
+
+Status: done.
 
 Reference jar: origin/master 32046bcdd9. Integration jar: `qa/integration-ready` 6c1abf463d. Heap 7600m unless noted. VM 15 GB / 4 CPU, 16 GB swap.
 
@@ -12,7 +14,7 @@ Reference jar: origin/master 32046bcdd9. Integration jar: `qa/integration-ready`
 | hl7-eu/phoenix-sact | f9246ccc86 | 7600m | 53 s | 0/2/77 | 62 s, 0/2/77 | 55 s, 0/2/77 | 64/1/27/34/36/38/26 s, all edits seen, QA 0/2/77 | 64 s | 64 s | REGRESSION: F1 only (I1/I2). W2=F2, W6=F6, W6=I1 same |
 | savannahghi/healthy-route-ig | 7a1e3e908a | 7600m | 99 s | 4/217/861 | 94 s, 4/217/861 | 76 s, 4/217/861 | 82/5/51/43/63/66/51 s, all edits seen, QA 4/217/861 | 88 s | 82 s | REGRESSION: F1 only (I1/I2). W2=F2, W6=F6, W6=I1 same |
 | TEHIK-EE/ig-ee-vris | c1741f186c | 7600m | 121 s (R1b) | 95/876/216 | 136 s, 95/876/216 | 118 s, 95/876/216 | 129/2/95/101/100/102/98 s, all edits seen, QA 95/876/216 | 123 s | 126 s | REGRESSION: F1 only (I1/I2). W2=F2, W6=F6, W6=I1 same |
-| HL7/davinci-pct | 7d64232695 | 7600m | 274 s | 0/9/2 | | | | | | pending |
+| HL7/davinci-pct | 7d64232695 | 7600m | 274 s | 0/9/2 | 206 s, 0/9/2 | 193 s, 0/9/2 | 200/33/133/115/190/164/173 s, all edits seen, QA 0/9/2 | 210 s | 207 s | REGRESSION: F1 only (I1/I2). pre-existing diffs: W2 vs F2 us-core link form in package-combined.tgz (see note), us-npi display (as usps). W6=F6, W6=I1 same |
 | Interop-Sante/hl7.fhir.fr.core | 0e518baa85 | 7600m | 295 s | 165/337/6283 | 260 s, 165/337/6283 | 263 s, 165/337/6283 | 262/7/256/228/238/270/232 s, all edits seen, QA 165/337/6283 | 264 s | 266 s | REGRESSION: F1 only (I1/I2, en/fr llms.txt, ai.zip, full-ig.zip). W2=F2, W6=F6, W6=I1 same. Rapido reused 0 html checks for W2..W6 ("check is set up differently (tableUuid)"), output still correct |
 
 ## Findings
@@ -20,11 +22,15 @@ Reference jar: origin/master 32046bcdd9. Integration jar: `qa/integration-ready`
 
 - **usps NamingSystem choice (pre-existing, not counted as a finding).** Narratives that show an identifier link `NamingSystem-<x>.html` from whichever hl7.terminology package the build picks (5.0.0, 6.2.0, 7.1.0, 7.2.0, 7.5.0 seen), and the link text is that version's title or name. Two master full builds (R1, R1b) already differ this way, so cmp masks these links. In the first int watch session, after W2, the `us-npi` reference display read `NPI` (name, from an r4 package) where every full build (master and int) and the master watch showed the r5 title; a second int watch session on the same edits gave the title, and its W2 output equals F2. Treated as the same master nondeterminism.
 
+- **pct W2 vs F2, us-core link form (pre-existing, not counted as a finding).** In `package-combined.tgz` (and its copy in `full-ig.zip`), the `comment` markdown of the dependency SDs `us-core-{location,practitioner,documentreference,servicerequest}-7.0.0` keeps the relative `[Location](location.html#)` after the W2 watch rebuild, where full builds (master and int) and the W6 rebuild have `http://hl7.org/fhir/R4/location.html#`. Master watch W2 on the same edit gives exactly the same relative links, so this is master watch behavior.
+- **pct master watch cannot start (pre-existing; int fixes it).** With master.jar, `-rapido -watch` on davinci-pct fails its first build: the Da Vinci template ant step copies `output/en/index.html`, but master's watch writes pages to `temp/pages/.watch-output` first, so the file is missing ("Publishing Content Failed"). int.jar builds and watches it fine. For the check above, master watch was run with `output/` seeded from a master full build of the same commit (W1, W2 only).
+
 ## Method notes
 - Watch edits per IG (W1 page sentence, W2 profile `^short` or VS description, W3 example value in an instance referenced by others, W4 new instance file, W5 delete it, W6 restore all) in one `-rapido -watch` session; output/ fully snapshotted after W2 and W6, input snapshotted after each step. F2/F6 are full builds of the W2/W6 input snapshots, run after the watch session (the watch is not stopped between W2 and W3).
 - MADFSH has no profiles or examples on master: W2 edits the sushi-config description, W3 skipped.
 - QA counts differ from build.fhir.org for sact, vris, fr.core: tx.fhir.org answers seen from here (code systems/SNOMED editions not held). Reference is our own R1, so this does not affect the comparisons.
 - fr.core: first I1/I2/W ran into a full disk (No space left on device); all three were redone from scratch, results above are the clean reruns.
+- Watch W2..W6 on vris, fr.core (5 of 6 steps) and sact (2) log "Rapido Mode: the html checks of 0 of N files are reused ... the check is set up differently (tableUuid)": html check reuse is lost after the first edit there. Output is correct; only a performance note.
 - vris: first R1 had 439 tx.fhir.org 502 Bad Gateway errors; rebuilt as R1b, which is the reference.
 - fr.core: template `https://github.com/Interop-Sante/ig-style` cannot be downloaded as a zip through this VM's proxy (403); ig.ini points at a local git clone of it (104d205) for every build, both jars.
 - Comparison masks, calibrated on two master builds of xshare (equal after masking): dates/times, UUIDs, run folder, xlsx/pack/zip/tgz compared per entry, package.db as sorted rows, key/line order of `*-list.json` and `*-ref-*-list.csv` and the order inside their "used by" lists, skipped qa*, fragment-usage-analysis.*, and archive entries `spec.internals`, `version.info`, `package/.index.db` (master is not deterministic here: `.index.db` ResourceList was empty in one master run and filled in the other).
