@@ -15,7 +15,7 @@ Status: in progress (Phase C)
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | IHE/ITI.DIS | 5a37d30b52 | 7600m | 103 | 0/23/119 | 74 | 66 | 66, 10/37/32/43/39/30 (all edits seen) | 60 | 60 | 0/23/119 | REGRESSION (order only, looks intended): llms.txt/llms.md page order, HL7 #1461 watch-page-rebuild (in base). pre-existing diffs: THO version in a NamingSystem narrative link, package .index.db rows, used-by list order |
 | hl7germany/medication-ig-de-r4 | 06c8d75d78 | 7600m | 174 | 1673/2112/815 | 150 | 168 | 143, 12/107/98/131/130/106 (all edits seen) | 144 | 144 | 1673/2112/815 | REGRESSION (order only, looks intended): llms.txt/llms.md page order, HL7 #1461 (as dis). pre-existing diffs: package .index.db rows, tx.fhir.org bcp:47 expansion display in package-combined.tgz, used-by list order |
-| HL7/davinci-pdex-formulary | 549af4d87a | 7600m | 116 | 0/0/22 | | | | | | | |
+| HL7/davinci-pdex-formulary | 549af4d87a | 7600m | 116 | 0/0/22 | 117 | 95 | 114, 5/61/59/76/74/63 (all edits seen, see notes) | 115 | 114 | 0/0/22 | pending master watch: W2-only link difference. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48 |
 | ahdis/ch-ekm | cb48773900 | 7600m | 315 | 794/8352/4461 | | | | | | | |
 | HL7/phd | 565d3336a2 | 7600m | 100 | 0/0/2 | | | | | | | |
 | TWNHIFHIR/empd | 988d8dbbaf | 7600m | 209 | 0/0/0 | | | | | | | |
@@ -34,3 +34,10 @@ Status: in progress (Phase C)
 ### medde
 - QA counts and messages equal in every build. Every int build equals every other int build (I1 = I2, W2 = F2, W6 = F6, W6 = I1).
 - vs R1: package.tgz `.index.db` rows (28 vs 0), and package-combined.tgz ValueSet-all-languages (tx.fhir.org bcp:47 expansion) display "Interlingua (International Auxiliary Language" in R1 vs "... Association)" in every int build. Master rerun M1 (fresh, 155 s) has the int values for both, so both are pre-existing (they vary between master runs). int vs M1: order only (llms.txt page order, as dis; used-by lists).
+
+### formulary
+- QA counts and messages equal in every build.
+- I1, I2 vs R1: only spec.internals (definitions.*.zip, package*.tgz other/, validator*.pack): int lists 554 targets, master 641; the 87 missing are `*.ai.html` pages, which are in neither output (the AI step deletes them). Commit 349fc12 "spec.internals doesn't list the ai pages the AI step removes", PR #48 perf/watch-fsh-tail, also in the base. Same as s2/s4. Repro: full build with int.jar vs master.jar, diff `targets` in output/definitions.json.zip!spec.internals.
+- Watch: this IG renders pages into output/en/ (output/*.html are redirect stubs), so the spec's html checks reported MISSING for W1/W2/W4. Against output/en/: every edit reached output (manifest hashes after each step, snapshots): W1 changed en/background.html and W6 restored its W0 hash, W4 created en/Patient-qa-new-patient.html, W5 removed it. Specs of chekm/phd/eps fixed to check output/en/ before their runs.
+- W6 = F6 = I1 except comparison-v2.1.0 error pages (two profiles fail to compare on both jars): the stack trace in the page has extra frames (`Publisher.completeBuild`) when built in watch mode. Line numbers masked.
+- W2 vs F2: in the W2 snapshot only, package-combined.tgz StructureDefinition-us-core-location-7.0.0.json Location.address.type comment links `location.html#` instead of `http://hl7.org/fhir/R4/location.html#`, and one package.db CodeSystemListRefs row for insuranceplan-type links R4 instead of THO 7.5.0. Master watch rerun pending.
