@@ -29,10 +29,10 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
-import java.lang.reflect.Field;
 import java.net.URI;
 import java.net.URL;
 import java.net.URLConnection;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.SimpleDateFormat;
@@ -198,27 +198,31 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     WatchSession session = null;
     JekyllDriver jekyllDriver = null;
     List<FileChangeMonitor.MonitoredPath> watched = null;
+    Path watchRoot = null;
+    // in watch mode, what a module's pre-processing wrote in input, in any build so far
+    Set<Path> moduleOutputs = new HashSet<>();
     // settings that a build adds to: each build starts again from what the command line said
     List<String> cliNoNarratives = new ArrayList<>(settings.getNoNarratives());
     List<String> cliNoValidate = new ArrayList<>(settings.getNoValidate());
     try {
       if (settings.isWatchMode()) {
-        String igDir = new File(rootDir).isFile() ? FileUtilities.getDirectoryForFile(rootDir) : rootDir;
+        watchRoot = watchRoot(rootDir);
+        Path igIni = new File(rootDir).isFile() ? Paths.get(rootDir).toAbsolutePath().normalize() : watchRoot.resolve("ig.ini");
         watched = new ArrayList<>(Arrays.asList(
-                FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "ig.ini"))),
-                FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "sushi-config.yaml"))),
-                FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "publication-request.json"))),
-                FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "sushi-ignoreWarnings.txt"))),
-                FileChangeMonitor.MonitoredPath.file(Paths.get(Utilities.path(igDir, "fsh.ini"))), // which SUSHI to run
-                FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(igDir, "input"))),
-                FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(igDir, "fsh"))), // SUSHI's older layout
-                FileChangeMonitor.MonitoredPath.recursive(Paths.get(Utilities.path(igDir, "fsh-generated")))));
+                FileChangeMonitor.MonitoredPath.file(igIni),
+                FileChangeMonitor.MonitoredPath.file(watchRoot.resolve("sushi-config.yaml")),
+                FileChangeMonitor.MonitoredPath.file(watchRoot.resolve("publication-request.json")),
+                FileChangeMonitor.MonitoredPath.file(watchRoot.resolve("sushi-ignoreWarnings.txt")),
+                FileChangeMonitor.MonitoredPath.file(watchRoot.resolve("fsh.ini")), // which SUSHI to run
+                FileChangeMonitor.MonitoredPath.recursive(watchRoot.resolve("input")),
+                FileChangeMonitor.MonitoredPath.recursive(watchRoot.resolve("fsh")), // SUSHI's older layout
+                FileChangeMonitor.MonitoredPath.recursive(watchRoot.resolve("fsh-generated"))));
         monitor = new FileChangeMonitor(watched);
         List<Path> paths = new ArrayList<>();
         for (FileChangeMonitor.MonitoredPath p : watched) {
           paths.add(p.getPath());
         }
-        session = new WatchSession(Paths.get(igDir), paths);
+        session = new WatchSession(watchRoot, paths);
         session.setLog(this::log);
         PackageListFetcher.rememberFetches();
         jekyllDriver = JekyllDriver.forCommand(settings.jekyllCommand);
@@ -251,10 +255,21 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
             log("");
             log("Stack Dump (for debugging):");
             e.printStackTrace();
+            recordWatchFailure(e);
+            try {
+              session.buildFailed();
+            } catch (IOException e2) {
+              log("Unable to read the watched files after the failure (saving a file without changing it won't build again): " + e2.getMessage());
+            }
           }
         }
         first = false;
         if (session != null) {
+          if (pf.moduleWrites != null) {
+            // what the module wrote in input is the build's, not a change
+            moduleOutputs.addAll(pf.moduleWrites);
+            session.buildWrote(moduleOutputs);
+          }
           List<Path> added = session.takeNotMonitored();
           if (!added.isEmpty()) {
             // the build loaded its template from a local folder
@@ -265,7 +280,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
             monitor = new FileChangeMonitor(watched);
           }
         }
-      } while (session != null && waitForChanges(monitor, session));
+      } while (session != null && waitForChanges(monitor, session, buildOutputs(watchRoot), moduleWrites(watchRoot, moduleOutputs)));
     } finally {
       discardPageRebuild();
       if (jekyllDriver != null) {
@@ -273,7 +288,12 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       }
       generator.setWatchTools(null, null);
       if (monitor != null) {
-        monitor.close();
+        // its thread would keep the JVM running
+        try {
+          monitor.close();
+        } catch (IOException e) {
+          System.out.println("Unable to close the file monitor: " + e.getMessage());
+        }
       }
       if (session != null) {
         PackageListFetcher.forgetFetches();
@@ -292,28 +312,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     settings.getNoValidate().addAll(cliNoValidate);
     HierarchicalTableGenerator.ACTIVE_TABLES = false;
     HierarchicalTableGenerator.uuid = UUIDUtilities.makeUuidLC();
-    resetComparisonIds();
-  }
-
-  /**
-   * The comparisons (previous version, IPA, IPS, imposes) are numbered by a counter that only a fresh start resets
-   * (ResourceComparer.counter): without this, a rebuild names their pages sd-21-..., sd-22-..., where a build writes
-   * sd-1-..., sd-2-.... If it can't be reset (the core library changed), the rebuild fails rather than write pages
-   * under other names than a build does
-   */
-  static void resetComparisonIds() {
-    resetCounter(ResourceComparer.class, "counter");
-  }
-
-  static void resetCounter(Class<?> c, String field) {
-    try {
-      Field f = c.getDeclaredField(field);
-      f.setAccessible(true);
-      f.setInt(null, 0);
-    } catch (Exception e) {
-      throw new IllegalStateException("Watch mode can't rebuild: unable to reset " + c.getName() + "." + field
-          + ", which numbers the comparison pages (" + e + "); restart the publisher instead", e);
-    }
+    ResourceComparer.resetCounter(); // comparison page ids
   }
 
   private void discardPageRebuild() {
@@ -359,6 +358,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     processor.setPf(pf);
     generator.setPf(pf);
     pf.tt = new TimeTracker();
+    // in watch mode the staging folder is synced into the output folder again at the end
+    pf.watchOutputSynced = false;
     try {
       IniFile buildTracker = new IniFile(Utilities.path(pf.vsCache, ".build-tracker.ini"));
       TimeTracker.Session tts = pf.tt.start("generate");
@@ -367,7 +368,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       List<String> written = generator.regeneratePages(pages);
       state.prepareTemp(written);
       generator.finishGenerate(state, written);
-      finishIg(state.getUncsList(), buildTracker, tts);
+      finishIg(state.getUncsList(), buildTracker, tts, true);
     } catch (Exception | Error e) {
       // (such as a page written twice: but running out of memory isn't something a complete build would help with)
       if (BuildFailures.isFatal(e)) {
@@ -382,7 +383,12 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       state.discard();
       return false;
     } finally {
-      saveTerminologyCache();
+      try {
+        saveTerminologyCache();
+      } catch (RuntimeException e) {
+        // not a reason to build again
+        log("Unable to save the terminology cache: " + e);
+      }
     }
     pageRebuild = state;
     return true;
@@ -431,12 +437,47 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   }
 
   /**
+   * the IG's folder, for watch mode: -ig names it, or its ig.ini
+   */
+  static Path watchRoot(String configFile) {
+    File f = new File(configFile).getAbsoluteFile();
+    return (f.isFile() ? f.getParentFile() : f).toPath().normalize();
+  }
+
+  /**
+   * the watched files and folders that this build wrote to, so that what it wrote doesn't start another build
+   */
+  private List<Path> buildOutputs(Path watchRoot) {
+    List<Path> outputs = new ArrayList<>();
+    if (pf.isSushi) {
+      outputs.add(watchRoot.resolve("fsh-generated"));
+    }
+    return outputs;
+  }
+
+  /**
+   * what a module that pre-processes the IG wrote in input (e.g. the cross-version module): the edits in input are then
+   * found by comparing its files with how they were before the module ran. What it wrote is known by path, from this
+   * build and those before (on Windows, a file it hasn't closed may not look changed yet), so a user's edit made while
+   * it ran, to a file it also writes, is taken for its own. It doesn't write FSH, so input/fsh is watched as usual
+   */
+  private FileChangeMonitor.FolderWrites moduleWrites(Path watchRoot, Set<Path> moduleOutputs) {
+    if (pf.moduleWrites == null) {
+      return null;
+    }
+    moduleOutputs.addAll(pf.moduleWrites);
+    return new FileChangeMonitor.FolderWrites(watchRoot.resolve("input"), pf.inputBeforeModule, moduleOutputs,
+        List.of(watchRoot.resolve("input").resolve("fsh")));
+  }
+
+  /**
    * Waits until the content of a watched file is different from what the last build started with. Files that were
    * saved without being changed, and files the build itself wrote, don't count
    */
-  private boolean waitForChanges(FileChangeMonitor monitor, WatchSession session) throws InterruptedException, IOException {
+  private boolean waitForChanges(FileChangeMonitor monitor, WatchSession session, List<Path> buildOutputs,
+      FileChangeMonitor.FolderWrites moduleWrites) throws InterruptedException, IOException {
     // monitoring is started before looking for changes made while the build ran, so that nothing is missed in between
-    monitor.startMonitoring();
+    monitor.startMonitoring(buildOutputs, moduleWrites);
     try {
       SourceSnapshot.Changes changes = session.changesSinceBuildStart();
       if (changes.isEmpty()) {
@@ -452,6 +493,12 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
             Thread.sleep(250);
           } while (monitor.hasChanges() && System.currentTimeMillis() < giveUp);
           changes = session.changesSinceBuildStart();
+          if (changes.isEmpty() && session.savedSinceFailure()) {
+            System.out.println("=== File saved after the build failed: building again ===");
+            return true;
+          }
+        } else if (!monitor.isWatching()) {
+          throw new IllegalStateException("No longer watching for changes (see the error above): run the IG Publisher again");
         } else {
           Thread.sleep(100);
         }
@@ -519,8 +566,12 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       FileUtilities.stringToFile(makeTemplateQAPage(), Utilities.path(pf.outputDir, "qa.html"));
 
       if (settings.getMode() != PublisherUtils.IGBuildMode.AUTOBUILD) {
-        pf.pcm.addPackageToCache(pf.templateInfo.asString("name"), pf.templateInfo.asString("version"), new FileInputStream(pf.npm.filename()), Utilities.path(pf.outputDir, "package.tgz"));
-        pf.pcm.addPackageToCache(pf.templateInfo.asString("name"), "dev", new FileInputStream(pf.npm.filename()), Utilities.path(pf.outputDir, "package.tgz"));
+        try (FileInputStream in = new FileInputStream(pf.npm.filename())) {
+          pf.pcm.addPackageToCache(pf.templateInfo.asString("name"), pf.templateInfo.asString("version"), in, Utilities.path(pf.outputDir, "package.tgz"));
+        }
+        try (FileInputStream in = new FileInputStream(pf.npm.filename())) {
+          pf.pcm.addPackageToCache(pf.templateInfo.asString("name"), "dev", in, Utilities.path(pf.outputDir, "package.tgz"));
+        }
       }
     } catch (Exception e) {
       e.printStackTrace();
@@ -636,7 +687,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         pageRebuild.setUncsList(uncsList);
       }
       generator.generate();
-      finishIg(uncsList, buildTracker, tts);
+      finishIg(uncsList, buildTracker, tts, false);
     } catch (Exception e) {
       try {
         recordOutcome(e, null);
@@ -653,8 +704,93 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     }
   }
 
-  /** What the build does once the output has been generated and checked: the IG wide qa pages, and qa.html */
-  private void finishIg(Map<String, String> uncsList, IniFile buildTracker, TimeTracker.Session tts) throws Exception {
+  private String stagedPath(String path) {
+    return stagedPath(path, pf.watchOutputDir, pf.outputDir);
+  }
+
+  /**
+   * in watch mode, a path in the output folder is written in the staging folder that the build writes to
+   */
+  static String stagedPath(String path, String watchOutputDir, String stagingDir) {
+    if (watchOutputDir != null) {
+      Path out = Paths.get(watchOutputDir).toAbsolutePath().normalize();
+      Path p = Paths.get(path).toAbsolutePath().normalize();
+      if (p.startsWith(out)) {
+        return Paths.get(stagingDir).toAbsolutePath().normalize().resolve(out.relativize(p)).toString();
+      }
+    }
+    return path;
+  }
+
+  /**
+   * in watch mode, moves what changed from the staging folder into the output folder, and deletes what the build no
+   * longer produced. The build itself succeeded, so a failure here is logged rather than failing it
+   */
+  private void syncWatchOutput() {
+    if (pf.watchOutputDir == null) {
+      return;
+    }
+    long start = System.nanoTime();
+    OutputFolderSync.Result r;
+    try {
+      // a Jekyll kept running writes only what changed into the staging folder, so it keeps the whole output
+      r = OutputFolderSync.sync(Paths.get(pf.outputDir), Paths.get(pf.watchOutputDir), generator.keepsJekyllRunning());
+      pf.watchOutputSynced = true;
+    } catch (IOException e) {
+      log("Unable to update "+ pf.watchOutputDir +" (it still has the output of the last build that succeeded): "+e);
+      return;
+    }
+    for (String s : r.getFailures()) {
+      log("  "+s);
+    }
+    log("Updated "+ pf.watchOutputDir +": "+r.getWritten()+" written, "+r.getDeleted()+" deleted, "+r.getUnchanged()+" unchanged"
+        +(r.getFailures().isEmpty() ? "" : ", "+r.getFailures().size()+" failed (tried again on the next rebuild)")
+        +" ("+DurationUtil.presentDuration(System.nanoTime() - start)+")");
+  }
+
+  /**
+   * in watch mode, a failed build isn't synced, but what reads qa.json in the output folder should see that it failed
+   */
+  private void recordWatchFailure(Throwable e) {
+    if (pf == null || pf.watchOutputDir == null || settings.getDestDir() != null) {
+      return;
+    }
+    if (pf.watchOutputSynced) {
+      // it failed after the output folder was brought up to date
+      return;
+    }
+    log("The build failed, so the pages in "+ pf.watchOutputDir +" are still those of the last build that succeeded");
+    if (!new File(pf.outputDir, "qa.json").exists()) {
+      // an Error, or a failure before the IG was loaded
+      recordOutcome(e instanceof Exception ? (Exception) e : new Exception(e.toString(), e), null);
+    }
+    try {
+      recordFailure(Paths.get(pf.outputDir), Paths.get(pf.watchOutputDir));
+    } catch (IOException ex) {
+      log("Unable to record the failure in "+ pf.watchOutputDir +"/qa.json: "+ex);
+    }
+  }
+
+  /**
+   * puts the failed build's qa.json in the output folder, or, if it didn't write one, removes the last one there (as
+   * when the output folder was emptied for each build)
+   */
+  static void recordFailure(Path staging, Path output) throws IOException {
+    Path staged = staging.resolve("qa.json");
+    Path qa = output.resolve("qa.json");
+    if (Files.exists(staged)) {
+      OutputFolderSync.move(staged, qa);
+    } else {
+      Files.deleteIfExists(qa);
+    }
+  }
+
+  /**
+   * What the build does once the output has been generated and checked: the IG wide qa pages, and qa.html. A page
+   * rebuild (see rebuildPages()) leaves Rapido's state as the last build saved it, so the next build renders the
+   * changed pages again
+   */
+  private void finishIg(Map<String, String> uncsList, IniFile buildTracker, TimeTracker.Session tts, boolean pageRebuilt) throws Exception {
     clean();
     pf.dependentIgFinder.finish(pf.outputDir, pf.sourceIg.present());
     List<FetchedResource> fragments = new ArrayList<>();
@@ -662,14 +798,14 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     checkForSnomedVersion();
     if (pf.txLog != null) {
       if (ManagedFileAccess.file(pf.txLog).exists()) {
-         FileUtilities.copyFile(pf.txLog, Utilities.path(pf.rootDir, "output", "qa-tx.html"));
+         FileUtilities.copyFile(pf.txLog, stagedPath(Utilities.path(pf.rootDir, "output", "qa-tx.html")));
       }
     }
     deleteDuplicateMessages();
     ValidationPresenter val = new ValidationPresenter(pf.version, workingVersion(), pf.igpkp, pf.rootDir, pf.npmName,
         IGVersionUtil.getVersion(), fetchCurrentIGPubVersion(), pf.realmRules, pf.previousVersionComparator, pf.ipaComparator, pf.ipsComparator,
         new DependencyRenderer(pf.pcm, pf.outputDir, pf.npmName, pf.templateManager, pf.dependencyList, pf.context, pf.markdownEngine, pf.rc, pf.specMaps, pf.effectiveBaseIg).setFetchedPackageLists(pf.fetchedPackageLists).render(pf.getEffectiveBaseIg(), true, false, false), new HTAAnalysisRenderer(pf.context, pf.outputDir, pf.markdownEngine).render(pf.packageId(), pf.fileList, pf.publishedIg.present()),
-        new PublicationChecker(pf.repoRoot, pf.historyPage, pf.markdownEngine, findReleaseLabelString(), pf.getEffectiveBaseIg(), pf.relatedIGs).check(), renderGlobals(), pf.copyrightYear, pf.context, scanForR5Extensions(), pf.modifierExtensions,
+        new PublicationChecker(pf.repoRoot, pf.historyPage, pf.markdownEngine, findReleaseLabelString(), pf.getEffectiveBaseIg(), pf.relatedIGs).setOutputFolder(stagedPath(Utilities.path(pf.repoRoot, "output"))).check(), renderGlobals(), pf.copyrightYear, pf.context, scanForR5Extensions(), pf.modifierExtensions,
         generateDraftDependencies(), pf.noNarrativeResources, pf.noValidateResources, settings.isValidationOff(), settings.isGenerationOff(), pf.dependentIgFinder, pf.context.getTxClientManager(),
         fragments, makeLangInfo(), pf.relatedIGs);
     val.setValidationFlags(pf.hintAboutNonMustSupport, pf.anyExtensionsAllowed, pf.checkAggregation, pf.autoLoad, pf.showReferenceMessages, pf.noExperimentalContent, pf.displayWarnings);
@@ -680,11 +816,12 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     log("Generating QA");
     log("Validation output in "+val.generate(pf.sourceIg.getName(), pf.errors, pf.fileList, Utilities.path(settings.getDestDir() != null ? settings.getDestDir() : pf.outputDir, "qa.html"), pf.suppressedMessages, pinSummary()));
     recordOutcome(null, val);
-    if (pf.rapido != null) {
+    if (pf.rapido != null && !pageRebuilt) {
       pf.rapido.save();
     }
     buildTracker.setBooleanProperty("status", "complete", true, null);
     buildTracker.save();
+    syncWatchOutput();
     log("Finished @ "+nowString()+". Max Memory Used = "+Utilities.describeSize(pf.maxMemory)+logSummary());
   }
 
@@ -1131,13 +1268,14 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     }
     buildTracker.setBooleanProperty("status", "complete", false, null);
     buildTracker.setBooleanProperty("status", "started", true, null);
-
     buildTracker.save();
 
     // in watch mode, each build saves what it claims in the temp folder; in a differential build, what the last build
     // claimed and this one neither writes nor claims is deleted before Jekyll runs (see
-    // PublisherGenerator.deleteStaleTempFiles()). A differential build has to be able to tell what's left there
-    StaleTempFiles staleTemp = new StaleTempFiles(pf.tempDir, Arrays.asList(Utilities.path(pf.tempDir, "_rapido")));
+    // PublisherGenerator.deleteStaleTempFiles()). A differential build has to be able to tell what's left there. The
+    // output staging folder is the output, not what Jekyll reads (see PublisherIGLoader.setUpWatchOutput())
+    StaleTempFiles staleTemp = new StaleTempFiles(pf.tempDir, Arrays.asList(Utilities.path(pf.tempDir, "_rapido"),
+        Utilities.path(pf.tempDir, PublisherIGLoader.WATCH_OUTPUT_STAGING)));
     if (!settings.isWatchMode()) {
       // this build won't save what it claims, nor clean up after the last build
       staleTemp.forget();
@@ -1246,11 +1384,11 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       CompressionUtilities.zipSlipProtect(n, Path.of(dir));
       FileUtilities.createDirectory(dir);
 
-      FileOutputStream output = new FileOutputStream(filename);
-      int len = 0;
-      while ((len = zip.read(buffer)) > 0)
-        output.write(buffer, 0, len);
-      output.close();
+      try (FileOutputStream output = new FileOutputStream(filename)) {
+        int len = 0;
+        while ((len = zip.read(buffer)) > 0)
+          output.write(buffer, 0, len);
+      }
     }
     zip.close();
   }
@@ -1302,9 +1440,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     URL url = URI.create(address).toURL();
     URLConnection c = url.openConnection();
     InputStream s = c.getInputStream();
-    FileOutputStream f = new FileOutputStream(filename);
-    transfer(s, f, 1024);
-    f.close();   
+    try (FileOutputStream f = new FileOutputStream(filename)) {
+      transfer(s, f, 1024);
+    }
   }
 
   public static void transfer(InputStream in, OutputStream out, int buffer) throws IOException {
@@ -1324,7 +1462,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   }
 
   public String getQAFile() throws IOException {
-    return Utilities.path(pf.outputDir, "qa.html");
+    return Utilities.path(finalOutputDir(), "qa.html");
   }
 
 
@@ -1407,7 +1545,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         s = s + " " + removePassword(args, i);
       }
       System.out.println(s);
-      System.out.println("character encoding = " + java.nio.charset.Charset.defaultCharset() + " / " + System.getProperty("file.encoding"));
+      System.out.println("character encoding = " + java.nio.charset.Charset.defaultCharset() + " / " + System.getProperty("file.encoding") + ", file names = " + System.getProperty("sun.jnu.encoding"));
       FilesystemPackageCacheManager pcm = CliParams.hasNamedParam(args, "system")
               ? new FilesystemPackageCacheManager.Builder().withSystemCacheFolder().build()
               : new FilesystemPackageCacheManager.Builder().build();
@@ -1424,7 +1562,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
 //        pgen.setPattern(getNamedParam(args, "-pattern"));
 //      }
 //      pgen.execute();
-    } else if (CliParams.hasNamedParam(args, "-help") || CliParams.hasNamedParam(args, "-?") || CliParams.hasNamedParam(args, "/?") || CliParams.hasNamedParam(args, "?") || args.length == 0) {
+    } else if (CliParams.hasNamedParam(args, "-help") || CliParams.hasNamedParam(args, "--help") || CliParams.hasNamedParam(args, "-?") || CliParams.hasNamedParam(args, "/?") || CliParams.hasNamedParam(args, "?") || args.length == 0) {
       System.out.println("");
       System.out.println("To use this publisher to publish a FHIR Implementation Guide, run ");
       System.out.println("with the commands");
@@ -1441,6 +1579,11 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       System.out.println("-tx: (optional) Address to use for terminology server ");
       System.out.println("  (default is https://tx.fhir.org)");
       System.out.println("  use 'n/a' to run without a terminology server");
+      System.out.println("  nominating a server turns the terminology ecosystem off unless -ecosystem is given too");
+      System.out.println("");
+      System.out.println("-ecosystem: (optional) Address of the terminology ecosystem coordination server (tx-reg)");
+      System.out.println("  (default is https://ecosystem.hl7.org/tx-reg)");
+      System.out.println("  use 'n/a' to run without the ecosystem (all terminology requests go to the -tx server)");
       System.out.println("");
       System.out.println("-no-network: (optional) Stop the IG publisher accessing the network");
       System.out.println("  Beware: the ig -pubisher will not function properly if the network is prohibited");
@@ -1452,6 +1595,10 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       System.out.println("");
       System.out.println("-packages: a directory to load packages (*.tgz) from before resolving dependencies");
       System.out.println("           this parameter can be present multiple times");
+      System.out.println("");
+      System.out.println("-threads [n]: (optional) let the publisher use up to n threads beyond its own for work");
+      System.out.println("     that it can do in parallel (at most one less than the number of cores), at the cost");
+      System.out.println("     of more load on the machine. The default is 0: the publisher runs on one thread");
       System.out.println("");
       System.out.println("-po: (optional) Load translations from a .po file at runtime. Repeatable.");
       System.out.println("     Overrides shipped properties for the bundle+locale derived from the filename");
@@ -1562,6 +1709,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           Publisher self = new Publisher();
           self.setConfigFile(determineActualIG(ig, null));
           setTxServerValue(args, self);
+          setThreadsValue(args, self);
           if (CliParams.hasNamedParam(args, "-resetTx")) {
             self.settings.setCacheOption(PublisherUtils.CacheOption.CLEAR_ALL);
           } else if (CliParams.hasNamedParam(args, "-resetTxErrors")) {
@@ -1660,6 +1808,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         System.out.println("Running without generation to shorten the run time (editor process only)");
       }
 
+      setThreadsValue(args, self);
+
       // deprecated
       if (CliParams.hasNamedParam(args, "-new-template-format")) {
         self.settings.setNewMultiLangTemplateFormat(true);
@@ -1713,9 +1863,6 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         }
       } else {
         self.setConfigFile(determineActualIG(CliParams.getNamedParam(args, "-ig"), self.settings.getMode()));
-        if (Utilities.noString(self.getConfigFile())) {
-          throw new Exception("No Implementation Guide Specified (-ig parameter)");
-        }
         self.setConfigFile(getAbsoluteConfigFilePath(self.getConfigFile()));
       }
       if (CliParams.hasNamedParam(args, "-jekyll")) {
@@ -1878,14 +2025,41 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     return null;
   }
 
+  /** reads -threads into the settings and, if it was given, says how many extra threads the run may use */
+  private static void setThreadsValue(String[] args, Publisher self) {
+    int cores = Runtime.getRuntime().availableProcessors();
+    self.settings.setThreads(CliParams.getThreads(args, cores));
+    if (CliParams.hasNamedParam(args, CliParams.THREADS)) {
+      System.out.println("Using up to " + self.settings.getThreads() + " extra thread(s) (-threads " + CliParams.getNamedParam(args, CliParams.THREADS).trim() + ", " + cores + " cores)");
+    }
+  }
+
   public static void setTxServerValue(String[] args, Publisher self) {
     if (CliParams.hasNamedParam(args, "-tx")) {
       self.settings.setTxServer(CliParams.getNamedParam(args, "-tx"));
+      // nominating a terminology server turns the ecosystem off - everything goes to that
+      // server - unless an ecosystem is nominated too (and then the nominated server stands
+      // in for tx.fhir.org in the ecosystem's answers)
+      self.settings.setEcosystem(ecosystemValue(args, null));
     } else if (CliParams.hasNamedParam(args, "-devtx")) {
       self.settings.setTxServer(FhirSettings.getTxFhirDevelopment());
+      self.settings.setEcosystem(ecosystemValue(args, FhirSettings.getTxEcosystem()));
     } else {
       self.settings.setTxServer(FhirSettings.getTxFhirProduction());
+      self.settings.setEcosystem(ecosystemValue(args, FhirSettings.getTxEcosystem()));
     }
+  }
+
+  /**
+   * the -ecosystem parameter: the terminology ecosystem coordination server (tx-reg), 
+   * or 'n/a' for none. null (no ecosystem) when there is no terminology server at all
+   */
+  private static String ecosystemValue(String[] args, String dflt) {
+    if (CliParams.hasNamedParam(args, "-ecosystem")) {
+      String e = CliParams.getNamedParam(args, "-ecosystem");
+      return "n/a".equals(e) ? null : e;
+    }
+    return dflt;
   }
 
   private static String generateIGFromSimplifier(String folder, String output, String canonical, String npmName, String license, List<String> packages) throws Exception {
@@ -1958,6 +2132,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
 
 
   public static String determineActualIG(String ig, PublisherUtils.IGBuildMode mode) throws Exception {
+    if (Utilities.noString(ig)) {
+      throw new Exception("No Implementation Guide Specified (-ig parameter)");
+    }
     if (ig.startsWith("http://") || ig.startsWith("https://")) {
       ig = convertUrlToLocalIg(ig);
     }

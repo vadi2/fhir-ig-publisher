@@ -4,7 +4,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -22,7 +21,6 @@ import java.util.function.Consumer;
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.FileNode;
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.FileResult;
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.ResourceNode;
-import org.hl7.fhir.services.elementmodel.Element;
 import org.hl7.fhir.utilities.json.model.JsonArray;
 import org.hl7.fhir.utilities.json.model.JsonObject;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
@@ -271,6 +269,30 @@ class RapidoDependencyAnalyserTest {
     assertEquals(List.of("p2"), o.validate);
   }
 
+  /** a Type/id that two files hold reaches both: a change to either one could change what the reference shows */
+  @Test
+  void aReferenceDependsOnEveryFileWithThatTypeAndId() {
+    Ig ig = new Ig();
+    ig.add("bundle", "Patient", "p1").title("In the bundle");
+    ig.add("patient", "Patient", "p1").title("On its own");
+    ig.add("obs", "Observation", "o1").str("Patient/p1");
+    ig.add("other", "Patient", "p2");
+    assertEquals(List.of("bundle", "obs"), edit(ig, i -> i.get("bundle").title("In the bundle, renamed")).validate);
+    assertEquals(List.of("patient", "obs"), edit(ig, i -> i.get("patient").title("On its own, renamed")).validate);
+  }
+
+  /** versions are ignored: a missed dependency leaves Rapido output stale, an extra one only costs a rebuild */
+  @Test
+  void aVersionedCanonicalDependsOnEveryVersionOfThatUrl() {
+    Ig ig = new Ig();
+    ig.add("lib1", "Library", "lib1").url(B+"/Library/lib").version = "1.0.0";
+    ig.add("lib2", "Library", "lib2").url(B+"/Library/lib").version = "2.0.0";
+    ig.add("group", "Group", "g1").str(B+"/Library/lib|1.0.0");
+    // (each version's url finds the other one too)
+    assertEquals(List.of("lib1", "lib2", "group"), edit(ig, i -> i.get("lib2").title("Version 2")).validate);
+    assertEquals(List.of("lib1", "lib2", "group"), edit(ig, i -> i.get("lib1").title("Version 1")).validate);
+  }
+
   @Test
   void mappingsAreNotRelativeReferences() {
     // base snapshots carry v2 mappings such as XPN/4, which look like Type/id
@@ -381,127 +403,6 @@ class RapidoDependencyAnalyserTest {
     assertEquals(a, RapidoTracker.scanTree(dir.toFile(), skip));
     Files.writeString(dir.resolve("input/x.txt"), "two");
     assertNotEquals(a.get("input/x.txt"), RapidoTracker.scanTree(dir.toFile(), skip).get("input/x.txt"));
-  }
-
-  private static String igJson(String exName, String exDescription, String otherName, String status) {
-    return "{\"resourceType\":\"ImplementationGuide\",\"id\":\"ig\",\"status\":\""+status+"\",\"definition\":{\"resource\":["
-      + "{\"reference\":{\"reference\":\"Patient/ex1\"},\"name\":\""+exName+"\",\"description\":\""+exDescription+"\",\"exampleBoolean\":true},"
-      + "{\"reference\":{\"reference\":\"Patient/missing\"},\"name\":\""+otherName+"\"}]}}";
-  }
-
-  private static String igHash(String json) {
-    byte[] b = RapidoTracker.igSourceForHash(json.getBytes(java.nio.charset.StandardCharsets.UTF_8), Set.of("Patient/ex1", "ImplementationGuide/ig"));
-    return new RapidoDependencyAnalyser.Hasher().add(b).finish();
-  }
-
-  @Test
-  void igEntryNameAndDescriptionOfALoadedResourceAreLeftOutOfTheIgHash() {
-    String base = igHash(igJson("Example 1", "First example", "Other", "draft"));
-    // the loader copies these to the resource, whose own hash has them
-    assertEquals(base, igHash(igJson("Example 1 renamed", "First example, edited", "Other", "draft")));
-    // the entry of a resource that wasn't loaded still counts, and so does the rest of the IG
-    assertNotEquals(base, igHash(igJson("Example 1", "First example", "Other renamed", "draft")));
-    assertNotEquals(base, igHash(igJson("Example 1", "First example", "Other", "active")));
-    assertNotEquals(base, igHash(igJson("Example 1", "First example", "Other", "draft").replace("\"exampleBoolean\":true", "\"exampleBoolean\":false")));
-  }
-
-  private static String igXml(String exName, String otherName, String status) {
-    return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ImplementationGuide xmlns=\"http://hl7.org/fhir\"><id value=\"ig\"/><status value=\""+status+"\"/>"
-      + "<definition><resource><reference><reference value=\"Patient/ex1\"/></reference><name value=\""+exName+"\"/><description value=\"d\"/>"
-      + "<exampleBoolean value=\"true\"/></resource><resource><reference><reference value=\"Patient/missing\"/></reference><name value=\""+otherName+"\"/></resource>"
-      + "</definition></ImplementationGuide>";
-  }
-
-  @Test
-  void igInXmlToo() {
-    String base = igHash(igXml("Example 1", "Other", "draft"));
-    assertEquals(base, igHash(igXml("Example 1 renamed", "Other", "draft")));
-    assertNotEquals(base, igHash(igXml("Example 1", "Other renamed", "draft")));
-    assertNotEquals(base, igHash(igXml("Example 1", "Other", "active")));
-  }
-
-  @Test
-  void igThatCantBeReadCountsAsItIs() {
-    for (String s : new String[] {"<ImplementationGuide", "{\"resourceType\":", "<Patient xmlns=\"http://hl7.org/fhir\"><id value=\"x\"/></Patient>"}) {
-      byte[] b = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-      assertTrue(java.util.Arrays.equals(b, RapidoTracker.igSourceForHash(b, Set.of("Patient/ex1"))), s);
-    }
-  }
-
-  private static Element el(String name, String path, Element... children) {
-    Element e = new Element(name);
-    e.setPath(path);
-    for (Element c : children) {
-      e.getChildList().add(c);
-    }
-    return e;
-  }
-
-  private static Element patient() {
-    return el("Patient", "Patient", el("id", "Patient.id"), el("name", "Patient.name[0]", el("family", "Patient.name[0].family")), el("contact", "Patient.contact[0]"));
-  }
-
-  private static ValidationMessage signpost(String path, String profile) {
-    ValidationMessage vm = new ValidationMessage(Source.InstanceValidator, IssueType.INFORMATIONAL, path, "Validate resource against profile " + profile, IssueSeverity.INFORMATION);
-    vm.setSignpost(true);
-    return vm;
-  }
-
-  /** a reused validation attaches the profiles each element was validated against to the element again, as the qa
-   * page lists them from there (else it lists them from the messages, with a different label) */
-  @Test
-  void signpostsComeBackOnTheirElements() {
-    Element a = patient();
-    ValidationMessage onRoot = signpost("Patient", "http://x/p1");
-    ValidationMessage onName = signpost("Patient.name[0]", "http://x/p2");
-    // one the validator attached without reporting it (e.g. from a slice it tried)
-    ValidationMessage unreported = signpost("Patient.name[0].family", "http://x/p3");
-    List<ValidationMessage> errs = new ArrayList<>(List.of(new ValidationMessage(Source.InstanceValidator, IssueType.CODEINVALID, "Patient.id", "x", IssueSeverity.ERROR), onRoot, onName));
-    a.addMessage(onRoot);
-    a.getChildList().get(1).addMessage(onName);
-    a.getChildList().get(1).getChildList().get(0).addMessage(unreported);
-    JsonArray rec = RapidoTracker.recordSignposts(a, errs);
-
-    // the next build: the same resource, loaded again, and the messages restored
-    Element b = patient();
-    List<ValidationMessage> restored = new ArrayList<>();
-    for (ValidationMessage vm : errs) {
-      restored.add(RapidoTracker.readMessage(RapidoTracker.writeMessage(vm)));
-    }
-    assertTrue(RapidoTracker.restoreSignposts(b, JsonParserRoundTrip.of(rec), restored));
-    assertEquals(1, b.getMessages().size());
-    assertSame(restored.get(1), b.getMessages().get(0));
-    assertSame(restored.get(2), b.getChildList().get(1).getMessages().get(0));
-    ValidationMessage back = b.getChildList().get(1).getChildList().get(0).getMessages().get(0);
-    assertEquals(unreported.getMessage(), back.getMessage());
-    assertTrue(back.isSignpost());
-    assertFalse(b.getChildList().get(0).hasMessages());
-    assertFalse(b.getChildList().get(2).hasMessages());
-  }
-
-  @Test
-  void signpostsDontComeBackOnADifferentTree() {
-    Element a = patient();
-    ValidationMessage onFamily = signpost("Patient.name[0].family", "http://x/p1");
-    a.getChildList().get(1).getChildList().get(0).addMessage(onFamily);
-    JsonArray rec = RapidoTracker.recordSignposts(a, List.of(onFamily));
-    List<ValidationMessage> restored = List.of(signpost("Patient.name[0].family", "http://x/p1"));
-
-    // the element isn't there
-    Element b = el("Patient", "Patient", el("id", "Patient.id"), el("name", "Patient.name[0]"));
-    assertFalse(RapidoTracker.restoreSignposts(b, rec, restored));
-    // something else is there
-    Element c = el("Patient", "Patient", el("id", "Patient.id"), el("name", "Patient.name[0]", el("given", "Patient.name[0].given[0]")));
-    assertFalse(RapidoTracker.restoreSignposts(c, rec, restored));
-    assertFalse(c.getChildList().get(1).getChildList().get(0).hasMessages());
-    // the messages aren't the same
-    assertFalse(RapidoTracker.restoreSignposts(patient(), rec, List.of()));
-    // a record from before signposts were kept
-    assertFalse(RapidoTracker.restoreSignposts(patient(), null, restored));
-    // nothing to attach
-    Element d = patient();
-    assertTrue(RapidoTracker.restoreSignposts(d, RapidoTracker.recordSignposts(patient(), restored), restored));
-    assertFalse(d.hasMessages());
   }
 
   static class Base1 {

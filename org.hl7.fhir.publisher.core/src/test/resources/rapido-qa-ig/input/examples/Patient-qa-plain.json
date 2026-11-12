@@ -1,9 +1,0 @@
-{
-  "resourceType": "Patient",
-  "id": "qa-plain",
-  "name": [
-    {
-      "text": "Plain QA"
-    }
-  ]
-}

@@ -100,6 +100,38 @@ class WatchSessionTest {
   }
 
   @Test
+  void whatTheBuildWroteIsNotAChange() throws IOException {
+    // e.g. what a module's pre-processing wrote in input, while the user edited another file
+    WatchSession s = session();
+    s.startBuild();
+    Path written = dir.resolve("input/resources/Generated.json").toAbsolutePath();
+    Path deleted = dir.resolve("input/images/a.png").toAbsolutePath();
+    write("input/resources/Generated.json", "{}");
+    Files.delete(deleted);
+    write("input/pagecontent/index.md", "# Home, edited");
+    s.buildWrote(Arrays.asList(written, deleted));
+    SourceSnapshot.Changes c = s.changesSinceBuildStart();
+    assertEquals(Collections.singleton(dir.resolve("input/pagecontent/index.md").toAbsolutePath()), c.all());
+  }
+
+  @Test
+  void aSaveAfterAFailedBuildBuildsAgain() throws IOException {
+    // the build may have failed for a reason outside the sources (a server down): saving retries
+    WatchSession s = session();
+    s.startBuild();
+    assertFalse(s.savedSinceFailure(), "the build didn't fail");
+    write("input/pagecontent/index.md", "# Home, written while the build ran");
+    s.buildFailed();
+    assertFalse(s.savedSinceFailure(), "what changed while the build ran is a change, not a save since");
+    write("input/fsh/a.fsh", "Profile: A");
+    Files.setLastModifiedTime(dir.resolve("input/fsh/a.fsh"), FileTime.fromMillis(System.currentTimeMillis() + 5000));
+    assertTrue(s.savedSinceFailure());
+    assertEquals(1, s.changesSinceBuildStart().getModified().size(), "only the page has a change of content");
+    s.startBuild();
+    assertFalse(s.savedSinceFailure(), "a build that starts forgets the failure");
+  }
+
+  @Test
   void withTree() throws IOException {
     session();
     SourceSnapshot before = SourceSnapshot.take(roots(), null);
@@ -234,6 +266,77 @@ class WatchSessionTest {
 
     write("my-template/includes/fragment-footer.html", "<footer/>");
     assertEquals(1, s.changesSinceBuildStart().getAdded().size());
+  }
+
+  @Test
+  void gitAndOutputInALocalTemplateAreNotChanges() throws IOException {
+    // the template is loaded without them (TemplateManager): git activity, or building the template, is no reason to rebuild the IG
+    WatchSession s = session();
+    write("my-template/package/package.json", "{}");
+    write("my-template/.git/index", "1");
+    write("my-template/output/package.tgz", "1");
+    s.startBuild();
+    s.watchTemplateFolders(Collections.singletonList(dir.resolve("my-template").toString()));
+    write("my-template/.git/index", "2");
+    write("my-template/.git/FETCH_HEAD", "new");
+    write("my-template/output/package.tgz", "2");
+    assertTrue(s.changesSinceBuildStart().isEmpty(), s.changesSinceBuildStart().toString());
+    write("my-template/package/package.json", "{\"edited\":true}");
+    assertEquals(1, s.changesSinceBuildStart().getModified().size());
+  }
+
+  @Test
+  void aChangeToASymbolicLinkIsSeen() throws IOException {
+    WatchSession s = session();
+    write("shared/a.md", "a");
+    write("shared/b.md", "bb");
+    Path link = dir.resolve("input/includes/x.md");
+    Files.createDirectories(link.getParent());
+    Files.createSymbolicLink(link, dir.resolve("shared/a.md"));
+    s.startBuild();
+    assertTrue(s.changesSinceBuildStart().isEmpty());
+    Files.delete(link);
+    Files.createSymbolicLink(link, dir.resolve("shared/b.md"));
+    assertEquals(Collections.singleton(link.toAbsolutePath()), s.changesSinceBuildStart().getModified());
+  }
+
+  @Test
+  void aLinkedFolderIsNotRead() throws IOException {
+    // the file monitor doesn't watch it, and what a module writes through it isn't known as the module's
+    WatchSession s = session();
+    write("shared/a.md", "a");
+    Files.createSymbolicLink(dir.resolve("input/shared"), dir.resolve("shared"));
+    s.startBuild();
+    write("shared/a.md", "edited");
+    assertTrue(s.changesSinceBuildStart().isEmpty());
+  }
+
+  @Test
+  void sushiRunsAgainForAnyOfItsInputs() throws IOException {
+    write("fsh.ini", "[FSH]");
+    write("fsh/old.fsh", "Profile: Old");
+    List<Path> roots = new ArrayList<>(roots());
+    roots.add(dir.resolve("fsh.ini"));
+    roots.add(dir.resolve("fsh"));
+    session();
+    WatchSession s = new WatchSession(dir, roots);
+    s.startBuild();
+    s.sushiRan();
+    write("fsh.ini", "[FSH]\nsushi-version = 3.0.0");
+    s.startBuild();
+    assertFalse(s.canSkipSushi(), "fsh.ini says which SUSHI runs");
+    s.sushiRan();
+    write("fsh/old.fsh", "Profile: Old2");
+    s.startBuild();
+    assertFalse(s.canSkipSushi(), "SUSHI's older layout");
+    s.sushiRan();
+    Files.delete(dir.resolve("input/pagecontent/index.md"));
+    s.startBuild();
+    assertFalse(s.canSkipSushi(), "SUSHI lists the pages");
+    s.sushiRan();
+    Files.delete(dir.resolve("fsh-generated/resources/A.json"));
+    s.startBuild();
+    assertFalse(s.canSkipSushi(), "SUSHI's output was deleted");
   }
 
   @Test

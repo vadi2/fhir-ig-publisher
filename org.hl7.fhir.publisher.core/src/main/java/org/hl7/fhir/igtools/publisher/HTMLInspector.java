@@ -21,10 +21,15 @@ package org.hl7.fhir.igtools.publisher;
  */
 
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
+import java.io.Reader;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
@@ -36,6 +41,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Stack;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.TreeMap;
 import java.util.TreeSet;
 
@@ -297,6 +304,8 @@ public class HTMLInspector {
   private Map<String, FragmentUseRecord> fragmentUses = new HashMap<>();
   private List<RelatedIG> relatedIGs;
   private List<ExternalReference> externalReferences = new ArrayList<>();
+  // the same entries, by url, so that adding one doesn't look at all the others
+  private Map<String, List<ExternalReference>> externalReferencesByUrl = new HashMap<>();
   private Map<String, XhtmlNode> imageRefs = new HashMap<>();
   private Map<String, String> copyrights = new HashMap<>();
   // the text of the last parent of a text node with a copyright mark, while the tree hasn't changed since: when a
@@ -528,14 +537,16 @@ public class HTMLInspector {
 
   /** The checks of one file (after the publish box check) */
   private void checkFile(LoadedFile lf, String s, List<ValidationMessage> messages) throws IOException {
-    checkFragmentIds(FileUtilities.fileToString(lf.filename));
+    // read the page once for the fragment checks and the parse
+    String src = FileUtilities.fileToString(lf.filename);
+    checkFragmentIds(src);
 
     if (lf.isHasXhtml()) {
       if (fragmentUses != null) {
-        checkFragmentMarkers(FileUtilities.fileToString(lf.getFilename()));
+        checkFragmentMarkers(src);
       }
       XhtmlParser parser = new XhtmlParser().setMustBeWellFormed(strict);
-      XhtmlNode x = parser.parse(new File(lf.filename), null);
+      XhtmlNode x = parser.parse(src, null);
       // The parse is lenient so that a page with broken markup still gets link checked, heading
       // checked and so on. But the markup IS broken - IG output is XHTML - so report whatever the
       // parser had to fix up to get here, with the line and column it happened at.
@@ -873,9 +884,9 @@ public class HTMLInspector {
     return null;
   }
 
-  /** A path in the output, relative to it (for the log) */
+  /** A path in the output, relative to it, with '/' as in its URL (for the log, which is then the same on every system) */
   private String relative(String path) {
-    return path.startsWith(rootFolder + File.separator) ? path.substring(rootFolder.length() + 1) : path;
+    return path.startsWith(rootFolder + File.separator) ? path.substring(rootFolder.length() + 1).replace(File.separatorChar, '/') : path;
   }
 
   /** Checks a file, recording what it finds */
@@ -1120,9 +1131,9 @@ public class HTMLInspector {
 
   public void saveFile(LoadedFile lf, XhtmlNode x) throws IOException {
     new File(lf.getFilename()).delete();
-    FileOutputStream f = new FileOutputStream(lf.getFilename());
-    new XhtmlComposer(XhtmlComposer.HTML).composeDocument(f, x);
-    f.close();
+    try (FileOutputStream f = new FileOutputStream(lf.getFilename())) {
+      new XhtmlComposer(XhtmlComposer.HTML).composeDocument(f, x);
+    }
   }
 
   private void checkGoneFiles() {
@@ -1159,11 +1170,27 @@ public class HTMLInspector {
     Boolean hl7State = null;
     XhtmlNode x = null;
     boolean htmlName = f.getName().endsWith(".html") || f.getName().endsWith(".xhtml") || f.getName().endsWith(".svg");
+    boolean lr = false;
     try {
-      x = new XhtmlParser().setMustBeWellFormed(strict).parse(f, null);
-      if (x.getElement("html")==null && x.getElement("svg")==null && !htmlName) {
-        // We don't want resources being treated as HTML.  We'll check the HTML of the narrative in the page representation
-        x = null;
+      // files that aren't markup aren't read in full; the parser would give up at the first character
+      if (htmlName || startsWithTag(f)) {
+        String src = FileUtilities.fileToString(f);
+        lr = src.contains("lang-redirects.js");
+        hl7State = src.contains(RELEASE_HTML_MARKER);
+        String rootTag = rootStartTag(src);
+        if (hl7State && (htmlName || isHtmlOrSvg(rootTag))) {
+          // fill in the publish box before parsing, so the page is parsed once, as it is written
+          try {
+            src = fillPublishBox(src, f, getLang(rootTag));
+          } catch (IOException e1) {
+            hl7State = false;
+          }
+        }
+        x = new XhtmlParser().setMustBeWellFormed(strict).parse(src, null);
+        if (x.getElement("html")==null && x.getElement("svg")==null && !htmlName) {
+          // We don't want resources being treated as HTML.  We'll check the HTML of the narrative in the page representation
+          x = null;
+        }
       }
     } catch (FHIRFormatError | IOException e) {
       x = null;
@@ -1172,35 +1199,10 @@ public class HTMLInspector {
         parseProblems.add(f.getName());
       }
     }
-    boolean lr = false;
-    if (x != null) {
-
-      String src;
-      try {
-        src = FileUtilities.fileToString(f);
-        lr = src.contains("lang-redirects.js");
-        hl7State = src.contains(RELEASE_HTML_MARKER);
-        if (hl7State) {
-          String msg = statusMessageDef;
-          String lang = getLang(x);
-          if (statusMessagesLang.containsKey(lang)) {
-            msg = statusMessagesLang.get(lang);
-          }
-          src = src.replace(RELEASE_HTML_MARKER, START_HTML_MARKER + msg + END_HTML_MARKER);
-          if (packageId.startsWith("hl7.") && f.getName().equals("index.html") && isCIBuild) {
-            int index = src.indexOf(END_HTML_MARKER) + END_HTML_MARKER.length();
-            String pl = PLAIN_LANG_INSERTION;
-            pl = pl.replace("{0}", packageId);
-            pl = pl.replace("{1}", version);
-            pl = pl.replace("{2}", HierarchicalTableGenerator.uuid);
-            src = src.substring(0, index) + pl + src.substring(index);
-          }
-          FileUtilities.stringToFile(src, f);
-        }
-        x = new XhtmlParser().setMustBeWellFormed(strict).parse(f, null);
-      } catch (Exception e1) {
-        hl7State = false;
-      }
+    if (x == null) {
+      // not checked as html, so the publish box and language redirect states don't apply
+      hl7State = null;
+      lr = false;
     }
     LoadedFile lf = new LoadedFile(s, getPath(s, base), f.lastModified(), iteration, hl7State, findExemptionComment(x) || Utilities.existsInList(f.getName(), "searchform.html"), x != null);
     lf.isLangRedirect = lr;
@@ -1238,22 +1240,113 @@ public class HTMLInspector {
     //    }
   }
 
-  private String getLang(XhtmlNode x) {
-    if (!"html".equals(x.getName())) {
-      for (XhtmlNode t : x.getChildNodes()) {
-        if ("html".equals(t.getName())) {
-          x = t;
-          break;
-        }
+  private static boolean startsWithTag(File f) throws IOException {
+    try (Reader r = new BufferedReader(new InputStreamReader(new FileInputStream(f), StandardCharsets.UTF_8))) {
+      int c;
+      do {
+        c = r.read();
+      } while (c != -1 && (Character.isWhitespace(c) || c == 0xFEFF));
+      return c == '<';
+    }
+  }
+
+  private String fillPublishBox(String src, File f, String lang) throws IOException {
+    String msg = statusMessageDef;
+    if (statusMessagesLang.containsKey(lang)) {
+      msg = statusMessagesLang.get(lang);
+    }
+    src = src.replace(RELEASE_HTML_MARKER, START_HTML_MARKER + msg + END_HTML_MARKER);
+    if (packageId.startsWith("hl7.") && f.getName().equals("index.html") && isCIBuild) {
+      int index = src.indexOf(END_HTML_MARKER) + END_HTML_MARKER.length();
+      String pl = PLAIN_LANG_INSERTION;
+      pl = pl.replace("{0}", packageId);
+      pl = pl.replace("{1}", version);
+      pl = pl.replace("{2}", HierarchicalTableGenerator.uuid);
+      src = src.substring(0, index) + pl + src.substring(index);
+    }
+    FileUtilities.stringToFile(src, f);
+    return src;
+  }
+
+  /**
+   * The start tag of the root element (e.g. {@code <html lang="en">}), found by skipping the
+   * whitespace, comments, doctype and processing instructions in front of it, as the parser does;
+   * null if the source doesn't start with a tag.
+   */
+  static String rootStartTag(String src) {
+    int i = 0;
+    while (true) {
+      while (i < src.length() && (Character.isWhitespace(src.charAt(i)) || src.charAt(i) == '\uFEFF')) {
+        i++;
       }
+      int end;
+      if (src.startsWith("<!--", i)) {
+        end = src.indexOf("-->", i + 4);
+        end = end < 0 ? -1 : end + 3;
+      } else if (src.startsWith("<!", i) || src.startsWith("<?", i)) {
+        end = src.indexOf('>', i + 2);
+        end = end < 0 ? -1 : end + 1;
+      } else {
+        break;
+      }
+      if (end < 0) {
+        return null;
+      }
+      i = end;
     }
-    if (x.getAttribute("lang") != null) {
-      return x.getAttribute("lang");
+    if (!src.startsWith("<", i)) {
+      return null;
     }
-    if (x.getAttribute("xml:lang") != null) {
-      return x.getAttribute("xml:lang");
+    int end = src.indexOf('>', i);
+    return end < 0 ? null : src.substring(i, end + 1);
+  }
+
+  private static final Pattern ROOT_NAME = Pattern.compile("<([^\\s/>]+)");
+
+  private static String rootName(String rootTag) {
+    if (rootTag == null) {
+      return null;
     }
-    return null;
+    Matcher m = ROOT_NAME.matcher(rootTag);
+    if (!m.lookingAt()) {
+      return null;
+    }
+    // as the parser does, ignore any namespace prefix
+    String name = m.group(1).toLowerCase();
+    return name.substring(name.indexOf(':') + 1);
+  }
+
+  private static boolean isHtmlOrSvg(String rootTag) {
+    return Utilities.existsInList(rootName(rootTag), "html", "svg");
+  }
+
+  /**
+   * The page language: the lang (or else xml:lang) attribute of the root html element, as given in
+   * its start tag; null if the root element isn't html or has neither attribute.
+   */
+  static String getLang(String rootTag) {
+    if (!"html".equals(rootName(rootTag))) {
+      return null;
+    }
+    String lang = attribute(rootTag, LANG_ATTRIBUTE);
+    return lang != null ? lang : attribute(rootTag, XML_LANG_ATTRIBUTE);
+  }
+
+  private static final Pattern LANG_ATTRIBUTE = attributePattern("lang");
+  private static final Pattern XML_LANG_ATTRIBUTE = attributePattern("xml:lang");
+
+  private static Pattern attributePattern(String name) {
+    return Pattern.compile("\\s" + Pattern.quote(name) + "\\s*=\\s*(?:\"([^\"]*)\"|'([^']*)'|([^\\s/>]+))");
+  }
+
+  private static String attribute(String tag, Pattern attribute) {
+    Matcher m = attribute.matcher(tag);
+    String value = null;
+    while (m.find()) {
+      // the parser keeps the last of repeated attributes
+      value = m.group(1) != null ? m.group(1) : m.group(2) != null ? m.group(2) : m.group(3);
+    }
+    return value;
   }
 
   private String getPath(String s, String base) {
@@ -2156,6 +2249,13 @@ public class HTMLInspector {
   private boolean checkResolveLink(String filename, Location loc, String path, String ref, String text, List<ValidationMessage> messages, String uuid, XhtmlNode x, XhtmlNode parent) throws IOException {
     links++;
     String fn = makeLocal(filename);
+    if (!Utilities.isAbsoluteUrl(ref)) {
+      int q = ref.indexOf('?');
+      int h = ref.indexOf('#');
+      if (q >= 0 && (h < 0 || q < h)) {
+        ref = ref.substring(0, q) + (h >= 0 ? ref.substring(h) : "");
+      }
+    }
     String rref;
     try {
       rref = Utilities.URLDecode(ref);
@@ -2240,14 +2340,7 @@ public class HTMLInspector {
     }
     if (specs != null){
       for (SpecMapManager spec : specs) {
-        if (spec.getBase() != null && (spec.getBase().equals(rref) || (spec.getBase()).equals(rref+"/") || (spec.getBase()+"/").equals(rref)|| spec.hasTarget(rref) ||
-                Utilities.existsInList(rref, Utilities.pathURL(spec.getBase(), "definitions.json.zip"),
-                        Utilities.pathURL(spec.getBase(), "full-ig.zip"), Utilities.pathURL(spec.getBase(), "definitions.xml.zip"),
-                        Utilities.pathURL(spec.getBase(), "package.tgz"), Utilities.pathURL(spec.getBase(), "history.html")))) {
-          return true;
-        }
-        if (spec.getBase2() != null && (spec.getBase2().equals(rref) || (spec.getBase2()).equals(rref+"/") ||
-                Utilities.existsInList(rref, Utilities.pathURL(spec.getBase2(), "definitions.json.zip"), Utilities.pathURL(spec.getBase2(), "definitions.xml.zip"), Utilities.pathURL(spec.getBase2(), "package.tgz"), Utilities.pathURL(spec.getBase2(), "full-ig.zip")))) {
+        if (spec.isSpecLink(rref)) {
           return true;
         }
       }
@@ -2394,18 +2487,23 @@ public class HTMLInspector {
           if (f.isLangRedirect) {
             String fn = filename.replace(rootFolder, rootFolder+"/"+csHandler.getPrimaryLang());
             return checkTarget(fn, ref, rref, tgtList, bh, x, parent);
+          } else if (f.targets.contains(name)) {
+            if (use != null) {
+              use.usedAnchor(name, true);
+            }
+            return true;
           } else {
+            // only needed for the message about the link that can't be resolved
             tgtList.append(" (valid targets: "+(f.targets.size() > 40 ? Integer.toString(f.targets.size())+" targets"  :  f.targets.toString())+")");
             for (String s : f.targets) {
               if (s.equalsIgnoreCase(name)) {
                 tgtList.append(" - case is wrong ('"+s+"')");
               }
             }
-            boolean there = f.targets.contains(name);
             if (use != null) {
-              use.usedAnchor(name, there);
+              use.usedAnchor(name, false);
             }
-            return there;
+            return false;
           }
         }
       } else {
@@ -2427,22 +2525,28 @@ public class HTMLInspector {
     if (current != null) {
       current.addExternalRef(new HtmlCheckRecords.ExternalRef(type, ref, x, stripLeadSlash(source.replace(rootFolder, "")), x.allText()));
     }
-    for (ExternalReference exr : externalReferences) {
-      if (exr.getType() == type && exr.getUrl().equals(ref) && x.allText().equals(exr.getXhtml().allText())) {
+    List<ExternalReference> sameUrl = externalReferencesByUrl.computeIfAbsent(ref, k -> new ArrayList<>());
+    for (ExternalReference exr : sameUrl) {
+      if (exr.getType() == type && x.allText().equals(exr.getXhtml().allText())) {
         return;
       }
     }
-    externalReferences.add(new ExternalReference(type, ref, x, stripLeadSlash(source.replace(rootFolder, ""))));
+    ExternalReference exr = new ExternalReference(type, ref, x, stripLeadSlash(source.replace(rootFolder, "")));
+    externalReferences.add(exr);
+    sameUrl.add(exr);
   }
 
   /** Puts back a call to addExternalReference() that a check recorded (see replay()) */
   private void addExternalReference(HtmlCheckRecords.ExternalRef r) {
-    for (ExternalReference exr : externalReferences) {
-      if (exr.getType() == r.type && exr.getUrl().equals(r.ref) && r.text.equals(exr.getXhtml().allText())) {
+    List<ExternalReference> sameUrl = externalReferencesByUrl.computeIfAbsent(r.ref, k -> new ArrayList<>());
+    for (ExternalReference exr : sameUrl) {
+      if (exr.getType() == r.type && r.text.equals(exr.getXhtml().allText())) {
         return;
       }
     }
-    externalReferences.add(new ExternalReference(r.type, r.ref, r.node, r.source));
+    ExternalReference exr = new ExternalReference(r.type, r.ref, r.node, r.source);
+    externalReferences.add(exr);
+    sameUrl.add(exr);
   }
 
   private String stripLeadSlash(String s) {

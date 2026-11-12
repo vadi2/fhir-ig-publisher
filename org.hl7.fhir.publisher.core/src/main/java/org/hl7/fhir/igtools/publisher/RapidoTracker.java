@@ -1,16 +1,24 @@
 package org.hl7.fhir.igtools.publisher;
 
 import java.io.BufferedWriter;
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.OutputStreamWriter;
 import java.io.Writer;
 import java.lang.reflect.Field;
+import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Modifier;
+import java.lang.reflect.Proxy;
+import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.DirectoryIteratorException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Calendar;
@@ -27,17 +35,14 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
-
-import javax.xml.parsers.DocumentBuilderFactory;
-import javax.xml.transform.OutputKeys;
-import javax.xml.transform.Transformer;
-import javax.xml.transform.dom.DOMSource;
-import javax.xml.transform.stream.StreamResult;
+import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.FileNode;
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.FileResult;
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.Hasher;
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.ResourceNode;
+import org.hl7.fhir.model.IModelContext;
 import org.hl7.fhir.model.core.CanonicalResource;
 import org.hl7.fhir.model.core.DateTimeType;
 import org.hl7.fhir.model.core.DomainResource;
@@ -46,13 +51,17 @@ import org.hl7.fhir.model.core.StructureDefinition;
 import org.hl7.fhir.model.core.ValueSet;
 import org.hl7.fhir.model.core.formats.JsonParser;
 import org.hl7.fhir.model.utilities.formats.OutputStyle;
+import org.hl7.fhir.services.client.EFhirClientException;
+import org.hl7.fhir.services.client.ITerminologyClientFactoryN;
+import org.hl7.fhir.services.client.ITerminologyClientN;
 import org.hl7.fhir.services.elementmodel.Element;
+import org.hl7.fhir.standalone.terminology.client.TerminologyClientManager;
 import org.hl7.fhir.utilities.FileUtilities;
+import org.hl7.fhir.utilities.ToolingClientLogger;
 import org.hl7.fhir.utilities.Utilities;
 import org.hl7.fhir.utilities.filesystem.ManagedFileAccess;
 import org.hl7.fhir.utilities.json.model.JsonArray;
 import org.hl7.fhir.utilities.json.model.JsonElement;
-import org.hl7.fhir.utilities.json.model.JsonNumber;
 import org.hl7.fhir.utilities.json.model.JsonObject;
 import org.hl7.fhir.utilities.json.model.JsonPrimitive;
 import org.hl7.fhir.utilities.json.model.JsonProperty;
@@ -60,9 +69,6 @@ import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.xhtml.NodeType;
 import org.hl7.fhir.utilities.xhtml.XhtmlComposer;
 import org.hl7.fhir.utilities.xhtml.XhtmlNode;
-import org.hl7.fhir.utilities.xml.XMLUtil;
-import org.w3c.dom.Document;
-import org.w3c.dom.Node;
 
 /**
  * The state that Rapido keeps between builds, and the decisions made from it.
@@ -116,9 +122,6 @@ public class RapidoTracker {
   private Map<String, Set<String>> stateBefore;
   /** how many of the IG's profiles the resource being validated was known to conform to before it was validated */
   private int profilesBefore;
-  /** how many validations were reused, and why the others weren't, for the log */
-  private int validationsReused;
-  private final Map<String, Integer> validatedAgain = new TreeMap<>();
   /** the date the loader puts on canonical resources that have none; it differs every build */
   private final String buildDate;
 
@@ -168,6 +171,10 @@ public class RapidoTracker {
     }
     if (reason == null && pf.doTransforms) {
       reason = "running transforms";
+    }
+    if (reason == null && !new RapidoOutputs(pf.vsCache, pf.tempDir).isComplete()) {
+      // a reused file's outputs are what it wrote in the temp folder in the last build (see RapidoOutputs)
+      reason = "what the last build wrote in the temp folder isn't all there";
     }
     complete = reason != null;
     if (complete) {
@@ -238,6 +245,9 @@ public class RapidoTracker {
     }
     if (!Integer.valueOf(STATE_VERSION).equals(old.asInteger("version"))) {
       return "state from a different version";
+    }
+    if (old.has("txFailures")) {
+      return "terminology server calls failed in the last build ("+old.asInteger("txFailures")+")";
     }
     JsonObject og = old.getJsonObject("global");
     for (Map.Entry<String, String> e : global.entrySet()) {
@@ -452,20 +462,16 @@ public class RapidoTracker {
     Hasher jar = new Hasher();
     jar.add(IGVersionUtil.getVersion());
     try {
-      File jf = new File(RapidoTracker.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-      jar.add(jf.getAbsolutePath()).add(Long.toString(jf.length())).add(Long.toString(jf.lastModified()));
+      jar.add(codeHash(new File(RapidoTracker.class.getProtectionDomain().getCodeSource().getLocation().toURI())));
+      // run from an IDE or the build, the core libraries are on the class path rather than in the publisher's jar
+      for (String s : String.valueOf(System.getProperty("java.class.path")).split(File.pathSeparator)) {
+        jar.add(codeHash(new File(s)));
+      }
     } catch (Exception e) {
       jar.add(Long.toString(System.nanoTime())); // can't tell what the publisher is, so assume it changed
     }
     global.put("publisher", jar.finish());
-    Set<String> loaded = new HashSet<>();
-    // only an IG loaded from an ig.ini has its entries' names and descriptions copied to the resources
-    for (FetchedFile f : pf.igMode ? pf.fileList : Collections.<FetchedFile>emptyList()) {
-      for (FetchedResource r : f.getResources()) {
-        loaded.add(r.fhirType()+"/"+r.getId());
-      }
-    }
-    global.put("ig", new Hasher().add(igf.getPath()).add(igSourceForHash(igf.getSource(), loaded)).finish());
+    global.put("ig", new Hasher().add(igf.getPath()).add(igf.getSource()).finish());
     // the loader stamps the build date on canonicals that have none, and pages show it ("Draft as of ..."); FHIRPath
     // today() and now() see it too. A page replayed on a later day would show the day it was first rendered
     global.put("date", buildDay(pf.getExecTime()));
@@ -496,22 +502,7 @@ public class RapidoTracker {
     }
     Hasher tmpl = new Hasher();
     boolean[] templateUsesFshIndex = new boolean[1];
-    // a template script that gets the IG gets it as [target]-ig-working.json/xml, written by the build from the IG
-    // (see Template.runScriptTarget()); what it gives back, [target]-ig-updated.json/xml, is what the build goes on
-    // with, so it counts as the IG does
-    Set<String> igCopies = new HashSet<>();
-    File[] tf = new File(Utilities.path(pf.rootDir, "template")).listFiles();
-    for (File f : tf == null ? new File[0] : tf) {
-      if (f.isFile() && f.getName().matches(".+-ig-(working|updated)\\.(json|xml)")) {
-        igCopies.add(canonical(f.getAbsolutePath()));
-      }
-    }
-    hashTree(new File(Utilities.path(pf.rootDir, "template")), tmpl, igCopies, templateUsesFshIndex);
-    for (String f : new TreeSet<>(igCopies)) {
-      if (f.contains("-ig-updated.")) {
-        tmpl.add(f).add(igSourceForHash(Files.readAllBytes(new File(f).toPath()), loaded));
-      }
-    }
+    hashTree(new File(Utilities.path(pf.rootDir, "template")), tmpl, Collections.emptySet(), templateUsesFshIndex);
     global.put("template", tmpl.finish());
     if (!templateUsesFshIndex[0]) {
       // written by sushi on every run, and not read by the publisher or the template
@@ -522,12 +513,56 @@ public class RapidoTracker {
     global.put("other-files", hashOtherFiles(otherFiles));
   }
 
+  /**
+   * The publisher's code: a jar, or (run from an IDE or the build) a folder of classes, whose own length and date don't
+   * change when the classes in it are compiled again
+   */
+  static String codeHash(File f) throws IOException {
+    Hasher h = new Hasher().add(f.getAbsolutePath());
+    if (f.isDirectory()) {
+      try (Stream<Path> s = Files.walk(f.toPath())) {
+        for (Path p : (Iterable<Path>) s.filter(Files::isRegularFile).sorted()::iterator) {
+          File c = p.toFile();
+          h.add(p.toString()).add(Long.toString(c.length())).add(Long.toString(c.lastModified()));
+        }
+      }
+    } else {
+      h.add(Long.toString(f.length())).add(Long.toString(f.lastModified()));
+    }
+    return h.finish();
+  }
+
   private static String hashOtherFiles(Map<String, String> files) {
     Hasher other = new Hasher();
     for (Map.Entry<String, String> e : files.entrySet()) {
       other.add(e.getKey()).add(e.getValue());
     }
     return other.finish();
+  }
+  // getCanonicalPath doesn't resolve links on Windows (JDK-8003887), so it can't spot a loop there
+  private static Path realPath(Path p) {
+    try {
+      return p.toRealPath();
+    } catch (IOException e) {
+      return p.toAbsolutePath().normalize();
+    }
+  }
+
+  /**
+   * whether p is a file to read: on Windows, a file that is a reparse point but not a link (a OneDrive file that is only
+   * online, say) isn't a regular file for java.nio, but is one for java.io and the build. A FIFO or socket is neither.
+   * java.io is asked only when it names the same file: for a name the JVM can't decode, it names another one
+   */
+  private static boolean isFile(Path p) {
+    if (Files.isRegularFile(p)) {
+      return true;
+    }
+    File f = p.toFile();
+    try {
+      return f.toPath().equals(p) && !Files.isDirectory(p) && f.isFile();
+    } catch (InvalidPathException e) {
+      return false;
+    }
   }
 
   private static String canonical(String s) {
@@ -538,157 +573,151 @@ public class RapidoTracker {
     }
   }
 
-  /**
-   * The IG's source, as it goes into the global hash. The loader copies the name and description of each
-   * definition.resource entry to the resource it loads for it (FetchedResource.getResourceName() and
-   * getResourceDescription()), and those are in that resource's own hash, so a change to them makes that resource,
-   * and what depends on it, dirty. They're left out here, so that a change to them alone isn't a complete build: SUSHI
-   * copies an instance's Title and Description, and an extension's title, into its entry. Everything else in the IG
-   * (and the entries for anything that wasn't loaded) still counts; an IG that can't be read counts as it is.
-   *
-   * @param loaded "type/id" of the resources loaded from the IG's files
-   */
-  static byte[] igSourceForHash(byte[] source, Set<String> loaded) {
-    if (source == null || loaded.isEmpty()) {
-      return source;
-    }
-    int i = 0;
-    while (i < source.length && (Character.isWhitespace(source[i]) || (source[i] & 0xFF) == 0xEF || (source[i] & 0xFF) == 0xBB || (source[i] & 0xFF) == 0xBF)) {
-      i++;
-    }
-    try {
-      if (i < source.length && source[i] == '<') {
-        return igXmlForHash(source, loaded);
-      }
-      JsonObject ig = org.hl7.fhir.utilities.json.parser.JsonParser.parseObject(source);
-      if (ig == null || !"ImplementationGuide".equals(ig.asString("resourceType")) || !ig.hasObject("definition")) {
-        return source;
-      }
-      for (JsonObject rg : ig.getJsonObject("definition").forceArray("resource").asJsonObjects()) {
-        JsonObject ref = rg.getJsonObject("reference");
-        if (ref != null && loaded.contains(ref.asString("reference"))) {
-          rg.remove("name");
-          rg.remove("description");
-        }
-      }
-      return org.hl7.fhir.utilities.json.parser.JsonParser.compose(ig, false).getBytes(StandardCharsets.UTF_8);
-    } catch (Exception e) {
-      return source;
-    }
-  }
-
-  private static byte[] igXmlForHash(byte[] source, Set<String> loaded) throws Exception {
-    DocumentBuilderFactory factory = XMLUtil.newXXEProtectedDocumentBuilderFactory();
-    factory.setNamespaceAware(true);
-    Document doc = factory.newDocumentBuilder().parse(new ByteArrayInputStream(source));
-    org.w3c.dom.Element root = doc.getDocumentElement();
-    if (!"ImplementationGuide".equals(root.getLocalName())) {
-      return source;
-    }
-    for (org.w3c.dom.Element def : xmlChildren(root, "definition")) {
-      for (org.w3c.dom.Element rg : xmlChildren(def, "resource")) {
-        boolean isLoaded = false;
-        for (org.w3c.dom.Element ref : xmlChildren(rg, "reference")) {
-          for (org.w3c.dom.Element r : xmlChildren(ref, "reference")) {
-            isLoaded = isLoaded || loaded.contains(r.getAttribute("value"));
-          }
-        }
-        if (isLoaded) {
-          for (org.w3c.dom.Element c : xmlChildren(rg, "name")) {
-            rg.removeChild(c);
-          }
-          for (org.w3c.dom.Element c : xmlChildren(rg, "description")) {
-            rg.removeChild(c);
-          }
-        }
-      }
-    }
-    Transformer t = XMLUtil.newXXEProtectedTransformerFactory().newTransformer();
-    t.setOutputProperty(OutputKeys.ENCODING, "UTF-8");
-    ByteArrayOutputStream res = new ByteArrayOutputStream();
-    t.transform(new DOMSource(doc), new StreamResult(res));
-    return res.toByteArray();
-  }
-
-  private static List<org.w3c.dom.Element> xmlChildren(org.w3c.dom.Element e, String name) {
-    List<org.w3c.dom.Element> res = new ArrayList<>();
-    for (Node n = e.getFirstChild(); n != null; n = n.getNextSibling()) {
-      if (n instanceof org.w3c.dom.Element && name.equals(n.getLocalName())) {
-        res.add((org.w3c.dom.Element) n);
-      }
-    }
-    return res;
-  }
-
   /** the other files in the IG folder (see computeGlobal), relative path to content hash */
   private Map<String, String> scanOtherFiles() {
     return scanTree(new File(pf.rootDir), otherSkip);
   }
 
-  /** every file under root (skipping the canonical paths in skip), relative path to content hash; safe on link loops */
+  /**
+   * every file under root (skipping the canonical paths in skip), relative path to content hash; safe on link loops,
+   * and on names the JVM can't decode (see listTree)
+   */
   static Map<String, String> scanTree(File root, Set<String> skip) {
     Map<String, String> res = new TreeMap<>();
-    listTree(root, root, skip, res, new HashSet<>());
+    Path r = path(root);
+    if (r == null) {
+      // nothing in it can be read either: can't tell what changed, so assume something did
+      res.put("", "unreadable: "+UUID.randomUUID());
+      return res;
+    }
+    listTree(r, "", skip, res, new HashSet<>());
     return res;
   }
 
-  private static void listTree(File root, File dir, Set<String> skip, Map<String, String> files, Set<String> visited) {
-    String c = canonical(dir.getAbsolutePath());
-    if (skip.contains(c)) {
+  /**
+   * Lists dir, which is at rel (with '/' between the names on any OS, as the state is the same file on any OS) below the
+   * root. It goes by the Paths a folder listing gives, not by Files made from names: such a Path keeps the bytes of the
+   * name, so a file whose name the JVM can't decode (bytes not valid in the file system encoding, or any non-ASCII name
+   * under a POSIX locale) is still read, and a change to it seen. Such names can decode to the same string, so a name is
+   * made unique among those in its folder
+   */
+  private static void listTree(Path dir, String rel, Set<String> skip, Map<String, String> files, Set<Path> visited) {
+    if (skip.contains(canonical(dir.toString()))) {
       return;
     }
-    // with '/' between the names on any OS, as the state is the same file on any OS
-    String rel = root.toPath().relativize(dir.toPath()).toString().replace(File.separatorChar, '/');
-    if (dir.isFile()) {
+    if (isFile(dir)) {
       try {
-        files.put(rel, new Hasher().add(Files.readAllBytes(dir.toPath())).finish());
+        files.put(rel, new Hasher().add(Files.readAllBytes(dir)).finish());
       } catch (IOException e) {
         files.put(rel, "unreadable: "+UUID.randomUUID()); // can't tell what it holds, so assume it changed
       }
       return;
     }
-    if (!visited.add(c)) {
+    if (!Files.isDirectory(dir)) {
+      if (!rel.isEmpty() && !Files.exists(dir, LinkOption.NOFOLLOW_LINKS)) {
+        // listed, but can't be looked at (in a folder that can be listed but not searched): can't tell what it is
+        files.put(rel, "unreadable: "+UUID.randomUUID());
+      }
+      return; // else a link to nothing, a socket, ...: not read by anything
+    }
+    // a Path, not its name: names that decode the same are different folders
+    Path real = realPath(dir);
+    if (!visited.add(real)) {
       // a link to a folder that's already been listed (possibly one that contains it)
-      files.put(rel + "/", "(same as "+c+")");
+      files.put(rel + "/", "(same as "+real+")");
       return;
     }
-    String[] list = dir.list();
+    List<Path> list = list(dir);
     if (list == null) {
+      // can't tell what's in it, so assume something changed. What the build owns, and .git, are skipped above, so
+      // this is a folder of the IG's own
+      files.put(rel + "/", "unreadable: "+UUID.randomUUID());
       return;
     }
-    if (list.length == 0) {
+    if (list.isEmpty()) {
       files.put(rel + "/", "(empty folder)");
     }
-    java.util.Arrays.sort(list); // so that which path to a linked folder gets listed doesn't vary
-    for (String s : list) {
-      listTree(root, new File(dir, s), skip, files, visited);
+    Set<String> names = new HashSet<>();
+    for (Path p : list) {
+      String n = p.getFileName().toString();
+      String u = n;
+      for (int i = 2; !names.add(u); i++) {
+        u = n + "#" + i;
+      }
+      listTree(p, rel.isEmpty() ? u : rel + "/" + u, skip, files, visited);
     }
   }
 
-  private void hashTree(File dir, Hasher h, Set<String> skip, boolean[] fshIndex) throws IOException {
-    if (!dir.exists()) {
-      h.add("missing").add(dir.getAbsolutePath());
+  /** see listTree() for why this goes by Paths */
+  static void hashTree(File root, Hasher h, Set<String> skip, boolean[] fshIndex) throws IOException {
+    Path r = path(root);
+    if (r == null) {
+      h.add("unreadable").add(root.getAbsolutePath()).add(UUID.randomUUID().toString()); // assume it changed
+    } else {
+      hashTree(r, h, skip, fshIndex);
+    }
+  }
+
+  private static void hashTree(Path dir, Hasher h, Set<String> skip, boolean[] fshIndex) throws IOException {
+    if (!Files.exists(dir)) {
+      h.add("missing").add(dir.toAbsolutePath().toString());
       return;
     }
-    if (skip.contains(canonical(dir.getAbsolutePath()))) {
+    if (skip.contains(canonical(dir.toString()))) {
       return;
     }
-    if (dir.isFile()) {
-      byte[] b = Files.readAllBytes(dir.toPath());
-      h.add(dir.getAbsolutePath()).add(b);
+    if (isFile(dir)) {
+      byte[] b = Files.readAllBytes(dir);
+      h.add(dir.toAbsolutePath().toString()).add(b);
       if (fshIndex != null && !fshIndex[0] && new String(b, StandardCharsets.ISO_8859_1).contains("fsh-index")) {
         fshIndex[0] = true;
       }
       return;
     }
-    String[] list = dir.list();
+    if (!Files.isDirectory(dir)) {
+      return; // a FIFO, a socket, ...: not read by anything
+    }
+    List<Path> list = list(dir);
     if (list == null) {
+      h.add("unreadable").add(dir.toAbsolutePath().toString()).add(UUID.randomUUID().toString()); // assume it changed
       return;
     }
-    java.util.Arrays.sort(list);
-    h.add("dir").add(dir.getAbsolutePath());
-    for (String s : list) {
-      hashTree(new File(dir, s), h, skip, fshIndex);
+    h.add("dir").add(dir.toAbsolutePath().toString());
+    for (Path p : list) {
+      hashTree(p, h, skip, fshIndex);
+    }
+  }
+
+  /** the folder's entries, sorted (so that which path to a linked folder is listed doesn't vary); null if it can't be listed */
+  private static List<Path> list(Path dir) {
+    List<Path> res = new ArrayList<>();
+    try (DirectoryStream<Path> ds = Files.newDirectoryStream(dir)) {
+      for (Path p : ds) {
+        res.add(p);
+      }
+    } catch (IOException | DirectoryIteratorException e) {
+      return null;
+    }
+    Collections.sort(res);
+    return res;
+  }
+
+  /** the Path of a File, or null if its name isn't a valid Path (any non-ASCII name under a POSIX locale) */
+  private static Path path(File f) {
+    try {
+      return f.toPath();
+    } catch (InvalidPathException e) {
+      return null;
+    }
+  }
+
+  /**
+   * The file's content, read through java.io, as the build reads and writes its files: under a POSIX locale, the build
+   * writes a non-ASCII name with '?' for what can't be encoded, and that name isn't a valid Path
+   */
+  static byte[] read(File f) throws IOException {
+    try (FileInputStream in = new FileInputStream(f)) {
+      return in.readAllBytes();
     }
   }
 
@@ -720,7 +749,7 @@ public class RapidoTracker {
       try {
         File pj = new File(Utilities.path(folder, p.replace("|", "#"), "package", "package.json"));
         if (pj.exists()) {
-          return h.add(Files.readAllBytes(pj.toPath())).finish();
+          return h.add(read(pj)).finish();
         }
       } catch (IOException e) {
         return h.add("unreadable: "+e.getMessage()).finish();
@@ -860,6 +889,15 @@ public class RapidoTracker {
   public void save() throws IOException {
     JsonObject state = new JsonObject();
     state.add("version", STATE_VERSION);
+    File sf = new File(stateFile);
+    FileUtilities.createDirectory(sf.getParent());
+    int txFailures = txFailures();
+    if (txFailures > 0) {
+      // what the build made from those calls isn't what the server would have said, so none of it can be reused
+      state.add("txFailures", txFailures);
+      writeState(state, sf);
+      return;
+    }
     state.add("uuid", uuid);
     state.add("fileSet", fileSetHash);
     // the template can write into the IG folder as well (the HL7 template copies the IG's Jira spec file there), so the
@@ -904,9 +942,68 @@ public class RapidoTracker {
       files.set(key, nf);
     }
     state.add("files", files);
-    File sf = new File(stateFile);
-    FileUtilities.createDirectory(sf.getParent());
     writeState(state, sf);
+  }
+
+  /** the terminology calls of this build that got no answer, including the ones that ask the registry which server to use */
+  private int txFailures() {
+    int res = pf.txFailures == null ? 0 : pf.txFailures.count();
+    if (pf.context != null && pf.context.getTxClientManager() != null) {
+      for (TerminologyClientManager.InternalLogEvent e : pf.context.getTxClientManager().getInternalLog()) {
+        if (e.isError()) {
+          res++; // the registry couldn't be reached, so the build asked the main server instead
+        }
+      }
+    }
+    return res;
+  }
+
+  /**
+   * For a Rapido build, the terminology client factory: counts the calls that got no answer from the terminology
+   * server (it was down, or the call timed out). An error the server answered with is an answer like any other
+   */
+  public static class TxFailures implements ITerminologyClientFactoryN {
+    private final ITerminologyClientFactoryN factory;
+    private final AtomicInteger count = new AtomicInteger();
+
+    public TxFailures(ITerminologyClientFactoryN factory) {
+      this.factory = factory;
+    }
+
+    public int count() {
+      return count.get();
+    }
+
+    @Override
+    public ITerminologyClientN makeClientN(IModelContext context, String id, String url, String userAgent, ToolingClientLogger logger) throws URISyntaxException {
+      ITerminologyClientN client = factory.makeClientN(context, id, url, userAgent, logger);
+      return (ITerminologyClientN) Proxy.newProxyInstance(ITerminologyClientN.class.getClassLoader(), new Class<?>[] {ITerminologyClientN.class}, (p, m, args) -> {
+        try {
+          Object res = m.invoke(client, args);
+          return res == client ? p : res;
+        } catch (InvocationTargetException e) {
+          Throwable t = e.getCause();
+          if (!isAnswer(t)) {
+            count.incrementAndGet();
+          }
+          throw t;
+        }
+      });
+    }
+
+    @Override
+    public String getVersion() {
+      return factory.getVersion();
+    }
+
+    /** an error the server answered with: not one that says it couldn't answer (5xx, a timeout, too many requests) */
+    private static boolean isAnswer(Throwable t) {
+      if (!(t instanceof EFhirClientException) || !((EFhirClientException) t).hasServerErrors()) {
+        return false;
+      }
+      int code = ((EFhirClientException) t).getCode();
+      return code < 500 && code != 408 && code != 429;
+    }
   }
 
   private JsonObject newFile(FetchedFile f) {
@@ -934,52 +1031,25 @@ public class RapidoTracker {
         stateBefore.put(e.getKey(), e.getValue() == null ? null : new HashSet<>(e.getValue()));
       }
       profilesBefore = r.getFoundProfiles().size();
-    } else {
-      validationsReused++;
     }
     return res;
   }
 
-  /** null, after counting why the resource is validated again */
-  private List<ValidationMessage> validateAgain(String why) {
-    validatedAgain.merge(why, 1, Integer::sum);
-    return null;
-  }
-
-  /** e.g. "reused 12 validations (3 validated again: 2 changed, 1 build state differs)", for the log */
-  public String validationSummary() {
-    StringBuilder b = new StringBuilder("reused " + validationsReused + (validationsReused == 1 ? " validation" : " validations"));
-    int again = 0;
-    for (int n : validatedAgain.values()) {
-      again += n;
-    }
-    if (again > 0) {
-      b.append(" (").append(again).append(" validated again: ");
-      boolean first = true;
-      for (Map.Entry<String, Integer> e : validatedAgain.entrySet()) {
-        b.append(first ? "" : ", ").append(e.getValue()).append(" ").append(e.getKey());
-        first = false;
-      }
-      b.append(")");
-    }
-    return b.toString();
-  }
-
   private List<ValidationMessage> savedValidation(FetchedFile f, FetchedResource r) {
     if (!validationClean.contains(f)) {
-      return validateAgain("changed");
+      return null;
     }
     JsonObject v = oldFiles.getJsonObject(keys.get(f)).getJsonObject("validation");
     String ri = Integer.toString(f.getResources().indexOf(r));
     JsonObject rv = v == null ? null : v.getJsonObject(ri);
     if (rv == null || !(r.fhirType()+"/"+r.getId()).equals(rv.asString("key"))) {
-      return validateAgain("not saved");
+      return null;
     }
     List<ValidationMessage> res = new ArrayList<>();
     for (JsonObject m : rv.forceArray("messages").asJsonObjects()) {
       ValidationMessage vm = readMessage(m);
       if (vm == null) {
-        return validateAgain("messages unreadable");
+        return null;
       }
       res.add(vm);
     }
@@ -987,28 +1057,21 @@ public class RapidoTracker {
     // changes what it says later (see buildState())
     Map<String, Set<String>> state = buildState();
     JsonObject saved = rv.getJsonObject("state");
-    if (saved == null || !isReplayable(saved)) {
-      return validateAgain("not replayable");
+    if (saved == null || !isReplayable(saved) || !sameStateBefore(state, saved)) {
+      return null;
     }
     // validating an example tells the publisher which of the IG's profiles it conforms to (recordProfileUsage), which
     // the profiles' "no examples" checks and example lists depend on
     List<FetchedResource> sources = profileSources(pf.fileList, rv.getJsonArray("profileUsages"));
     if (sources == null) {
-      return validateAgain("profiles changed");
-    }
-    if (!sameStateBefore(state, saved)) {
-      return validateAgain("build state differs");
-    }
-    // the validator attaches the profiles it validated an element against to the element, for the qa page's signposts
-    if (!restoreSignposts(r.getElement(), rv.getJsonArray("signposts"), res)) {
-      return validateAgain("signposts changed");
-    }
-    for (Map.Entry<String, Set<String>> e : state.entrySet()) {
-      putBack(e.getValue(), saved.getJsonObject(e.getKey()).forceArray("added"));
+      return null;
     }
     for (FetchedResource source : sources) {
       source.addFoundExample(r);
       r.getFoundProfiles().add(((CanonicalResource) source.getResource()).getUrl());
+    }
+    for (Map.Entry<String, Set<String>> e : state.entrySet()) {
+      putBack(e.getValue(), saved.getJsonObject(e.getKey()).forceArray("added"));
     }
     newFile(f).forceObject("validation").set(ri, rv);
     return res;
@@ -1044,117 +1107,7 @@ public class RapidoTracker {
       }
       msgs.add(m);
     }
-    JsonArray signposts = recordSignposts(r.getElement(), errs);
-    if (signposts == null) {
-      return;
-    }
-    rv.add("signposts", signposts);
     newFile(f).forceObject("validation").set(Integer.toString(f.getResources().indexOf(r)), rv);
-  }
-
-  /**
-   * The messages the validator attached to the elements of the resource (Element.addMessage(): the profiles it
-   * validated each element against), with where each element is (the index of each child from the root) and its path.
-   * A message that is also one of the resource's messages is recorded as its index there, so that it comes back as the
-   * same object, as in a stock build. null if a message can't be saved.
-   */
-  static JsonArray recordSignposts(Element root, List<ValidationMessage> errs) {
-    JsonArray res = new JsonArray();
-    Map<ValidationMessage, Integer> index = new IdentityHashMap<>();
-    for (int i = 0; i < errs.size(); i++) {
-      index.putIfAbsent(errs.get(i), i);
-    }
-    return root == null || recordSignposts(root, "", index, res) ? res : null;
-  }
-
-  private static boolean recordSignposts(Element e, String at, Map<ValidationMessage, Integer> index, JsonArray res) {
-    if (e.hasMessages()) {
-      JsonObject o = new JsonObject();
-      o.add("at", at);
-      o.add("path", String.valueOf(e.getPath()));
-      JsonArray msgs = o.forceArray("messages");
-      for (ValidationMessage vm : e.getMessages()) {
-        Integer i = index.get(vm);
-        if (i != null) {
-          msgs.add(i);
-        } else {
-          JsonObject m = writeMessage(vm);
-          if (m == null) {
-            return false;
-          }
-          msgs.add(m);
-        }
-      }
-      res.add(o);
-    }
-    if (e.hasChildren()) {
-      int i = 0;
-      for (Element c : e.getChildList()) {
-        if (!recordSignposts(c, at.isEmpty() ? Integer.toString(i) : at+"."+i, index, res)) {
-          return false;
-        }
-        i++;
-      }
-    }
-    return true;
-  }
-
-  /**
-   * Attaches the messages recordSignposts() recorded to the elements of the resource, as validating it would have.
-   * false (and nothing attached) if an element isn't where it was, or a message can't be read.
-   *
-   * @param msgs the resource's messages, as restored
-   */
-  static boolean restoreSignposts(Element root, JsonArray signposts, List<ValidationMessage> msgs) {
-    if (signposts == null || root == null) {
-      return signposts != null && signposts.size() == 0;
-    }
-    Map<Element, List<ValidationMessage>> found = new LinkedHashMap<>();
-    for (JsonObject o : signposts.asJsonObjects()) {
-      Element e = root;
-      String at = o.asString("at");
-      if (at == null) {
-        return false;
-      }
-      if (!at.isEmpty()) {
-        for (String s : at.split("\\.")) {
-          int i;
-          try {
-            i = Integer.parseInt(s);
-          } catch (NumberFormatException ex) {
-            return false;
-          }
-          if (!e.hasChildren() || i < 0 || i >= e.getChildList().size()) {
-            return false;
-          }
-          e = e.getChildList().get(i);
-        }
-      }
-      if (!String.valueOf(e.getPath()).equals(o.asString("path")) || o.getJsonArray("messages") == null) {
-        return false;
-      }
-      List<ValidationMessage> list = new ArrayList<>();
-      for (JsonElement m : o.getJsonArray("messages").getItems()) {
-        ValidationMessage vm = null;
-        if (m instanceof JsonObject) {
-          vm = readMessage((JsonObject) m);
-        } else if (m instanceof JsonNumber) {
-          Integer i = ((JsonNumber) m).getInteger();
-          vm = i != null && i >= 0 && i < msgs.size() ? msgs.get(i) : null;
-        }
-        if (vm == null) {
-          return false;
-        }
-        list.add(vm);
-      }
-      found.put(e, list);
-    }
-    for (Map.Entry<Element, List<ValidationMessage>> e : found.entrySet()) {
-      for (ValidationMessage vm : e.getValue()) {
-        e.getKey().addMessage(vm);
-      }
-    }
-    return true;
   }
 
   /**
@@ -1469,13 +1422,13 @@ public class RapidoTracker {
     return true;
   }
 
-  private static String fileHash(String path) {
+  static String fileHash(String path) {
     File f = new File(path);
     if (!f.isFile()) {
       return "missing";
     }
     try {
-      return new Hasher().add(Files.readAllBytes(f.toPath())).finish();
+      return new Hasher().add(read(f)).finish();
     } catch (IOException e) {
       return "unreadable: "+UUID.randomUUID();
     }
@@ -1498,6 +1451,8 @@ public class RapidoTracker {
     public final List<ValidationMessage> errors = new ArrayList<>();
     public final List<ValidationMessage> fileErrors = new ArrayList<>();
     public final Map<Integer, List<ValidationMessage>> resErrors = new LinkedHashMap<>();
+    /** the resources (by index) the phase found a UML diagram for, as _data/structuredefinitions.json says */
+    public final Set<Integer> umlGenerated = new TreeSet<>();
     public final List<NpmEntry> npm = new ArrayList<>();
     public final List<ValueSet> expansions = new ArrayList<>();
     public final List<String[]> tracked = new ArrayList<>();
@@ -1529,6 +1484,7 @@ public class RapidoTracker {
     private final int errorsBefore;
     private final int fileErrorsBefore;
     private final int[] resErrorsBefore;
+    private final boolean[] umlBefore;
     private final int expansionsBefore;
 
     private Recording(FetchedFile file, String phase) {
@@ -1542,8 +1498,10 @@ public class RapidoTracker {
       errorsBefore = pf.errors.size();
       fileErrorsBefore = file.getErrors().size();
       resErrorsBefore = new int[file.getResources().size()];
+      umlBefore = new boolean[resErrorsBefore.length];
       for (int i = 0; i < resErrorsBefore.length; i++) {
         resErrorsBefore[i] = file.getResources().get(i).getErrors().size();
+        umlBefore[i] = file.getResources().get(i).isUmlGenerated();
       }
       expansionsBefore = pf.expansions.size();
       if (PHASE_HTML.equals(phase)) {
@@ -1591,6 +1549,10 @@ public class RapidoTracker {
     if (pf.errors.size() < rec.errorsBefore || f.getErrors().size() < rec.fileErrorsBefore || pf.expansions.size() < rec.expansionsBefore) {
       return;
     }
+    // a phase that failed with an exception (a file that couldn't be written, say) is done again in the next build
+    if (threw(pf.errors.subList(rec.errorsBefore, pf.errors.size())) || threw(f.getErrors().subList(rec.fileErrorsBefore, f.getErrors().size()))) {
+      return;
+    }
     if (!addMessages(j.forceArray("errors"), pf.errors.subList(rec.errorsBefore, pf.errors.size()))
         || !addMessages(j.forceArray("fileErrors"), f.getErrors().subList(rec.fileErrorsBefore, f.getErrors().size()))) {
       return;
@@ -1598,10 +1560,16 @@ public class RapidoTracker {
     if (f.getResources().size() != rec.resErrorsBefore.length) {
       return;
     }
+    JsonArray uml = j.forceArray("uml");
+    for (int i = 0; i < rec.umlBefore.length; i++) {
+      if (!rec.umlBefore[i] && f.getResources().get(i).isUmlGenerated()) {
+        uml.add(Integer.toString(i));
+      }
+    }
     JsonObject re = j.forceObject("resErrors");
     for (int i = 0; i < rec.resErrorsBefore.length; i++) {
       List<ValidationMessage> errs = f.getResources().get(i).getErrors();
-      if (errs.size() < rec.resErrorsBefore[i]) {
+      if (errs.size() < rec.resErrorsBefore[i] || threw(errs.subList(rec.resErrorsBefore[i], errs.size()))) {
         return;
       }
       if (errs.size() > rec.resErrorsBefore[i] && !addMessages(re.forceArray(Integer.toString(i)), errs.subList(rec.resErrorsBefore[i], errs.size()))) {
@@ -1617,6 +1585,15 @@ public class RapidoTracker {
       }
     }
     newFile(f).set(rec.phase, j);
+  }
+
+  private static boolean threw(List<ValidationMessage> list) {
+    for (ValidationMessage vm : list) {
+      if (vm.getSource() == ValidationMessage.Source.Publisher && vm.getType() == ValidationMessage.IssueType.EXCEPTION) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private boolean addMessages(JsonArray a, List<ValidationMessage> list) {
@@ -1676,6 +1653,9 @@ public class RapidoTracker {
     res.outputs.addAll(j.forceArray("outputs").asStrings());
     res.allOutputs.addAll(j.forceArray("allOutputs").asStrings());
     res.otherFiles.addAll(j.forceArray("otherFiles").asStrings());
+    for (String s : j.forceArray("uml").asStrings()) {
+      res.umlGenerated.add(Integer.parseInt(s));
+    }
     readMessages(j.forceArray("errors"), res.errors);
     readMessages(j.forceArray("fileErrors"), res.fileErrors);
     JsonObject re = j.forceObject("resErrors");
@@ -1774,7 +1754,18 @@ public class RapidoTracker {
 
   private static void restoreEmptyText(DomainResource dr) {
     if (dr.hasText() && dr.getText().hasDiv()) {
-      restoreEmptyText(dr.getText().getDiv());
+      XhtmlNode div = dr.getText().getDiv();
+      // the composers write the attributes in order, and the parser reads xml:lang before the namespace: as the
+      // renderers made it, the namespace is the first
+      String ns = div.getNsDecl();
+      if (ns != null && !"xmlns".equals(div.getAttributes().keySet().iterator().next())) {
+        Map<String, String> attributes = new LinkedHashMap<>(div.getAttributes());
+        attributes.remove("xmlns");
+        div.getAttributes().clear();
+        div.getAttributes().put("xmlns", ns);
+        div.getAttributes().putAll(attributes);
+      }
+      restoreEmptyText(div);
     }
     for (Resource c : dr.getContained()) {
       if (c instanceof DomainResource) {

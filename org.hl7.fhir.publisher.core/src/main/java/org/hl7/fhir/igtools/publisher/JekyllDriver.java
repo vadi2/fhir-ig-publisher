@@ -14,6 +14,8 @@ import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
@@ -21,9 +23,12 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.function.Consumer;
+import java.util.stream.Stream;
 
 import org.apache.commons.lang3.SystemUtils;
 import org.hl7.fhir.utilities.json.model.JsonArray;
@@ -136,6 +141,8 @@ public class JekyllDriver {
   private BlockingQueue<String> lines;
   private String source;
   private String destination;
+  /** codeStamp() of the site when the process started */
+  private String code;
   private String unavailable;
   private Path script;
   // the output files as Jekyll last wrote them: path (relative to the destination) => stamp (see stamp())
@@ -299,7 +306,12 @@ public class JekyllDriver {
     return r;
   }
 
-  /** The stamps of the files under this folder, by path relative to it */
+  /** A path relative to the site's source or destination, as Jekyll names it (with '/' on every system) */
+  static String sitePath(Path relative) {
+    return relative.toString().replace(File.separatorChar, '/');
+  }
+
+  /** The stamps of the files under this folder, by path relative to it (see sitePath()) */
   static Map<String, String> stampTree(String folder) throws IOException {
     Map<String, String> res = new HashMap<>();
     Path root = Paths.get(folder);
@@ -309,7 +321,7 @@ public class JekyllDriver {
     Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
       @Override
       public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
-        res.put(root.relativize(file).toString(), stamp(file));
+        res.put(sitePath(root.relativize(file)), stamp(file));
         return FileVisitResult.CONTINUE;
       }
     });
@@ -342,9 +354,16 @@ public class JekyllDriver {
     if (unavailable != null) {
       throw new IOException(unavailable);
     }
+    String code = codeStamp(source);
+    if (isRunningFor(source, destination) && !code.equals(this.code)) {
+      // what Ruby has loaded can't be loaded again
+      log.accept("Jekyll is started again: the site's plugins or configuration changed");
+      stop();
+    }
     if (!isRunningFor(source, destination)) {
       stop();
       start(source, destination);
+      this.code = code;
     }
     try {
       stdin.write((cmd + "\n").getBytes(StandardCharsets.UTF_8));
@@ -372,17 +391,67 @@ public class JekyllDriver {
         stop();
         throw new IOException("Jekyll stopped running");
       }
-      if (line.startsWith(MARK)) {
-        JsonObject json = JsonParser.parseObject(line.substring(MARK.length()));
-        if (json.has("unavailable")) {
+      // (the reply can follow output that didn't end its line)
+      int at = line.indexOf(MARK);
+      if (at >= 0) {
+        if (at > 0) {
+          log.accept(line.substring(0, at));
+        }
+        JsonObject json;
+        Result res;
+        try {
+          json = JsonParser.parseObject(line.substring(at + MARK.length()));
+          res = json.has("unavailable") ? null : new Result(json);
+        } catch (IOException | RuntimeException e) {
+          stop();
+          throw new IOException("Jekyll's reply can't be read: " + e.getMessage(), e);
+        }
+        if (res == null) {
           unavailable = json.asString("unavailable");
           stop();
           throw new IOException(unavailable);
         }
-        return new Result(json);
+        return res;
       }
       log.accept(line);
     }
+  }
+
+  /**
+   * What a Jekyll process keeps from the first build it does: the code of the site's plugins (Ruby loads a file once), and
+   * what the configuration sets up (such as the time zone, or plugins from gems)
+   */
+  static String codeStamp(String source) throws IOException {
+    Path root = Paths.get(source);
+    List<Path> files = new ArrayList<>();
+    for (String name : new String[] {"_config.yml", "_plugins", "Gemfile", "Gemfile.lock"}) {
+      Path p = root.resolve(name);
+      if (Files.isDirectory(p)) {
+        try (Stream<Path> s = Files.walk(p)) {
+          s.filter(Files::isRegularFile).forEach(files::add);
+        }
+      } else if (Files.isRegularFile(p)) {
+        files.add(p);
+      }
+    }
+    Collections.sort(files);
+    MessageDigest md;
+    try {
+      md = MessageDigest.getInstance("SHA-1");
+    } catch (NoSuchAlgorithmException e) {
+      throw new IOException(e);
+    }
+    for (Path f : files) {
+      md.update(root.relativize(f).toString().getBytes(StandardCharsets.UTF_8));
+      md.update((byte) 0);
+      md.update(Files.readAllBytes(f));
+      md.update((byte) 0);
+    }
+    StringBuilder b = new StringBuilder();
+    for (byte x : md.digest()) {
+      b.append(String.format("%02x", x));
+    }
+    return b.toString();
   }
 
   private void start(String source, String destination) throws IOException {
@@ -416,6 +485,7 @@ public class JekyllDriver {
       Runtime.getRuntime().addShutdownHook(new Thread(() -> {
         Process running = process;
         if (running != null) {
+          running.descendants().forEach(ProcessHandle::destroyForcibly);
           running.destroyForcibly();
         }
       }, "jekyll-driver-stop"));
@@ -441,27 +511,64 @@ public class JekyllDriver {
     this.destination = destination;
   }
 
-  /** Stops the Jekyll process, if it's running */
+  /**
+   * Stops the Jekyll process, if it's running, and what it started: a process it started would outlive it (e.g. the
+   * real shell that Git's sh.exe launcher starts on Windows), and keep the site's folder in use. Returns once they have
+   * all stopped, or can't be made to
+   */
   public synchronized void stop() {
     if (process != null) {
+      // (taken first: once the process has stopped, what it started is no longer known as its descendants)
+      List<ProcessHandle> all = new ArrayList<>();
+      all.add(process.toHandle());
+      process.descendants().forEach(all::add);
       try {
         stdin.close();
       } catch (IOException e) {
         // it's being stopped anyway
       }
-      process.destroy();
-      try {
-        if (!process.waitFor(5, TimeUnit.SECONDS)) {
-          process.destroyForcibly();
-        }
-      } catch (InterruptedException e) {
+      for (ProcessHandle h : all) {
+        h.destroy();
+      }
+      // (stopped all the same when the thread was interrupted, as when a build is: that's when they are left running)
+      boolean interrupted = Thread.interrupted();
+      List<ProcessHandle> left = waitFor(all);
+      if (!left.isEmpty()) {
+        left.forEach(ProcessHandle::destroyForcibly);
+        waitFor(left);
+      }
+      if (interrupted) {
         Thread.currentThread().interrupt();
-        process.destroyForcibly();
       }
       process = null;
       source = null;
       destination = null;
     }
     stamps = null;
+  }
+
+  /**
+   * Waits a few seconds in all for these processes to stop (whatever their number: e.g. an orphan that nothing reaps
+   * never does); returns the ones still running. An interrupt ends the wait, and is kept
+   */
+  private static List<ProcessHandle> waitFor(List<ProcessHandle> handles) {
+    long end = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+    List<ProcessHandle> res = new ArrayList<>();
+    for (ProcessHandle h : handles) {
+      try {
+        long wait = end - System.nanoTime();
+        if (wait > 0 && !Thread.currentThread().isInterrupted()) {
+          h.onExit().get(wait, TimeUnit.NANOSECONDS);
+        }
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      } catch (TimeoutException | ExecutionException e) {
+        // still running, unless it's gone
+      }
+      if (h.isAlive()) {
+        res.add(h);
+      }
+    }
+    return res;
   }
 }

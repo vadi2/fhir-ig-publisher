@@ -52,7 +52,11 @@ module IgJekyllDriver
   LIQUID_MARKUP = %r{\{\{.*?\}\}|\{%.*?%\}}m.freeze
   QUOTED = %r{"[^"{}%]*"|'[^'{}%]*'}.freeze
   RISKY_MARKUP = %r{(?<![\w.])(?<!\w-)site(?!\w|-\w)(?!\s*\.\s*data(?!\w|-\w))(?!\s*=(?!=))|\A\{%-?\s*(?:increment|decrement)\b}.freeze
-  QUICK_CHECK = %r{\bsite\b|increment|decrement}.freeze
+  # RISKY_MARKUP's two parts anywhere in a text: they find all that RISKY_MARKUP finds in the text's markup (taking out
+  # a quoted string leaves quotes next to what was next to it), so only the few texts they find in need their markup
+  # looked at. (Apart, the regex engine finds each one by its fixed text, which is much quicker)
+  SITE_ANYWHERE = %r{(?<![\w.])(?<!\w-)site(?!\w|-\w)(?!\s*\.\s*data(?!\w|-\w))(?!\s*=(?!=))}.freeze
+  COUNTER_ANYWHERE = %r{\{%-?\s*(?:increment|decrement)\b}.freeze
 
   class << self
     # page source path => the files it read while it was rendered (includes)
@@ -80,7 +84,7 @@ module IgJekyllDriver
 
     def scan(name, content)
       s = content.to_s
-      return unless QUICK_CHECK.match?(s)
+      return unless (s.include?("site") && SITE_ANYWHERE.match?(s)) || (s.include?("crement") && COUNTER_ANYWHERE.match?(s))
 
       s.scan(LIQUID_MARKUP) do |m|
         if risky?(m)
@@ -195,6 +199,8 @@ module IgJekyllDriver
       target = destination(dest)
       IgJekyllDriver.write(target, IgJekyllDriver.source_stamp(path)) do
         FileUtils.rm_f(target)
+        # the copy gets the source's time, as in a build: Jekyll keeps the time it read first
+        @modified_time = nil
         super
       end
     end
@@ -380,19 +386,19 @@ class Driver
     changed_statics = []
     changed.each do |rel|
       abs = abs_source(rel)
-      return full_build("#{rel} is not there (any more)") unless File.file?(abs)
+      return full_build("#{rel} is not there (any more)", keep: keep) unless File.file?(abs)
 
       paths << abs
       if pages.key?(abs)
-        return full_build("#{rel} no longer has front matter") unless Jekyll::Utils.has_yaml_header?(abs)
+        return full_build("#{rel} no longer has front matter", keep: keep) unless Jekyll::Utils.has_yaml_header?(abs)
 
         changed_pages << pages[abs]
       elsif statics.key?(abs)
-        return full_build("#{rel} now has front matter") if Jekyll::Utils.has_yaml_header?(abs)
+        return full_build("#{rel} now has front matter", keep: keep) if Jekyll::Utils.has_yaml_header?(abs)
 
         changed_statics << statics[abs]
       elsif !include_file?(abs)
-        return full_build("#{rel} is not a page, a static file or an include")
+        return full_build("#{rel} is not a page, a static file or an include", keep: keep)
       end
     end
 

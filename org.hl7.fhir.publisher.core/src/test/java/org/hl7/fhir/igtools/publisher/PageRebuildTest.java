@@ -5,6 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -20,6 +25,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.commons.io.FileUtils;
+import org.hl7.fhir.standalone.context.SimpleWorkerContext;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueType;
@@ -201,7 +208,7 @@ class PageRebuildTest {
     page.setProcessMode(FetchedFile.PROCESS_XSLT);
     assertNull(state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# 1")), new ArrayList<>()));
     page.setProcessMode(FetchedFile.PROCESS_NONE);
-    page.addOutput("_includes/index.md", FetchedFile.PROCESS_XSLT, null);
+    page.addOutput("_includes" + java.io.File.separator + "index.md", FetchedFile.PROCESS_XSLT, null);
     assertNull(state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# 2")), new ArrayList<>()));
 
     state.discard();
@@ -218,13 +225,16 @@ class PageRebuildTest {
     state.beforeJekyll();
     // what Jekyll and the rest of the build leave in the temp folder
     write("temp/full-ig.zip", "zip");
+    write("temp/_site-extra/a/b", "extra");
     write("temp/.jekyll-cache/a/b", "cache");
     // the changed page, written again
     write("temp/index.md", "# Home, edited");
     Files.setLastModifiedTime(dir.resolve("temp/index.md"), FileTime.fromMillis(System.currentTimeMillis() + 5000));
     state.prepareTemp(Collections.singletonList(dir.resolve("temp/index.md").toString()));
     assertFalse(Files.exists(dir.resolve("temp/full-ig.zip")));
-    assertFalse(Files.exists(dir.resolve("temp/.jekyll-cache")));
+    assertFalse(Files.exists(dir.resolve("temp/_site-extra")));
+    // Jekyll's cache is Jekyll's to check
+    assertEquals("cache", read("temp/.jekyll-cache/a/b"));
     assertEquals("# Home, edited", read("temp/index.md"));
     assertEquals("<x/>", read("temp/_includes/x.xml"));
   }
@@ -252,6 +262,33 @@ class PageRebuildTest {
     state.prepareTemp(Collections.emptyList());
     assertEquals("{\"files\":{}}", read("temp/_rapido/state.json"));
     assertEquals("x", read("temp/_rapido/claimed.txt"));
+  }
+
+  @Test
+  void prepareTempLeavesJekyllsCacheAlone() throws IOException {
+    // left by the last run of Jekyll: it writes it again when its configuration changed since, and adds to it
+    write("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Cache/b7/config", "old");
+    state.beforeJekyll();
+    write("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Cache/b7/config", "new config");
+    Files.setLastModifiedTime(dir.resolve("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Cache/b7/config"), FileTime.fromMillis(System.currentTimeMillis() + 5000));
+    write("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Converters--Markdown/1a/page", "<p>x</p>");
+    state.prepareTemp(Collections.emptyList());
+    assertEquals("new config", read("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Cache/b7/config"));
+    assertEquals("<p>x</p>", read("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Converters--Markdown/1a/page"));
+  }
+
+  @Test
+  void prepareTempLeavesTheWatchStagingFolderAlone() throws IOException {
+    // in watch mode the build writes its output in the temp folder, and the sync moves files out of it
+    pf.outputDir = dir.resolve("temp/.watch-output").toString();
+    write("temp/.watch-output/package-combined.tgz", "pkg");
+    write("temp/.watch-output/en/index.html", "<html/>");
+    state.beforeJekyll();
+    Files.delete(dir.resolve("temp/.watch-output/package-combined.tgz"));
+    write("temp/.watch-output/en/other.html", "<html/>");
+    state.prepareTemp(Collections.emptyList());
+    assertEquals("<html/>", read("temp/.watch-output/en/other.html"));
+    assertEquals("# Home", read("temp/index.md"));
   }
 
   @Test
@@ -373,6 +410,37 @@ class PageRebuildTest {
     assertEquals("<p>a</p>", read("output/cmp/a.html"));
     assertEquals("<p>b</p>", read("output/cmp/b.html"));
     assertEquals(Collections.emptyList(), leftOver());
+  }
+
+  @Test
+  void theContextIsUnloadedWhenTheStateIsDiscarded() {
+    pf.context = mock(SimpleWorkerContext.class);
+    state.discard();
+    verify(pf.context, never()).unload();
+    // what the build does when a page rebuild can follow it
+    state.unloadContextWhenDiscarded();
+    verify(pf.context, never()).unload();
+    state.discard();
+    state.discard();
+    verify(pf.context, times(1)).unload();
+  }
+
+  @Test
+  void aStashThatCantBeDeletedIsOnlyReported() throws IOException {
+    state.finished();
+    state.afterJekyll();
+    write("output/package.tgz", "tgz");
+    state.afterPackage();
+    Path locked = state.getStashFolder().resolve("locked");
+    Files.createDirectories(locked.resolve("sub"));
+    assumeTrue(locked.toFile().setReadable(false) && !Files.isReadable(locked), "needs a folder that can't be read");
+    try {
+      state.discard();
+      assertNull(state.getStashFolder());
+    } finally {
+      locked.toFile().setReadable(true);
+      FileUtils.deleteDirectory(locked.getParent().toFile());
+    }
   }
 
   @Test
@@ -512,7 +580,7 @@ class PageRebuildTest {
     write("input/" + loadPath, content);
     FetchedFile f = new FetchedFile("input/" + loadPath, loadPath);
     f.setPath(dir.resolve("input/" + loadPath).toFile().getCanonicalPath());
-    f.setRelativePath("_includes/" + new java.io.File(loadPath).getName());
+    f.setRelativePath("_includes" + java.io.File.separator + new java.io.File(loadPath).getName());
     f.setProcessMode(FetchedFile.PROCESS_NONE);
     pf.altMap.put("pre-page/" + f.getPath(), f);
     pf.fileList.add(f);

@@ -14,14 +14,18 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 /**
@@ -80,6 +84,130 @@ class JekyllDriverTest {
         System.setProperty(JekyllDriver.DISABLE_PROPERTY, old);
       }
     }
+  }
+
+  /**
+   * a "Ruby" that answers each command with what the shell command prints (from a file: on Windows, the quotes in an
+   * argument don't survive the command line)
+   */
+  private JekyllDriver fake(String reply) throws IOException {
+    Path script = dir.resolve("fake-jekyll.sh");
+    Files.write(script, ("while read l; do " + reply + "; done\n").getBytes(StandardCharsets.UTF_8));
+    // (with / for the Windows shells, which take C:/x/y as a path)
+    return new JekyllDriver(Arrays.asList("sh", script.toString().replace(File.separatorChar, '/')), System.getenv());
+  }
+
+  @Test
+  void aReplyAfterOutputThatDidntEndItsLine() throws Exception {
+    driver = fake("printf 'Generating...@@ig-jekyll-driver@@ {\"ok\":true,\"full\":true}\\n'");
+    JekyllDriver.Result r = driver.build(dir.toString(), dir.resolve("out").toString(), 20_000, log::add);
+    assertTrue(r.isOk());
+    assertEquals(Arrays.asList("Generating..."), log);
+  }
+
+  @Test
+  void aReplyThatCantBeReadStopsIt() throws IOException {
+    driver = fake("printf '@@ig-jekyll-driver@@ {\"ok\":\\n'");
+    IOException e = org.junit.jupiter.api.Assertions.assertThrows(IOException.class,
+        () -> driver.build(dir.toString(), dir.resolve("out").toString(), 20_000, log::add));
+    assertTrue(e.getMessage().startsWith("Jekyll's reply can't be read"), e.getMessage());
+    assertFalse(driver.isRunningFor(dir.toString(), dir.resolve("out").toString()));
+  }
+
+  @Test
+  @DisabledOnOs(value = OS.WINDOWS, disabledReason = "the driver isn't used on Windows (see forCommand()), and MSYS's sleep isn't seen there as a process named sleep")
+  void stoppingItStopsWhatItStarted() throws Exception {
+    // a process that the process started outlives it unless it's stopped too (on Windows, Git's sh.exe is a launcher
+    // that starts the real shell); while it runs, it keeps the site's folder in use, and Windows can't delete it
+    Set<Long> before = descendants();
+    driver = fake("sleep 600 & printf '@@ig-jekyll-driver@@ {\"ok\":true,\"full\":true}\\n'");
+    assertTrue(driver.build(dir.toString(), dir.resolve("out").toString(), 20_000, log::add).isOk());
+    // the sleep may start after the reply (where a fork is emulated, as with Git's sh on Windows)
+    List<ProcessHandle> started = new ArrayList<>();
+    long end = System.currentTimeMillis() + 20_000;
+    while (started.stream().noneMatch(JekyllDriverTest::isSleep) && System.currentTimeMillis() < end) {
+      Thread.sleep(50);
+      started.clear();
+      ProcessHandle.current().descendants().filter(h -> !before.contains(h.pid())).forEach(started::add);
+    }
+    assertTrue(started.stream().anyMatch(JekyllDriverTest::isSleep), started.toString());
+    driver.stop();
+    for (ProcessHandle h : started) {
+      assertFalse(h.isAlive(), h + " " + h.info());
+    }
+  }
+
+  @Test
+  void stoppedWhenTheThreadIsInterrupted() throws Exception {
+    // as when a build is interrupted: what was started has stopped all the same, and the thread is still interrupted
+    Set<Long> before = descendants();
+    driver = fake("printf '@@ig-jekyll-driver@@ {\"ok\":true,\"full\":true}\\n'");
+    assertTrue(driver.build(dir.toString(), dir.resolve("out").toString(), 20_000, log::add).isOk());
+    List<ProcessHandle> started = new ArrayList<>();
+    ProcessHandle.current().descendants().filter(h -> !before.contains(h.pid())).forEach(started::add);
+    assertFalse(started.isEmpty());
+    Thread.currentThread().interrupt();
+    try {
+      driver.stop();
+      assertTrue(Thread.currentThread().isInterrupted());
+    } finally {
+      Thread.interrupted();
+    }
+    for (ProcessHandle h : started) {
+      assertFalse(h.isAlive(), h + " " + h.info());
+    }
+  }
+
+  private static boolean isSleep(ProcessHandle h) {
+    String cmd = h.info().command().orElse("").replace('\\', '/');
+    String name = cmd.substring(cmd.lastIndexOf('/') + 1);
+    return name.equals("sleep") || name.equals("sleep.exe");
+  }
+
+  private static Set<Long> descendants() {
+    Set<Long> res = new HashSet<>();
+    ProcessHandle.current().descendants().forEach(h -> res.add(h.pid()));
+    return res;
+  }
+
+  @Test
+  void startedAgainWhenThePluginsChange() throws Exception {
+    driver = fake("printf '@@ig-jekyll-driver@@ {\"ok\":true,\"full\":true}\\n'");
+    String out = dir.resolve("out").toString();
+    write(dir, "_config.yml", "title: a\n");
+    driver.build(dir.toString(), out, 20_000, log::add);
+    driver.build(dir.toString(), out, 20_000, log::add);
+    assertEquals(Collections.emptyList(), log);
+    write(dir, "_plugins/f.rb", "# a filter\n");
+    driver.build(dir.toString(), out, 20_000, log::add);
+    assertEquals(Arrays.asList("Jekyll is started again: the site's plugins or configuration changed"), log);
+    driver.build(dir.toString(), out, 20_000, log::add);
+    assertEquals(1, log.size());
+    // the time alone isn't a change
+    Files.setLastModifiedTime(dir.resolve("_config.yml"), java.nio.file.attribute.FileTime.fromMillis(0));
+    driver.build(dir.toString(), out, 20_000, log::add);
+    assertEquals(1, log.size());
+  }
+
+  @Test
+  void aStaticFileWrittenAgainGetsItsNewTime() throws Exception {
+    assumeTrue(jekyllInstalled(), "jekyll is not installed");
+    Path src = Files.createDirectories(dir.resolve("src"));
+    Path out = dir.resolve("out");
+    write(src, "a.html", "---\ntitle: A\n---\n<h1>{{ page.title }}</h1>\n");
+    write(src, "style.css", "body { color: red; }\n");
+    Files.setLastModifiedTime(src.resolve("style.css"), java.nio.file.attribute.FileTime.fromMillis(1_600_000_000_000L));
+    driver = JekyllDriver.forCommand("jekyll");
+    assertTrue(driver.build(src.toString(), out.toString(), TIMEOUT, log::add).isOk());
+    // as jekyll build does
+    assertEquals(1_600_000_000_000L, Files.getLastModifiedTime(out.resolve("style.css")).toMillis());
+
+    write(src, "style.css", "body { color: tan; }\n");
+    Files.setLastModifiedTime(src.resolve("style.css"), java.nio.file.attribute.FileTime.fromMillis(1_700_000_000_000L));
+    JekyllDriver.Result r = update(src, out, "style.css");
+    assertEquals(Arrays.asList("style.css"), r.getWritten());
+    assertEquals(1_700_000_000_000L, Files.getLastModifiedTime(out.resolve("style.css")).toMillis());
+    sameAsBuild(src, out);
   }
 
   @Test
@@ -294,6 +422,54 @@ class JekyllDriverTest {
     write(src, "a.html", "---\ntitle: A3\n---\n<h1>{{ page.title }}</h1>\n");
     r = update(src, out, "a.html");
     assertTrue(r.isAllWritten());
+    sameAsBuild(src, out);
+  }
+
+  @Test
+  void aChangeOnlyAFullBuildHandlesOnlyWritesWhatChanged() throws Exception {
+    assumeTrue(jekyllInstalled(), "jekyll is not installed");
+    Path src = Files.createDirectories(dir.resolve("src"));
+    Path out = dir.resolve("out");
+    write(src, "a.html", "---\ntitle: A\n---\n<h1>{{ site.data.d.v }}</h1>\n");
+    write(src, "b.html", "---\ntitle: B\n---\n<h1>{{ page.title }}</h1>\n");
+    write(src, "c.html", "---\ntitle: C\n---\n<h1>{{ page.title }}</h1>\n");
+    write(src, "gone.html", "---\ntitle: Gone\n---\n<h1>{{ page.title }}</h1>\n");
+    write(src, "style.css", "body { }\n");
+    write(src, "_data/d.json", "{\"v\": 1}\n");
+
+    driver = JekyllDriver.forCommand("jekyll");
+    assertTrue(driver.build(src.toString(), out.toString(), TIMEOUT, log::add).isOk());
+    // changed after Jekyll wrote it (the html checks): left as it is by each of these full builds
+    write(out, "b.html", "checked");
+
+    // _data
+    write(src, "_data/d.json", "{\"v\": 2}\n");
+    JekyllDriver.Result r = update(src, out, "_data/d.json");
+    assertEquals("_data/d.json is not a page, a static file or an include", r.getReason());
+    assertFalse(r.isAllWritten());
+    assertEquals(Arrays.asList("a.html"), r.getWritten());
+    // a page that's gone
+    Files.delete(src.resolve("gone.html"));
+    r = update(src, out, "gone.html");
+    assertEquals("gone.html is not there (any more)", r.getReason());
+    assertFalse(r.isAllWritten());
+    assertEquals(Collections.emptyList(), r.getWritten());
+    assertFalse(Files.exists(out.resolve("gone.html")));
+    // a page that no longer has front matter, a static file that now has
+    write(src, "c.html", "<h1>C</h1>\n");
+    r = update(src, out, "c.html");
+    assertEquals("c.html no longer has front matter", r.getReason());
+    assertFalse(r.isAllWritten());
+    assertEquals(Arrays.asList("c.html"), r.getWritten());
+    write(src, "style.css", "---\n---\nbody { }\n");
+    r = update(src, out, "style.css");
+    assertEquals("style.css now has front matter", r.getReason());
+    assertFalse(r.isAllWritten());
+    assertEquals(Arrays.asList("style.css"), r.getWritten());
+
+    assertEquals("checked", new String(Files.readAllBytes(out.resolve("b.html")), StandardCharsets.UTF_8));
+    assertEquals(Arrays.asList("b.html"), driver.changedSinceWritten(src.toString(), out.toString()));
+    assertTrue(driver.rewrite(src.toString(), out.toString(), Arrays.asList("b.html"), TIMEOUT, log::add).isOk());
     sameAsBuild(src, out);
   }
 

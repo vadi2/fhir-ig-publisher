@@ -545,9 +545,6 @@ public class PublisherProcessor extends PublisherBase  {
     }
     if (pf.rapido != null) {
       pf.rapido.finishValidation();
-      if (!pf.rapido.isCompleteBuild()) {
-        log("Rapido Mode: " + pf.rapido.validationSummary());
-      }
     }
     logDebugMessage(LogCategory.PROGRESS, " .. check Profile Examples");
     logDebugMessage(LogCategory.PROGRESS, "gen narratives");
@@ -1306,6 +1303,7 @@ public class PublisherProcessor extends PublisherBase  {
                       }
                       rr.setMultiLangMode(langs.size() > 1).renderResource(rw);
                       this.pf.otherFilesRun.addAll(lrc.getFiles());
+                      f.getOutputNames().addAll(lrc.getFiles()); // for -rapido (see RapidoOutputs)
                     } else if (r.fhirType().equals("Bundle")) {
                       lrc.setAddName(true);
                       for (org.hl7.fhir.services.elementmodel.Element e : r.getElement().getChildrenByName("entry")) {
@@ -1658,7 +1656,7 @@ public class PublisherProcessor extends PublisherBase  {
               boolean ok = true;
               String tgturl = null;
               for (StructureMap.StructureMapStructureComponent st : map.getStructureList()) {
-                if (st.getMode() == StructureMap.StructureMapModelMode.TARGET) {
+                if (st.getMode() == StructureMap.StructureMapModelModeVS.TARGET) {
                   if (tgturl == null)
                     tgturl = st.getUrl();
                   else

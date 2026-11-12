@@ -1,9 +1,11 @@
 package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -81,7 +83,8 @@ class RegeneratePagesTest {
     gen.setPf(pf);
     page = new FetchedFile("input/pagecontent/index.md", "pagecontent/index.md");
     page.setPath(dir.resolve("input/pagecontent/index.md").toString());
-    page.setRelativePath("_includes/index.md");
+    // as the loader names it (see PublisherIGLoader.loadPage()), with the system's separator
+    page.setRelativePath("_includes" + File.separator + "index.md");
     page.setProcessMode(FetchedFile.PROCESS_NONE);
     // what the build recorded when it wrote the page (uz has no translation, so it's the English page)
     for (String s : outputs()) {
@@ -327,6 +330,36 @@ class RegeneratePagesTest {
       write("input/translations/ru/pagecontent/index.md", "# Главная страница");
       List<String> reason = new ArrayList<>();
       assertEquals(Collections.singletonList(page), state.pagesFor(SourceSnapshot.take(roots, before).changesSince(before), reason), reason.toString());
+    } finally {
+      state.discard();
+    }
+  }
+
+  @Test
+  void noPageRebuildWhenTheTerminologyIsUnloadedEarly() throws Exception {
+    pf.txUnloadEarly = true;
+    PageRebuild state = checked();
+    try {
+      assertFalse(state.mayBeReusable());
+      assertTrue(state.getNotReusable().contains("tx-unload-early"), state.getNotReusable());
+    } finally {
+      state.discard();
+    }
+  }
+
+  @Test
+  void aStateThatCantBeKeptOnlyStopsAPageRebuild() throws Exception {
+    PageRebuild state = checked();
+    try {
+      gen.keepForPageRebuild(() -> {
+        throw new IOException("No space left on device");
+      });
+      assertTrue(state.getNotReusable() != null);
+      assertTrue(log.stream().anyMatch(m -> m.startsWith("Unable to keep the state for a page rebuild") && m.contains("No space left on device")), log.toString());
+      // and the later steps aren't done
+      gen.keepForPageRebuild(() -> {
+        throw new AssertionError("not expected");
+      });
     } finally {
       state.discard();
     }

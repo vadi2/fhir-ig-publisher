@@ -2,6 +2,7 @@ package org.hl7.fhir.igtools.publisher;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -82,6 +83,8 @@ public class PageRebuild {
   private static boolean shutdownHookAdded;
 
   private PublisherFields pf;
+  /** see unloadContextWhenDiscarded() */
+  private boolean unloadContext;
   private String notReusable;
 
   private final List<ValidationMessage> errors = new ArrayList<>();
@@ -159,6 +162,11 @@ public class PageRebuild {
     if (notReusable == null) {
       notReusable = reason;
     }
+  }
+
+  /** False if the build has already found why its state can't be reused */
+  public boolean mayBeReusable() {
+    return notReusable == null;
   }
 
   public String getNotReusable() {
@@ -255,7 +263,7 @@ public class PageRebuild {
   /** Called just before Jekyll runs */
   public void beforeJekyll() throws IOException {
     tempFolders = new HashSet<>();
-    tempFiles = list(Paths.get(pf.tempDir), tempFolders);
+    tempFiles = listTemp(tempFolders);
   }
 
   /** Called when Jekyll has run, before the package step writes its files to the output folder */
@@ -542,7 +550,7 @@ public class PageRebuild {
       tempFiles.put(rel, st);
     }
     Set<Path> folders = new HashSet<>();
-    Map<Path, Stamp> now = list(temp, folders);
+    Map<Path, Stamp> now = listTemp(folders);
     for (Map.Entry<Path, Stamp> e : tempFiles.entrySet()) {
       if (!e.getValue().sameAs(now.get(e.getKey()))) {
         throw new IOException("The temp file " + e.getKey() + " was changed or removed since the last build");
@@ -680,11 +688,26 @@ public class PageRebuild {
     return true;
   }
 
-  /** Deletes the copies of the package files */
+  /**
+   * The build left its context loaded for the html checks of a page rebuild (a complete build unloads it once its
+   * checks are done): discard() unloads it
+   */
+  public void unloadContextWhenDiscarded() {
+    unloadContext = true;
+  }
+
+  /** Deletes the copies of the package files, and unloads the context if the build left it loaded for a page rebuild */
   public void discard() {
+    if (unloadContext) {
+      unloadContext = false;
+      if (pf != null && pf.context != null) {
+        pf.context.unload();
+      }
+    }
     if (stashFolder != null) {
-      delete(stashFolder);
-      STASHES.remove(stashFolder);
+      if (delete(stashFolder)) {
+        STASHES.remove(stashFolder);
+      }
       stashFolder = null;
     }
   }
@@ -697,12 +720,18 @@ public class PageRebuild {
     }
   }
 
-  private static void delete(Path folder) {
+  /** True if the folder is gone. It's in the system temp folder: if it can't be deleted, that's only reported */
+  private static boolean delete(Path folder) {
     try (Stream<Path> s = Files.walk(folder)) {
       s.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
-    } catch (IOException e) {
-      // nothing: it's in the system temp folder
+    } catch (IOException | UncheckedIOException e) {
+      // reported below
     }
+    if (Files.exists(folder)) {
+      System.out.println("Unable to delete the temporary folder " + folder);
+      return false;
+    }
+    return true;
   }
 
   // --- utilities -----------------------------------------------------------------------------------------------------
@@ -715,10 +744,36 @@ public class PageRebuild {
     return new Stamp(a.size(), a.lastModifiedTime());
   }
 
+  /**
+   * The files in the temp folder that Jekyll reads (see list()): not Rapido's state (see RapidoTracker), which each build
+   * saves after Jekyll has run, a page rebuild too, nor, in watch mode, the staging folder the build writes its output
+   * to (see PublisherIGLoader.setUpWatchOutput()), which the sync empties of what it moves into the output folder
+   */
+  private Map<Path, Stamp> listTemp(Set<Path> folders) throws IOException {
+    Path temp = Paths.get(pf.tempDir);
+    Set<Path> skip = new HashSet<>();
+    skip.add(temp.resolve(RAPIDO_STATE).toAbsolutePath().normalize());
+    skip.add(Paths.get(pf.outputDir).toAbsolutePath().normalize());
+    // Jekyll's cache (the temp folder is its source): Jekyll checks what it finds there itself, and writes it all again
+    // when its configuration changed since the last run (e.g. a build without -watch, which writes to another folder),
+    // so it is neither what Jekyll saw nor something to remove
+    skip.add(temp.resolve(JEKYLL_CACHE).toAbsolutePath().normalize());
+    return list(temp, folders, skip);
+  }
+
+  private static final String JEKYLL_CACHE = ".jekyll-cache";
+
   private static final String RAPIDO_STATE = "_rapido";
 
-  /** The files under root (relative to it) with their size and modified time; and the folders, if folders isn't null */
   private static Map<Path, Stamp> list(Path root, Set<Path> folders) throws IOException {
+    return list(root, folders, Collections.emptySet());
+  }
+
+  /**
+   * The files under root (relative to it) with their size and modified time; and the folders, if folders isn't null.
+   * The folders in skip (absolute and normalized) are left out
+   */
+  private static Map<Path, Stamp> list(Path root, Set<Path> folders, Set<Path> skip) throws IOException {
     Map<Path, Stamp> res = new HashMap<>();
     if (!Files.isDirectory(root)) {
       return res;
@@ -726,9 +781,7 @@ public class PageRebuild {
     Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
       @Override
       public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-        if (dir.equals(root.resolve(RAPIDO_STATE))) {
-          // Rapido's state (see RapidoTracker, StaleTempFiles), which Jekyll doesn't read: each build saves it after
-          // Jekyll has run, a page rebuild too
+        if (!skip.isEmpty() && skip.contains(dir.toAbsolutePath().normalize())) {
           return FileVisitResult.SKIP_SUBTREE;
         }
         if (folders != null && !dir.equals(root)) {

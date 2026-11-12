@@ -25,7 +25,10 @@ import org.hl7.fhir.igtools.renderers.QuestionnaireResponseRenderer;
 import org.hl7.fhir.igtools.renderers.StructureDefinitionRenderer;
 import org.hl7.fhir.igtools.renderers.StructureMapRenderer;
 import org.hl7.fhir.igtools.renderers.ValueSetRenderer;
+import org.hl7.fhir.igtools.spreadsheets.ColumnWidthCache;
 import org.hl7.fhir.igtools.spreadsheets.ObservationSummarySpreadsheetGenerator;
+import org.hl7.fhir.igtools.spreadsheets.ProfileSpreadsheetGenerator;
+import org.hl7.fhir.igtools.spreadsheets.ProfileSpreadsheetPrefetcher;
 import org.hl7.fhir.igtools.web.IGReleaseVersionUpdater;
 import org.hl7.fhir.model.Base;
 import org.hl7.fhir.model.fml.StructureMap;
@@ -233,6 +236,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   private Path checkedStash;
   private final List<String> stashed = new ArrayList<>();
 
+  /** Watch mode: whether Jekyll is kept running for this build's site, and writes only what changed next time */
+  public boolean keepsJekyllRunning() {
+    return jekyllDriver != null && jekyllDriver.isRunningFor(new File(pf.tempDir).getAbsolutePath(), new File(pf.outputDir).getAbsolutePath());
+  }
+
   public void setWatchTools(JekyllDriver jekyllDriver, FullIgZip fullIgZip) {
     this.jekyllDriver = jekyllDriver;
     this.fullIgZip = fullIgZip;
@@ -243,22 +251,6 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   public void generate() throws Exception {
-    try {
-      generateOutputs();
-    } finally {
-      // if the build failed: else the database stays open, and on Windows the next build (in watch mode, in this
-      // process) can't delete it from the temp folder
-      if (openDb != null) {
-        openDb.closeUp();
-        openDb = null;
-      }
-    }
-  }
-
-  // the database generateOutputs() is building, until it's closed
-  private DBBuilder openDb;
-
-  private void generateOutputs() throws Exception {
     if (settings.isSimplifierMode()) {
       return;
     }
@@ -290,145 +282,192 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     pf.otherFilesRun.add(Utilities.path(pf.outputDir, "package.manifest.json"));
     pf.otherFilesRun.add(Utilities.path(pf.tempDir, "package.db"));
     DBBuilder db = pf.generatingDatabase ? new DBBuilder(Utilities.path(pf.tempDir, "package.db"), pf.context, pf.rc, pf.cu, pf.fileList) : null;
-    openDb = db;
-    copyData();
-    for (String rg : pf.regenList) {
-      regenerate(rg);
-    }
-    for (FetchedFile f : pf.changeList) {
-      for (FetchedResource r : f.getResources()) {
-        if (r.getResource() != null) {
-          if (!r.getResource().hasWebPath()) {
-            r.getResource().setWebPath(pf.igpkp.getLinkFor(r, true));
-          }
-        }
-        if (r.getElement() != null) {
-          if (!r.getElement().hasWebPath()) {
-            r.getElement().setWebPath(pf.igpkp.getLinkFor(r, true));
-          }
-        }
-      }
-    }
-
-    updateImplementationGuide();
-    generateDataFile(db);
-
-    logMessage("Generate Native Outputs");
-
-    for (FetchedFile f : pf.changeList) {
-      f.start("generate1");
-      try {
-        generateNativeOutputs(f, false, db);
-      } finally {
-        f.finish("generate1");
-      }
-    }
-    if (db != null) {
-      db.finishResources();
-    }
-
-    generateViewDefinitions(db);
-    if (!pf.changeList.isEmpty()) {
-      if (isNewML()) {
-        for (String l : allLangs()) {
-          generateSummaryOutputsBefore(db, l, pf.rcLangs.get(l));
-        }
-      } else {
-        generateSummaryOutputsBefore(db, null, pf.rc);
-      }
-    }
-    templateBeforeGenerate();
-    if (pf.saveExpansionParams) {
-      new JsonParser(pf.context.getModelContext()).setOutputStyle(OutputStyle.NORMAL).compose(new FileOutputStream(Utilities.path(pf.tempDir, "parameters-expansion-parameters.json")), pf.context.getExpansionParameters());
-      new XmlParser(pf.context.getModelContext()).setOutputStyle(OutputStyle.NORMAL).compose(new FileOutputStream(Utilities.path(pf.tempDir, "parameters-expansion-parameters.xml")), pf.context.getExpansionParameters());
-    }
-
-    logMessage("Generate HTML Outputs");
-    // the resources don't change while the html is generated, so what they use only needs to be worked out once
-    pf.sdUsageCache = new IdentityHashMap<>();
     try {
+      copyData();
+      for (String rg : pf.regenList) {
+        regenerate(rg);
+      }
       for (FetchedFile f : pf.changeList) {
-        f.start("generate2");
+        for (FetchedResource r : f.getResources()) {
+          if (r.getResource() != null) {
+            if (!r.getResource().hasWebPath()) {
+              r.getResource().setWebPath(pf.igpkp.getLinkFor(r, true));
+            }
+          }
+          if (r.getElement() != null) {
+            if (!r.getElement().hasWebPath()) {
+              r.getElement().setWebPath(pf.igpkp.getLinkFor(r, true));
+            }
+          }
+        }
+      }
+
+      updateImplementationGuide();
+      generateDataFile(db);
+
+      logMessage("Generate Native Outputs");
+
+      for (FetchedFile f : pf.changeList) {
+        f.start("generate1");
         try {
-          if (pf.rapido != null && !settings.isGenerationOff() && pf.rapido.canReplay(f, RapidoTracker.PHASE_HTML)) {
-            replayGeneration(f, RapidoTracker.PHASE_HTML);
-            convertForRendering(f);
-            redoRenderingChanges(f);
+          generateNativeOutputs(f, false, db);
+        } finally {
+          f.finish("generate1");
+        }
+      }
+      if (db != null) {
+        db.finishResources();
+      }
+
+      generateConstants();
+      generateViewDefinitions(db);
+      if (!pf.changeList.isEmpty()) {
+        // the code system and value set lists add a few rows to the database for each entry
+        if (db != null) {
+          db.startList();
+        }
+        try {
+          if (isNewML()) {
+            for (String l : allLangs()) {
+              generateSummaryOutputsBefore(db, l, pf.rcLangs.get(l));
+            }
           } else {
-            if (pf.rapido != null) {
-              pf.rapido.startRecording(f, RapidoTracker.PHASE_HTML);
-            }
-            generateHtmlOutputs(f, false, db, null);
-            if (pf.rapido != null) {
-              pf.rapido.stopRecording();
-            }
+            generateSummaryOutputsBefore(db, null, pf.rc);
           }
         } finally {
-          f.finish("generate2");
+          if (db != null) {
+            db.finishList();
+          }
         }
       }
-    } finally {
-      pf.sdUsageCache = null;
-    }
+      templateBeforeGenerate();
+      if (pf.saveExpansionParams) {
+        try (FileOutputStream stream = new FileOutputStream(Utilities.path(pf.tempDir, "parameters-expansion-parameters.json"))) {
+          new JsonParser(pf.context.getModelContext()).setOutputStyle(OutputStyle.NORMAL).compose(stream, pf.context.getExpansionParameters());
+        }
+        try (FileOutputStream stream = new FileOutputStream(Utilities.path(pf.tempDir, "parameters-expansion-parameters.xml"))) {
+          new XmlParser(pf.context.getModelContext()).setOutputStyle(OutputStyle.NORMAL).compose(stream, pf.context.getExpansionParameters());
+        }
+      }
 
-    logMessage("Generate Spreadsheets");
-    for (FetchedFile f : pf.changeList) {
-      f.start("generate2");
+      logMessage("Generate HTML Outputs");
+      // the resources don't change while the html is generated, so what they use only needs to be worked out once
+      pf.sdUsageCache = new IdentityHashMap<>();
       try {
-        if (pf.rapido != null && !settings.isGenerationOff() && pf.rapido.canReplay(f, RapidoTracker.PHASE_SHEETS)) {
-          replayGeneration(f, RapidoTracker.PHASE_SHEETS);
-          // any messages from adding the rows were recorded with the rest of the phase, and have just been replayed
-          for (FetchedResource r : f.getResources()) {
-            if (r.getResource() instanceof StructureDefinition) {
-              addToAllProfiles(r, (StructureDefinition) r.getResource(), new ArrayList<>());
+        for (FetchedFile f : pf.changeList) {
+          f.start("generate2");
+          try {
+            if (pf.rapido != null && !settings.isGenerationOff() && pf.rapido.canReplay(f, RapidoTracker.PHASE_HTML)) {
+              replayGeneration(f, RapidoTracker.PHASE_HTML);
+              convertForRendering(f);
+              redoRenderingChanges(f);
+            } else {
+              if (pf.rapido != null) {
+                pf.rapido.startRecording(f, RapidoTracker.PHASE_HTML);
+              }
+              generateHtmlOutputs(f, false, db, null);
+              if (pf.rapido != null) {
+                pf.rapido.stopRecording();
+              }
             }
-          }
-        } else {
-          if (pf.rapido != null) {
-            pf.rapido.startRecording(f, RapidoTracker.PHASE_SHEETS);
-          }
-          generateSpreadsheets(f, false, db);
-          if (pf.rapido != null) {
-            pf.rapido.stopRecording();
+          } finally {
+            f.finish("generate2");
           }
         }
       } finally {
-        f.finish("generate2");
+        pf.sdUsageCache = null;
       }
-    }
-    if (pf.allProfilesCsv != null) {
-      pf.allProfilesCsv.dump();
-    }
-    if (pf.allProfilesXlsx != null) {
-      pf.allProfilesXlsx.configure();
-      String path = Utilities.path(pf.tempDir, "all-profiles.xlsx");
-      pf.allProfilesXlsx.finish(new FileOutputStream(path));
-      pf.otherFilesRun.add(Utilities.path(pf.tempDir, "all-profiles.xlsx"));
-      pf.allProfilesXlsx.dump();
-    }
 
-    logMessage("Generate Summaries");
-
-
-    for (String s : pf.profileTestCases) {
-      logMessage("Running Profile Tests Cases in "+s);
-      new ProfileTestCaseExecutor(pf.rootDir, pf.context, pf.validator, pf.fileList).execute(s);
-    }
-    if (!pf.changeList.isEmpty()) {
-      if (isNewML()) {
-        for (String l : allLangs()) {
-          generateSummaryOutputsAfter(l, pf.rcLangs.get(l));
+      logMessage("Generate Spreadsheets");
+      columnWidths = new ColumnWidthCache();
+      // the files whose spreadsheets are reused from the last build: decided before the prefetcher starts, so that it
+      // doesn't build their workbooks
+      Set<FetchedFile> replaySheets = new HashSet<>();
+      if (pf.rapido != null && !settings.isGenerationOff()) {
+        for (FetchedFile f : pf.changeList) {
+          if (pf.rapido.canReplay(f, RapidoTracker.PHASE_SHEETS)) {
+            replaySheets.add(f);
+          }
         }
-      } else {
-        generateSummaryOutputsAfter(null, pf.rc);
       }
-    }
-    pf.template.rapidoSummary();
-    genBasePages();
+      spreadsheetPrefetcher = startSpreadsheetPrefetcher(replaySheets);
+      try {
+        for (FetchedFile f : pf.changeList) {
+          f.start("generate2");
+          try {
+            if (replaySheets.contains(f)) {
+              replayGeneration(f, RapidoTracker.PHASE_SHEETS);
+              // the rows in the all-profiles spreadsheets. A phase that threw isn't replayed, so this didn't throw last
+              // time: an exception now is reported as generateResourceSpreadsheets reports it
+              for (FetchedResource r : f.getResources()) {
+                if (r.getResource() instanceof StructureDefinition) {
+                  try {
+                    addToAllProfiles(r, (StructureDefinition) r.getResource(), new ArrayList<>());
+                  } catch (Exception e) {
+                    log("Exception generating resource "+f.getName()+"::"+r.fhirType()+"/"+r.getId()+": "+e.getMessage());
+                    f.getErrors().add(new ValidationMessage(ValidationMessage.Source.Publisher, ValidationMessage.IssueType.EXCEPTION, r.fhirType(), "Error Rendering Resource: "+e.getMessage(), ValidationMessage.IssueSeverity.ERROR));
+                  }
+                }
+              }
+            } else {
+              if (pf.rapido != null) {
+                pf.rapido.startRecording(f, RapidoTracker.PHASE_SHEETS);
+              }
+              generateSpreadsheets(f, false, db);
+              if (pf.rapido != null) {
+                pf.rapido.stopRecording();
+              }
+            }
+          } finally {
+            f.finish("generate2");
+          }
+        }
+      } finally {
+        if (spreadsheetPrefetcher != null) {
+          if (spreadsheetPrefetcher.getFallbacks() > 0) {
+            log("Spreadsheets: "+spreadsheetPrefetcher.getFallbacks()+" profile workbook(s) could not be built ahead, and were built in order instead (first: "+spreadsheetPrefetcher.getFirstFailure()+")");
+          }
+          spreadsheetPrefetcher.close();
+          spreadsheetPrefetcher = null;
+        }
+      }
+      if (pf.allProfilesCsv != null) {
+        pf.allProfilesCsv.dump();
+      }
+      if (pf.allProfilesXlsx != null) {
+        pf.allProfilesXlsx.configure();
+        String path = Utilities.path(pf.tempDir, "all-profiles.xlsx");
+        try (FileOutputStream stream = new FileOutputStream(path)) {
+          pf.allProfilesXlsx.finish(stream);
+        }
+        pf.otherFilesRun.add(Utilities.path(pf.tempDir, "all-profiles.xlsx"));
+        pf.allProfilesXlsx.dump();
+      }
+      columnWidths = null;
 
-    if (db != null) {
-      db.closeUp();
-      openDb = null;
+      logMessage("Generate Summaries");
+
+
+      for (String s : pf.profileTestCases) {
+        logMessage("Running Profile Tests Cases in "+s);
+        new ProfileTestCaseExecutor(pf.rootDir, pf.context, pf.validator, pf.fileList).execute(s);
+      }
+      if (!pf.changeList.isEmpty()) {
+        if (isNewML()) {
+          for (String l : allLangs()) {
+            generateSummaryOutputsAfter(l, pf.rcLangs.get(l));
+          }
+        } else {
+          generateSummaryOutputsAfter(null, pf.rc);
+        }
+      }
+      pf.template.rapidoSummary();
+      genBasePages();
+    } finally {
+      // close it even when generation fails, or the open file can't be deleted on Windows
+      if (db != null) {
+        db.closeUp();
+      }
     }
     FileUtilities.bytesToFile(pf.extensionTracker.generate(), Utilities.path(pf.tempDir, "usage-stats.json"));
     try {
@@ -455,11 +494,26 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
     printMemUsage();
     log("Reclaiming memory...");
-    cleanOutput(pf.tempDir);
+    if (pf.hasCheckedDependencies) {
+      // rapido: what the files wrote in the temp folder, and what an earlier build wrote that no file writes now
+      RapidoOutputs.Change change = new RapidoOutputs(pf.vsCache, pf.tempDir).update(pf.fileList, pf.changeList);
+      if (change != null) {
+        pf.otherFilesRun.addAll(change.getKept());
+        for (String gone : change.getGone()) {
+          if (!isValidFile(gone)) { // unless something else wrote it in this build
+            new File(gone).delete();
+          }
+        }
+        cleanOutput(pf.tempDir);
+      } else {
+        log("Rapido Mode: what the unchanged files wrote in the temp folder isn't known, so nothing is removed from it");
+      }
+    } else {
+      cleanOutput(pf.tempDir);
+    }
     for (FetchedFile f : pf.fileList) {
       f.trim();
     }
-    genCombinedPackage();
     if (pf.txUnloadEarly) {
       // memory-starved IGs opt into unloading terminology now, before HTML inspection.
       // The trade-off is that conformance statement rendering (which needs terminology) won't work.
@@ -549,6 +603,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     if (pf.changeList.isEmpty()) {
       pageRebuild.notReusable("the package wasn't built");
+    }
+    if (pf.txUnloadEarly) {
+      // the pages would be rendered again with the terminology unloaded
+      pageRebuild.notReusable("the terminology is unloaded early (tx-unload-early)");
     }
     if (pf.template != null) {
       try {
@@ -696,6 +754,28 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * html checks, the final zip. A page-only rebuild (replay != null) has put the temp folder back as it was when Jekyll
    * ran (apart from the changed pages), and puts back what the package step wrote instead of running it again
    */
+  interface PageRebuildStep {
+    void run() throws IOException;
+  }
+
+  /**
+   * Watch mode: keeps what a page rebuild after this build needs. If that fails, the build goes on: only a page rebuild
+   * can't follow it
+   */
+  void keepForPageRebuild(PageRebuildStep step) {
+    if (pageRebuild == null) {
+      return;
+    }
+    try {
+      step.run();
+    } catch (IOException | RuntimeException e) {
+      log("Unable to keep the state for a page rebuild: " + e);
+      pageRebuild.notReusable("its state couldn't be kept (" + e + ")");
+      pageRebuild.discard();
+      pageRebuild = null;
+    }
+  }
+
   public void finishGenerate(PageRebuild replay) throws Exception {
     finishGenerate(replay, null);
   }
@@ -712,9 +792,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         templateBeforeJekyll();
       }
       deleteStaleTempFiles();
-      if (pageRebuild != null) {
-        pageRebuild.beforeJekyll();
-      }
+      keepForPageRebuild(() -> pageRebuild.beforeJekyll());
     }
 
     boolean jekyllOk;
@@ -745,8 +823,6 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           fresh.removeAll(checked);
           freshFrom.append(" (").append(checked.size()).append(" of them as the html check left them)");
         }
-      } else if (!jekyllOk && pageRebuild != null) {
-        pageRebuild.notReusable("Jekyll failed");
       }
     } finally {
       dropCheckedStash();
@@ -755,9 +831,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
     }
     if (jekyllOk && replay == null) {
-      if (pageRebuild != null) {
-        pageRebuild.afterJekyll();
-      }
+      keepForPageRebuild(() -> pageRebuild.afterJekyll());
       if (!settings.isGenerationOff()) {
         templateOnCheck();
       }
@@ -790,6 +864,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           addFileToNpm(NPMPackageGenerator.Category.OTHER, "publication-request.json", FileUtilities.fileToBytes(pr));
         }
         pf.npm.finish();
+        reportRenamedPackageFiles(pf.npm);
         ensureCorePackageDependency(pf.npm);
         for (NPMPackageGenerator vnpm : pf.vnpms.values()) {
           vnpm.finish();
@@ -806,18 +881,33 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
             pf.errors.add(new ValidationMessage(ValidationMessage.Source.Publisher, ValidationMessage.IssueType.EXCEPTION, "package.tgz", "Error converting pacakge to R4B: "+e.getMessage(), ValidationMessage.IssueSeverity.ERROR));
           }
         }
+        // the combined package is made from package.tgz, so it has to wait until that has been written. It needs
+        // terminology for the expansions, which is still loaded here unless the IG unloads it early
+        if (pf.txUnloadEarly) {
+          log("Not generating the combined package: terminology has been unloaded (tx-unload-early)");
+        } else {
+          genCombinedPackage();
+        }
 
         if (settings.getMode() == null || settings.getMode() == PublisherUtils.IGBuildMode.MANUAL) {
           if (settings.isCacheVersion()) {
-            pf.pcm.addPackageToCache(pf.packageId(), pf.publishedIg.getVersion(), new FileInputStream(pf.npm.filename()), "[output]");
+            try (FileInputStream in = new FileInputStream(pf.npm.filename())) {
+              pf.pcm.addPackageToCache(pf.packageId(), pf.publishedIg.getVersion(), in, "[output]");
+            }
           } else {
-            pf.pcm.addPackageToCache(pf.packageId(), "dev", new FileInputStream(pf.npm.filename()), "[output]");
+            try (FileInputStream in = new FileInputStream(pf.npm.filename())) {
+              pf.pcm.addPackageToCache(pf.packageId(), "dev", in, "[output]");
+            }
             if (pf.branchName != null) {
-              pf.pcm.addPackageToCache(pf.packageId(), "dev$"+ pf.branchName, new FileInputStream(pf.npm.filename()), "[output]");
+              try (FileInputStream in = new FileInputStream(pf.npm.filename())) {
+                pf.pcm.addPackageToCache(pf.packageId(), "dev$"+ pf.branchName, in, "[output]");
+              }
             }
           }
         } else if (settings.getMode() == PublisherUtils.IGBuildMode.PUBLICATION) {
-          pf.pcm.addPackageToCache(pf.packageId(), pf.publishedIg.getVersion(), new FileInputStream(pf.npm.filename()), "[output]");
+          try (FileInputStream in = new FileInputStream(pf.npm.filename())) {
+            pf.pcm.addPackageToCache(pf.packageId(), pf.publishedIg.getVersion(), in, "[output]");
+          }
         }
         JsonArray json = new JsonArray();
         for (String s : pf.generateVersions) {
@@ -827,9 +917,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         FileUtilities.bytesToFile(org.hl7.fhir.utilities.json.parser.JsonParser.composeBytes(json), Utilities.path(pf.outputDir, "sub-package-list.json"));
         generateZips(df);
       }
-      if (pageRebuild != null) {
-        pageRebuild.afterPackage();
-      }
+      keepForPageRebuild(() -> pageRebuild.afterPackage());
     }
 
     log("Checking Output HTML");
@@ -940,19 +1028,42 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     if (fullIgZip == null || !fullIgZip.write(Utilities.path(pf.tempDir, "full-ig.zip"), pf.outputDir, "site/", "index.html",
         REDIRECT_SOURCE.getBytes(StandardCharsets.UTF_8))) {
-      ZipGenerator zip = new ZipGenerator(Utilities.path(pf.tempDir, "full-ig.zip"));
-      zip.addFolder(pf.outputDir, "site/", false);
-      zip.addFileSource("index.html", REDIRECT_SOURCE, false);
-      zip.close();
+      if (settings.getThreads() > 0) {
+        // the same entries, compressed on the extra threads (-threads)
+        new ParallelFolderZip(settings.getThreads()).write(Utilities.path(pf.tempDir, "full-ig.zip"), pf.outputDir, "site/",
+            "index.html", REDIRECT_SOURCE.getBytes(StandardCharsets.UTF_8));
+      } else {
+        ZipGenerator zip = new ZipGenerator(Utilities.path(pf.tempDir, "full-ig.zip"));
+        zip.addFolder(pf.outputDir, "site/", false);
+        zip.addFileSource("index.html", REDIRECT_SOURCE, false);
+        zip.close();
+      }
     }
     FileUtilities.copyFile(Utilities.path(pf.tempDir, "full-ig.zip"), Utilities.path(pf.outputDir, "full-ig.zip"));
     log("Final .zip built");
     if (!pf.txUnloadEarly) {
       // default path: terminology stayed loaded through HTML inspection (so conformance
       // statement rendering works); unload it now that the inspector is complete.
-      pf.context.unload();
-      System.gc();
+      if (pageRebuild != null && pageRebuild.mayBeReusable()) {
+        // a page rebuild that follows checks the html again with it (see PageRebuild.discard())
+        pageRebuild.unloadContextWhenDiscarded();
+      } else if (replay == null) {
+        pf.context.unload();
+        System.gc();
+      }
     }
+  }
+
+  private void generateConstants() throws IOException {
+    fragment("ul-open", "<ul>", pf.otherFilesRun, System.currentTimeMillis(), "ul-open",  "constant", null);
+    fragment("ul-close", "</ul>", pf.otherFilesRun, System.currentTimeMillis(), "ul-close",  "constant", null);
+    fragment("ol-open", "<ol>", pf.otherFilesRun, System.currentTimeMillis(), "ol-open",  "constant", null);
+    fragment("ol-close", "</ol>", pf.otherFilesRun, System.currentTimeMillis(), "ol-close",  "constant", null);
+    fragment("table-grid-open", "<table class=\"grid\">", pf.otherFilesRun, System.currentTimeMillis(), "table-grid-open",  "constant", null);
+    fragment("table-grid-close", "</table>", pf.otherFilesRun, System.currentTimeMillis(), "table-grid-close",  "constant", null);
+    fragment("table-list-open", "<table class=\"list\">", pf.otherFilesRun, System.currentTimeMillis(), "table-list-open",  "constant", null);
+    fragment("table-list-close", "</table>", pf.otherFilesRun, System.currentTimeMillis(), "table-list-close",  "constant", null);
+
   }
 
   /**
@@ -982,7 +1093,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       gen.setModes(Set.of("api", "tx", "cnt", "expansions", "pin"));
       gen.setVerbose(false);
 
-      NpmPackage npm = NpmPackage.fromPackage(new FileInputStream(Utilities.path(pf.outputDir, "package.tgz")));
+      NpmPackage npm;
+      try (FileInputStream in = new FileInputStream(Utilities.path(pf.outputDir, "package.tgz"))) {
+        npm = NpmPackage.fromPackage(in);
+      }
       gen.generateCombinedPackage(npm);
     } catch (Exception e) {
       log("Error generating combined package: "+e.getMessage());
@@ -1107,20 +1221,20 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
               dst = langOutputPath(o, l);
               byte[] src = loadTranslationSource(f, l);
               if (f.getPath().endsWith(".md")) {
-                checkMakeFile(processCustomLiquid(db, stripFrontMatter(src), f, lang), dst, f.getOutputNames());
+                checkMakeFile(processCustomLiquid(db, seatMarkdownPage(f, o, stripFrontMatter(src)), f, lang), dst, f.getOutputNames());
               } else {
                 checkMakeFile(processCustomLiquid(db, src, f, lang), dst, f.getOutputNames());
               }
             }
             dst = Utilities.path(this.pf.tempDir, o.getRelativePath());
             if (f.getPath().endsWith(".md")) {
-              checkMakeFile(processCustomLiquid(db, stripFrontMatter(f.getSource()), f, lang), dst, f.getOutputNames());
+              checkMakeFile(processCustomLiquid(db, seatMarkdownPage(f, o, stripFrontMatter(f.getSource())), f, lang), dst, f.getOutputNames());
             } else {
               checkMakeFile(processCustomLiquid(db, f.getSource(), f, lang), dst, f.getOutputNames());
             }
           } else {
             if (f.getPath().endsWith(".md")) {
-              checkMakeFile(processCustomLiquid(db, stripFrontMatter(f.getSource()), f, lang), dst, f.getOutputNames());
+              checkMakeFile(processCustomLiquid(db, seatMarkdownPage(f, o, stripFrontMatter(f.getSource())), f, lang), dst, f.getOutputNames());
             } else {
               checkMakeFile(processCustomLiquid(db, f.getSource(), f, lang), dst, f.getOutputNames());
             }
@@ -1276,6 +1390,57 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /** shared by the profile workbooks of one Spreadsheets phase */
+  private ColumnWidthCache columnWidths;
+  /** builds the per-profile workbooks of the Spreadsheets phase ahead, on other threads */
+  private ProfileSpreadsheetPrefetcher<FetchedResource> spreadsheetPrefetcher;
+
+  private ColumnWidthCache columnWidths() {
+    if (columnWidths == null) {
+      columnWidths = new ColumnWidthCache();
+    }
+    return columnWidths;
+  }
+
+  /**
+   * The per-profile xlsx workbooks that the Spreadsheets loop below will build, in its order, are handed to a
+   * {@link ProfileSpreadsheetPrefetcher}. Each job renders a deep copy of the profile, taken here on this thread,
+   * with the displays that need the worker context rendered here too, by a generator that then lets go of the
+   * context. This only happens when the user has asked for extra threads (-threads). The loop still does
+   * everything else in the same order as before (csv, all-profiles, schematron), and builds a workbook itself
+   * whenever the prefetcher has no result for it.
+   */
+  private ProfileSpreadsheetPrefetcher<FetchedResource> startSpreadsheetPrefetcher(Set<FetchedFile> replayed) {
+    int threads = this.settings.getThreads();
+    if (threads == 0 || this.settings.isGenerationOff()) {
+      return null;
+    }
+    List<FetchedResource> candidates = new ArrayList<>();
+    for (FetchedFile f : pf.changeList) {
+      if (f.getProcessMode() != FetchedFile.PROCESS_NONE && f.getProcessMode() != FetchedFile.PROCESS_XSLT && !replayed.contains(f)) {
+        for (FetchedResource r : f.getResources()) {
+          // wantGen(r, "xlsx") without the template check, which is always true for xlsx but counts the calls;
+          // the loop still asks wantGen itself
+          if (r.getResource() instanceof StructureDefinition && ((StructureDefinition) r.getResource()).hasSnapshot()
+              && !Boolean.FALSE.equals(pf.wantGenParams.get("xlsx")) && pf.igpkp.wantGen(r, "xlsx")) {
+            candidates.add(r);
+          }
+        }
+      }
+    }
+    if (candidates.isEmpty()) {
+      return null;
+    }
+    return new ProfileSpreadsheetPrefetcher<>(candidates, threads, r -> {
+      StructureDefinition sd = (StructureDefinition) r.getResource();
+      ProfileSpreadsheetGenerator sdg = new ProfileSpreadsheetGenerator(this.pf.context, true, anyMustSupport(sd), pf.rendererFactory, columnWidths());
+      StructureDefinition copy = sd.copy(Base.COPY_ALL);
+      // the job runs on a worker thread, so it must not see the context: detach the generator from it here
+      sdg.detachFromContext(copy);
+      return ProfileSpreadsheetPrefetcher.job(sdg, copy);
+    });
+  }
+
   private void generateSpreadsheets(FetchedFile f, boolean regen, DBBuilder db) throws Exception {
     if (this.settings.isGenerationOff()) {
       return;
@@ -1294,6 +1459,24 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
     }
   }
+  /**
+   * An instance of a logical model, loaded as a Binary (see PublisherIGLoader.loadAsElementModel):
+   * the FetchedResource is a Binary, but its element is the logical model's type.
+   */
+  static boolean isLogicalAsBinary(FetchedResource r, Element element) {
+    return "Binary".equals(r.fhirType()) && element != null && !"Binary".equals(element.fhirType());
+  }
+
+  /** The content of a logical model instance (JSON), as a Binary resource (JSON). */
+  private byte[] wrapAsBinary(String id, byte[] content) throws IOException {
+    Binary bin = new Binary(pf.context.getModelContext(), "application/json");
+    bin.setId(id);
+    bin.setContent(content);
+    ByteArrayOutputStream b = new ByteArrayOutputStream();
+    new JsonParser(pf.context.getModelContext()).setOutputStyle(OutputStyle.NORMAL).compose(b, bin);
+    return b.toByteArray();
+  }
+
   private void saveNativeResourceOutputFormats(FetchedFile f, FetchedResource r, Element element, String lang) throws IOException, FileNotFoundException {
     String path;
     if (wantGen(r, "xml") || forHL7orFHIR()) {
@@ -1303,13 +1486,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         path = Utilities.path(this.pf.tempDir, r.fhirType()+"-"+r.getId()+".xml");
       }
       f.getOutputNames().add(path);
-      FileOutputStream stream = new FileOutputStream(path);
-      org.hl7.fhir.services.elementmodel.XmlParser xp = new org.hl7.fhir.services.elementmodel.XmlParser(this.pf.context);
-      if (suppressId(f, r)) {
-        xp.setIdPolicy(ParserBase.IdRenderingPolicy.NotRoot);
+      try (FileOutputStream stream = new FileOutputStream(path)) {
+        org.hl7.fhir.services.elementmodel.XmlParser xp = new org.hl7.fhir.services.elementmodel.XmlParser(this.pf.context);
+        if (suppressId(f, r)) {
+          xp.setIdPolicy(ParserBase.IdRenderingPolicy.NotRoot);
+        }
+        xp.compose(element, stream, OutputStyle.PRETTY, this.pf.igpkp.getCanonical());
       }
-      xp.compose(element, stream, OutputStyle.PRETTY, this.pf.igpkp.getCanonical());
-      stream.close();
     }
     if (wantGen(r, "json") || forHL7orFHIR()) {
       if (this.settings.isNewMultiLangTemplateFormat() && lang != null) {
@@ -1318,13 +1501,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         path = Utilities.path(this.pf.tempDir, r.fhirType()+"-"+r.getId()+".json");
       }
       f.getOutputNames().add(path);
-      FileOutputStream stream = new FileOutputStream(path);
-      org.hl7.fhir.services.elementmodel.JsonParser jp = new org.hl7.fhir.services.elementmodel.JsonParser(this.pf.context);
-      if (suppressId(f, r)) {
-        jp.setIdPolicy(ParserBase.IdRenderingPolicy.NotRoot);
+      try (FileOutputStream stream = new FileOutputStream(path)) {
+        org.hl7.fhir.services.elementmodel.JsonParser jp = new org.hl7.fhir.services.elementmodel.JsonParser(this.pf.context);
+        if (suppressId(f, r)) {
+          jp.setIdPolicy(ParserBase.IdRenderingPolicy.NotRoot);
+        }
+        jp.compose(element, stream, OutputStyle.PRETTY, this.pf.igpkp.getCanonical());
       }
-      jp.compose(element, stream, OutputStyle.PRETTY, this.pf.igpkp.getCanonical());
-      stream.close();
     }
     if (wantGen(r, "ttl")) {
       if (this.settings.isNewMultiLangTemplateFormat() && lang != null) {
@@ -1333,13 +1516,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         path = Utilities.path(this.pf.tempDir, r.fhirType()+"-"+r.getId()+".ttl");
       }
       f.getOutputNames().add(path);
-      FileOutputStream stream = new FileOutputStream(path);
-      org.hl7.fhir.services.elementmodel.TurtleParser tp = new org.hl7.fhir.services.elementmodel.TurtleParser(this.pf.context);
-      if (suppressId(f, r)) {
-        tp.setIdPolicy(ParserBase.IdRenderingPolicy.NotRoot);
+      try (FileOutputStream stream = new FileOutputStream(path)) {
+        org.hl7.fhir.services.elementmodel.TurtleParser tp = new org.hl7.fhir.services.elementmodel.TurtleParser(this.pf.context);
+        if (suppressId(f, r)) {
+          tp.setIdPolicy(ParserBase.IdRenderingPolicy.NotRoot);
+        }
+        tp.compose(element, stream, OutputStyle.PRETTY, this.pf.igpkp.getCanonical());
       }
-      tp.compose(element, stream, OutputStyle.PRETTY, this.pf.igpkp.getCanonical());
-      stream.close();
     }
   }
 
@@ -1461,17 +1644,17 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     if (wantGen(r, "jekyll-data") && this.pf.produceJekyllData) {
       org.hl7.fhir.services.elementmodel.JsonParser jp = new org.hl7.fhir.services.elementmodel.JsonParser(this.pf.context);
-      FileOutputStream bs = new FileOutputStream(Utilities.path(this.pf.tempDir, "_data", r.fhirType()+"-"+r.getId()+".json"));
-      jp.compose(langElement, bs, OutputStyle.NORMAL, null);
-      bs.close();
+      try (FileOutputStream bs = new FileOutputStream(Utilities.path(this.pf.tempDir, "_data", r.fhirType()+"-"+r.getId()+".json"))) {
+        jp.compose(langElement, bs, OutputStyle.NORMAL, null);
+      }
     }
     if (wantGen(r, "ttl")) {
       genWrapper(null, r, template, this.pf.igpkp.getProperty(r, "format"), f.getOutputNames(), vars, "ttl", "", false, lang, lrc);
     }
     org.hl7.fhir.services.elementmodel.XmlParser xp = new org.hl7.fhir.services.elementmodel.XmlParser(this.pf.context);
-    ByteArrayOutputStream bs = new ByteArrayOutputStream();
-    xp.compose(langElement, bs, OutputStyle.NORMAL, null);
-    int size = bs.size();
+    // the xml, json and ttl views only use Prism for small resources; finding that out doesn't need the whole xml
+    Element sizeElement = langElement;
+    boolean prism = OutputSizeCheck.isSmallerThan(stream -> xp.compose(sizeElement, stream, OutputStyle.NORMAL, null), PRISM_SIZE_LIMIT);
 
     Element e = langElement;
     if (SpecialTypeHandler.handlesType(r.fhirType(), this.pf.context.getFHIRVersion()) && !pf.customResourceNames.contains(r.fhirType())) {
@@ -1484,7 +1667,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (wantGen(r, "xml-html")) {
       long start = System.currentTimeMillis();
       XmlXHtmlRenderer x = new XmlXHtmlRenderer();
-      x.setPrism(size < PRISM_SIZE_LIMIT);
+      x.setPrism(prism);
       xp.setLinkResolver(this.pf.igpkp);
       xp.setShowDecorations(false);
       if (suppressId(f, r)) {
@@ -1496,7 +1679,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (wantGen(r, "json-html")) {
       long start = System.currentTimeMillis();
       JsonXhtmlRenderer j = new JsonXhtmlRenderer();
-      j.setPrism(size < PRISM_SIZE_LIMIT);
+      j.setPrism(prism);
       org.hl7.fhir.services.elementmodel.JsonParser jp = new org.hl7.fhir.services.elementmodel.JsonParser(this.pf.context);
       jp.setLinkResolver(this.pf.igpkp);
       jp.setAllowComments(true);
@@ -1517,7 +1700,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
       ttl.setStyle(OutputStyle.PRETTY);
       ttl.compose(e, rdf, "");
-      fragment(r.fhirType()+"-"+r.getId()+"-ttl-html", rdf.asHtml(size < PRISM_SIZE_LIMIT), f.getOutputNames(), r, vars, "ttl", start, "ttl-html", "Resource", lang);
+      fragment(r.fhirType()+"-"+r.getId()+"-ttl-html", rdf.asHtml(prism), f.getOutputNames(), r, vars, "ttl", start, "ttl-html", "Resource", lang);
     }
 
     generateHtml(f, r, res, langElement, vars, lrc, lang);
@@ -1623,6 +1806,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           }
           for (String fn : br.getFilenames()) {
             this.pf.otherFilesRun.add(Utilities.path(this.pf.tempDir, fn));
+            f.getOutputNames().add(Utilities.path(this.pf.tempDir, fn)); // for -rapido (see RapidoOutputs)
           }
         }
         fragment(rX.fhirType()+"-"+rX.getId()+"-html", html, f.getOutputNames(), rX, vars, null, start, "html", "Resource", lang);
@@ -1678,6 +1862,53 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       log("Note: the narrative for "+r.fhirType()+"/"+r.getId()+" could not be fitted under the page heading: "+e.getMessage());
       return xhtml;
     }
+  }
+
+  /**
+   * Sit the markdown of a template-wrapped page under the page title the template gives it.
+   *
+   * <p>A page with generation=markdown is rendered by the template's md page layout, which emits the
+   * page title as an h2 and then includes the markdown from {@code _includes/<page>.md}. Authors
+   * write that markdown as if it were the whole document (a Keep a Changelog file opens with
+   * '# Changelog' and has a '## [version]' per release), so its headings compete with the title, the
+   * page fails the heading structure checks, and 'page-heading-level' never touches it because it
+   * has more than one root. This is the markdown counterpart of {@link #seatNarrative}, and uses the
+   * same level ({@code pf.narrativeHeadingLevel}) for the same reason.
+   *
+   * <p>Only the {@code _includes} copy of an actual markdown page is seated - other markdown in
+   * {@code _includes} is included at places nobody can know from here. Markdown too deeply nested to
+   * shift is left as it is, and the inspector reports the page.
+   */
+  private byte[] seatMarkdownPage(FetchedFile f, FetchedFile.Output o, byte[] src) throws IOException {
+    if (pf.mdTemplate == null || pf.publishedIg == null || !isTemplatedMarkdownPage(o.getRelativePath(), pf.publishedIg.getDefinition().getPage())) {
+      return src;
+    }
+    String md = new String(src, StandardCharsets.UTF_8);
+    try {
+      String seated = MarkdownHeadingSeater.seat(md, pf.narrativeHeadingLevel);
+      return seated == md ? src : seated.getBytes(StandardCharsets.UTF_8);
+    } catch (FHIRException e) {
+      log("Note: the headings in "+f.getPath()+" could not be fitted under the page heading: "+e.getMessage());
+      return src;
+    }
+  }
+
+  /**
+   * True if relativePath is the {@code _includes} source of a page that {@link #applyPageTemplate}
+   * wraps in the md page template - same tests as there.
+   */
+  private boolean isTemplatedMarkdownPage(String relativePath, ImplementationGuide.ImplementationGuideDefinitionPageComponent page) throws IOException {
+    String p = page.getName();
+    if (p != null && p.endsWith(".html") && page.getGeneration() == ImplementationGuide.GuidePageGeneration.MARKDOWN && !pf.relativeNames.containsKey(p)
+        && relativePath.equals(Utilities.path("_includes", p.substring(0, p.indexOf(".html")) + ".md"))) {
+      return true;
+    }
+    for (ImplementationGuide.ImplementationGuideDefinitionPageComponent childPage : page.getPageList()) {
+      if (isTemplatedMarkdownPage(relativePath, childPage)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private List<ProvenanceDetails> loadProvenanceForBundle(String path, Element bnd, FetchedFile f) throws Exception {
@@ -1898,7 +2129,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     if (wantGen(fr, "content")) {
       long start = System.currentTimeMillis();
-      fragment("CodeSystem-"+prefixForContainer+cs.getId()+"-content", csr.content(this.pf.otherFilesRun), f.getOutputNames(), fr, vars, null, start, "content", "CodeSystem", lang);
+      fragment("CodeSystem-"+prefixForContainer+cs.getId()+"-content", csr.content(this.pf.otherFilesRun, true), f.getOutputNames(), fr, vars, null, start, "content", "CodeSystem", lang);
+    }
+    if (wantGen(fr, "content-noprop")) {
+      long start = System.currentTimeMillis();
+      fragment("CodeSystem-"+prefixForContainer+cs.getId()+"-content-noprop", csr.content(this.pf.otherFilesRun, false), f.getOutputNames(), fr, vars, null, start, "content", "CodeSystem", lang);
     }
     if (wantGen(fr, "xref")) {
       long start = System.currentTimeMillis();
@@ -1919,7 +2154,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         String path = Utilities.path(this.pf.tempDir, "CodeSystem-"+prefixForContainer + cs.getId()+".xlsx");
         f.getOutputNames().add(path);
         vsg.renderCodeSystem(cs);
-        vsg.finish(new FileOutputStream(path));
+        try (FileOutputStream out = new FileOutputStream(path)) {
+          vsg.finish(out);
+        }
       }
     }
   }
@@ -1969,23 +2206,25 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
         fragment("ValueSet-"+prefixForContainer+vs.getId()+"-expansion", html, f.getOutputNames(), r, vars, null, start, "expansion", "ValueSet", lang);
       } else {
-        ValueSetExpansionOutcome exp = this.pf.context.expandVS(new ExpansionOptions().withHierarchical(true).withLanguage(lrc.getLocale().getLanguage()).withIncompleteOk(true), vs);
+        ValueSetExpansionOutcome exp = this.pf.context.expandVS(new ExpansionOptions().withCacheOk(true).withHierarchical(true).withLanguage(lrc.getLocale().getLanguage()).withIncompleteOk(true), vs);
 
         if (db != null) {
           db.recordExpansion(vs, exp);
         }
         if (exp.getValueset() != null) {
+          // the tx cache holds on to this expansion, so it's rendered from a copy
+          ValueSet expansion = exp.getValueset().copy(Base.COPY_ALL);
           if (pf.savingExpansions) {
-            this.pf.expansions.add(exp.getValueset());
+            this.pf.expansions.add(expansion);
           }
           RenderingContext elrc = lrc.withUniqueLocalPrefix("x").withMode(RenderingContext.ResourceRendererMode.END_USER);
-          exp.getValueset().setCompose(null);
-          exp.getValueset().setText(null);
-          pf.rendererFactory.factory(exp.getValueset(), elrc).renderResource(ResourceWrapper.forResource(elrc, exp.getValueset()));
-          String html = new XhtmlComposer(XhtmlComposer.XML).compose(exp.getValueset().getText().getDiv());
+          expansion.setCompose(null);
+          expansion.setText(null);
+          pf.rendererFactory.factory(expansion, elrc).renderResource(ResourceWrapper.forResource(elrc, expansion));
+          String html = new XhtmlComposer(XhtmlComposer.XML).compose(expansion.getText().getDiv());
           fragment("ValueSet-"+prefixForContainer+vs.getId()+"-expansion", html, f.getOutputNames(), r, vars, null, start, "expansion", "ValueSet", lang);
           elrc = elrc.withOids(true);
-          XhtmlNode node = pf.rendererFactory.factory(exp.getValueset(), elrc).buildNarrative(ResourceWrapper.forResource(elrc, exp.getValueset()));
+          XhtmlNode node = pf.rendererFactory.factory(expansion, elrc).buildNarrative(ResourceWrapper.forResource(elrc, expansion));
           html = new XhtmlComposer(XhtmlComposer.XML).compose(node);
           fragment("ValueSet-"+prefixForContainer+vs.getId()+"-expansion-oids", html, f.getOutputNames(), r, vars, null, start, "expansion", "ValueSet", lang);
           if (ValueSetUtilities.isIncompleteExpansion(exp.getValueset())) {
@@ -2029,7 +2268,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         String path = Utilities.path(this.pf.tempDir, "ValueSet-"+prefixForContainer + r.getId()+".xlsx");
         f.getOutputNames().add(path);
         vsg.renderValueSet(vs);
-        vsg.finish(new FileOutputStream(path));
+        try (FileOutputStream out = new FileOutputStream(path)) {
+          vsg.finish(out);
+        }
       }
     }
 
@@ -2086,7 +2327,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       String path = Utilities.path(this.pf.tempDir, prefixForContainer + r.getId()+".xlsx");
       f.getOutputNames().add(path);
       cmg.renderConceptMap(cm);
-      cmg.finish(new FileOutputStream(path));
+      try (FileOutputStream out = new FileOutputStream(path)) {
+        cmg.finish(out);
+      }
     }
   }
 
@@ -2160,9 +2403,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (wantGen(r, "swagger") || wantGen(r, "openapi")) {
       String lp = isNewML() && lang != null && !lang.equals(this.pf.defaultTranslationLang) ? "-"+lang : "";
       org.hl7.fhir.services.openapi.Writer oa = null;
-      if (this.pf.openApiTemplate != null)
-        oa = new org.hl7.fhir.services.openapi.Writer(new FileOutputStream(Utilities.path(this.pf.tempDir, cpbs.getId()+ lp+".openapi.json")), new FileInputStream(Utilities.path(FileUtilities.getDirectoryForFile(this.settings.getConfigFile()), this.pf.openApiTemplate)));
-      else
+      if (this.pf.openApiTemplate != null) {
+        try (FileInputStream template = new FileInputStream(Utilities.path(FileUtilities.getDirectoryForFile(this.settings.getConfigFile()), this.pf.openApiTemplate))) {
+          oa = new org.hl7.fhir.services.openapi.Writer(new FileOutputStream(Utilities.path(this.pf.tempDir, cpbs.getId()+ lp+".openapi.json")), template);
+        }
+      } else
         oa = new Writer(new FileOutputStream(Utilities.path(this.pf.tempDir, cpbs.getId()+ lp+".openapi.json")));
       String lic = license();
       String displ = this.pf.context.validateCode(new ValidationOptions(FhirPublication.R5, "en-US"), new Coding("http://hl7.org/fhir/spdx-license",  lic, null), null).getDisplay();
@@ -2170,6 +2415,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       oa.commit();
       if (lang == null) {
         this.pf.otherFilesRun.add(Utilities.path(this.pf.tempDir, cpbs.getId()+lp+ ".openapi.json"));
+        f.getOutputNames().add(Utilities.path(this.pf.tempDir, cpbs.getId()+lp+ ".openapi.json")); // for -rapido (see RapidoOutputs)
         addFileToNpm(NPMPackageGenerator.Category.OPENAPI, cpbs.getId()+ lp+".openapi.json", FileUtilities.fileToBytes(Utilities.path(this.pf.tempDir, cpbs.getId()+lp+".openapi.json")));
       }
     }
@@ -2181,23 +2427,37 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       String path = Utilities.path(this.pf.tempDir, sdPrefix + r.getId()+".csv");
       f.getOutputNames().add(path);
       ProfileUtilities pu = new ProfileUtilities(this.pf.context, this.pf.errors, this.pf.igpkp);
-      pu.generateCsv(new FileOutputStream(path), sd, true);
+      try (FileOutputStream out = new FileOutputStream(path)) {
+        pu.generateCsv(out, sd, true);
+      }
+      addToAllProfilesCsv(pu, sd);
     }
     if (wantGen(r, "xlsx")) {
       lapsed(null);
       String path = Utilities.path(this.pf.tempDir, sdPrefix + r.getId()+".xlsx");
       f.getOutputNames().add(path);
-      StructureDefinitionSpreadsheetGenerator sdg = new StructureDefinitionSpreadsheetGenerator(this.pf.context, true, anyMustSupport(sd), pf.rendererFactory);
-      sdg.renderStructureDefinition(sd, false);
-      sdg.finish(new FileOutputStream(path));
+      byte[] xlsx = spreadsheetPrefetcher == null ? null : spreadsheetPrefetcher.take(r);
+      if (xlsx != null) {
+        try (FileOutputStream out = new FileOutputStream(path)) {
+          out.write(xlsx);
+        }
+      } else {
+        StructureDefinitionSpreadsheetGenerator sdg = new ProfileSpreadsheetGenerator(this.pf.context, true, anyMustSupport(sd), pf.rendererFactory, columnWidths());
+        sdg.renderStructureDefinition(sd, false);
+        try (FileOutputStream out = new FileOutputStream(path)) {
+          sdg.finish(out);
+        }
+      }
       lapsed("xslx");
+      addToAllProfilesXlsx(sd);
     }
-    addToAllProfiles(r, sd, this.pf.errors);
 
     if (!regen && sd.getDerivation() == StructureDefinition.TypeDerivationRule.CONSTRAINT && wantGen(r, "sch")) {
       String path = Utilities.path(this.pf.tempDir, sdPrefix + r.getId()+".sch");
       f.getOutputNames().add(path);
-      new ProfileUtilities(this.pf.context, this.pf.errors, this.pf.igpkp).generateSchematrons(new FileOutputStream(path), sd);
+      try (FileOutputStream out = new FileOutputStream(path)) {
+        new ProfileUtilities(this.pf.context, this.pf.errors, this.pf.igpkp).generateSchematrons(out, sd);
+      }
       addFileToNpm(NPMPackageGenerator.Category.SCHEMATRON, sdPrefix + r.getId()+".sch", FileUtilities.fileToBytes(Utilities.path(this.pf.tempDir, sdPrefix + r.getId()+".sch")));
     }
 //    if (wantGen(r, "sch"))
@@ -2211,21 +2471,29 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    */
   private void addToAllProfiles(FetchedResource r, StructureDefinition sd, List<ValidationMessage> errors) throws Exception {
     if (wantGen(r, "csv")) {
-      if (this.pf.allProfilesCsv == null) {
-        this.pf.allProfilesCsv = new  org.hl7.fhir.services.utilities.CSVWriter(new FileOutputStream(Utilities.path(this.pf.tempDir, "all-profiles.csv")), this.pf.context, true);
-        this.pf.otherFilesRun.add(Utilities.path(this.pf.tempDir, "all-profiles.csv"));
-
-      }
-      new ProfileUtilities(this.pf.context, errors, this.pf.igpkp).addToCSV(this.pf.allProfilesCsv, sd);
+      addToAllProfilesCsv(new ProfileUtilities(this.pf.context, errors, this.pf.igpkp), sd);
     }
     if (wantGen(r, "xlsx")) {
       lapsed(null);
-      if (this.pf.allProfilesXlsx == null) {
-        this.pf.allProfilesXlsx = new StructureDefinitionSpreadsheetGenerator(this.pf.context, true, false, pf.rendererFactory);
-      }
-      this.pf.allProfilesXlsx.renderStructureDefinition(sd, true);
-      lapsed("all-xslx");
+      addToAllProfilesXlsx(sd);
     }
+  }
+
+  private void addToAllProfilesCsv(ProfileUtilities pu, StructureDefinition sd) throws Exception {
+    if (this.pf.allProfilesCsv == null) {
+      this.pf.allProfilesCsv = new  org.hl7.fhir.services.utilities.CSVWriter(new FileOutputStream(Utilities.path(this.pf.tempDir, "all-profiles.csv")), this.pf.context, true);
+      this.pf.otherFilesRun.add(Utilities.path(this.pf.tempDir, "all-profiles.csv"));
+
+    }
+    pu.addToCSV(this.pf.allProfilesCsv, sd);
+  }
+
+  private void addToAllProfilesXlsx(StructureDefinition sd) throws Exception {
+    if (this.pf.allProfilesXlsx == null) {
+      this.pf.allProfilesXlsx = new ProfileSpreadsheetGenerator(this.pf.context, true, false, pf.rendererFactory, columnWidths());
+    }
+    this.pf.allProfilesXlsx.renderStructureDefinition(sd, true);
+    lapsed("all-xslx");
   }
 
   /**
@@ -2241,6 +2509,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
     }
     pf.otherFilesRun.addAll(j.otherFiles);
+    for (int i : j.umlGenerated) {
+      f.getResources().get(i).setUmlGenerated(true);
+    }
     pf.errors.addAll(j.errors);
     f.getErrors().addAll(j.fileErrors);
     for (Map.Entry<Integer, List<ValidationMessage>> e : j.resErrors.entrySet()) {
@@ -2727,6 +2998,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         String filename = "Library-"+r.getId()+(counter == 0 ? "" : "-"+Integer.toString(counter))+"."+extension;
         FileUtilities.bytesToFile(att.getData(), Utilities.path(this.pf.tempDir, filename));
         this.pf.otherFilesRun.add(Utilities.path(this.pf.tempDir, filename));
+        f.getOutputNames().add(Utilities.path(this.pf.tempDir, filename)); // for -rapido (see RapidoOutputs)
       }
       counter++;
     }
@@ -2986,7 +3258,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
     if (checkMakeFile(FileUtilities.stringToBytes(wrapLiquid(fixedContent)), Utilities.path(pf.tempDir, "_includes", name+(lang == null ? "" : "-" + lang)+".xhtml"), outputTracker)) {
       if (settings.getMode() != PublisherUtils.IGBuildMode.AUTOBUILD && pf.makeQA) {
-        FileUtilities.stringToFile(pageWrap(fixedContent, name), Utilities.path(pf.qaDir, name+".html"));
+        FileUtilities.stringToFile(pageWrap(fixedContent, name), Utilities.path(pf.qaDir, name+(lang == null ? "" : "-" + lang)+".html"));
       }
     }
     // For multi-language IGs, also write a non-suffixed copy for the default language
@@ -3331,7 +3603,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     ObservationSummarySpreadsheetGenerator vsg = new ObservationSummarySpreadsheetGenerator(pf.context, pf.rendererFactory);
     pf.otherFilesRun.add(path);
     vsg.generate(cvr.getObservations());
-    vsg.finish(new FileOutputStream(path));
+    try (FileOutputStream out = new FileOutputStream(path)) {
+      vsg.finish(out);
+    }
     start = System.currentTimeMillis();
     fragment("summary-extensions", cvr.getExtensionSummary(), pf.otherFilesRun, start, "summary-extensions", "Cross", lang);
     start = System.currentTimeMillis();
@@ -3886,7 +4160,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
-  private void templateBeforeGenerate() throws IOException, FHIRException {
+  void templateBeforeGenerate() throws IOException, FHIRException {
     if (pf.template != null) {
       logMessage("Run Template");
       TimeTracker.Session tts = pf.tt.start("template");
@@ -3896,15 +4170,14 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       if (pf.staleTemp != null) {
         pf.staleTemp.saveTemplateWrites();
       }
+      // the fetched paths are canonical, and tempDir may not be (a symlink, or an 8.3 short name on Windows)
+      String canonicalTempDir = new File(this.pf.tempDir).getCanonicalPath();
       for (String newFile: newFileList) {
         if (!newFile.isEmpty()) {
           try {
             FetchedFile f = this.pf.fetcher.fetch(Utilities.path(this.pf.repoRoot, newFile));
             String dir = FileUtilities.getDirectoryForFile(f.getPath());
-            if (this.pf.tempDir.startsWith("/var") && dir.startsWith("/private/var")) {
-              dir = dir.substring(8);
-            }
-            String relative = this.pf.tempDir.length() > dir.length() ? "" : dir.substring(this.pf.tempDir.length());
+            String relative = canonicalTempDir.length() > dir.length() ? "" : dir.substring(canonicalTempDir.length());
             if (relative.length() > 0)
               relative = relative.substring(1);
             f.setRelativePath(f.getPath().substring( FileUtilities.getDirectoryForFile(f.getPath()).length()+1));
@@ -4430,7 +4703,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       return true;
     }
     if (settings.isGenerationOff()) {
-      FileUtils.copyDirectory(new File(pf.tempDir), new File(pf.outputDir));
+      File out = new File(pf.outputDir).getAbsoluteFile();
+      // in watch mode the output folder is in temp: it isn't copied into itself
+      FileUtils.copyDirectory(new File(pf.tempDir), out, f -> !f.getAbsoluteFile().equals(out));
       return true;
     }
     if (jekyllDriver != null && jekyllDriver.getUnavailable() == null) {
@@ -4473,7 +4748,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       if (update) {
         List<String> changed = new ArrayList<>();
         for (String f : changedTempFiles) {
-          changed.add(Paths.get(temp).relativize(Paths.get(f).toAbsolutePath()).toString());
+          changed.add(JekyllDriver.sitePath(Paths.get(temp).relativize(Paths.get(f).toAbsolutePath())));
         }
         log("Run jekyll: render the pages that depend on " + changed.size() + " changed " + (changed.size() == 1 ? "file" : "files")
             + " (Jekyll kept running, in folder " + pf.tempDir + ")");
@@ -4609,7 +4884,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     Map<String, String> byRelative = new HashMap<>();
     for (String f : files) {
       if (replay == null || !replay.restorePackageOutput(f)) {
-        byRelative.put(Paths.get(out).relativize(Paths.get(f).toAbsolutePath()).toString(), f);
+        byRelative.put(JekyllDriver.sitePath(Paths.get(out).relativize(Paths.get(f).toAbsolutePath())), f);
       }
     }
     if (byRelative.isEmpty()) {
@@ -4756,6 +5031,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           log("Jekyll timeout exceeded: " + Long.toString(pf.jekyllTimeout /1000) + " seconds");
         }
         log("Jekyll claimed to succeed, but returned an error. Proceeding anyway");
+        if (pageRebuild != null) {
+          pageRebuild.notReusable("Jekyll returned an error");
+        }
       } else {
         log("Jekyll has failed. Complete output from running Jekyll: " + pumpHandler.getBufferString());
         if (watchdog.killedProcess()) {
@@ -4929,8 +5207,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         exp.addEntry().setResource(vs).setFullUrl(vs.getUrl());
       }
 
-      new JsonParser(pf.context.getModelContext()).setOutputStyle(OutputStyle.PRETTY).compose(new FileOutputStream(Utilities.path(pf.outputDir, "expansions.json")), exp);
-      new XmlParser(pf.context.getModelContext()).setOutputStyle(OutputStyle.PRETTY).compose(new FileOutputStream(Utilities.path(pf.outputDir, "expansions.xml")), exp);
+      try (FileOutputStream stream = new FileOutputStream(Utilities.path(pf.outputDir, "expansions.json"))) {
+        new JsonParser(pf.context.getModelContext()).setOutputStyle(OutputStyle.PRETTY).compose(stream, exp);
+      }
+      try (FileOutputStream stream = new FileOutputStream(Utilities.path(pf.outputDir, "expansions.xml"))) {
+        new XmlParser(pf.context.getModelContext()).setOutputStyle(OutputStyle.PRETTY).compose(stream, exp);
+      }
       ZipGenerator zip = new ZipGenerator(Utilities.path(pf.outputDir, "expansions.json.zip"));
       zip.addFileName("expansions.json", Utilities.path(pf.outputDir, "expansions.json"), false);
       zip.close();
@@ -5223,6 +5505,28 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     fd.add("errors", e);
     fd.add("warnings", w);
     //    fd.add("hints", i);
+  }
+
+  /**
+   * A file whose path in the package would be too long for a tar entry is put in the package under
+   * a shortened name (NPMPackageGenerator.shortenForTar). For resources (the package and examples
+   * folders) that doesn't matter - they are found through the index - but a file in any other folder
+   * (tests, other...) is found by its name, so in effect it is missing from the package. That's an
+   * error for the IG as a whole (there's no resource or page to file it against).
+   */
+  private void reportRenamedPackageFiles(NPMPackageGenerator npm) {
+    for (Map.Entry<String, String> e : npm.getRenamedFiles().entrySet()) {
+      String original = e.getKey();
+      String folder = original.substring(0, original.lastIndexOf('/') + 1);
+      if (!Utilities.existsInList(folder, "package/", "package/examples/")) {
+        String name = original.startsWith("package/") ? original.substring(8) : original;
+        pf.errors.add(new ValidationMessage(ValidationMessage.Source.Publisher, ValidationMessage.IssueType.TOOLONG, "package.tgz",
+            "The file '"+name+"' is not in the package under its own name: its path in the package ('"+original+"') is "+
+            original.getBytes(StandardCharsets.UTF_8).length+" characters, and a package entry must be less than 100, so it was renamed to '"+
+            e.getValue().substring(8)+"', and anything that looks for it by name won't find it. Give it a shorter name",
+            ValidationMessage.IssueSeverity.ERROR));
+      }
+    }
   }
 
   private void addTestDir(File dir, String t) throws FileNotFoundException, IOException {
@@ -6213,6 +6517,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
       gen.finish();
       this.pf.otherFilesRun.add(Utilities.path(this.pf.tempDir, id+".tgz"));
+      f.getOutputNames().add(Utilities.path(this.pf.tempDir, id+".tgz")); // for -rapido (see RapidoOutputs)
     }
 
   }
@@ -6548,7 +6853,38 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     Element eNN = baseElement;
     jp.compose(baseElement, bsj, OutputStyle.NORMAL, this.pf.igpkp.getCanonical());
-    if (!r.isCustomResource()) {
+    if (!r.isCustomResource() && isLogicalAsBinary(r, element)) {
+      // An instance of a logical model (a type that isn't a resource, and isn't loaded as one) is
+      // loaded as a Binary, and that is how the IG refers to it: Binary/{id}. So that is what
+      // goes in the packages - the instance, wrapped as a Binary, as Binary-{id}.json. (It used
+      // to be written as is, named {logical type}-{id}.json - FeatureDefinition-FeatureDefinition-X.json
+      // for FeatureDefinition-X.json - so the Binary the IG refers to wasn't in the package at all)
+      NPMPackageGenerator.Category cat = isExample(f, r) ? NPMPackageGenerator.Category.EXAMPLE : NPMPackageGenerator.Category.RESOURCE;
+      String name = "Binary-"+r.getId()+".json";
+      if (includedInVersion(r, this.pf.version)) {
+        this.pf.npm.addFile(cat, name, wrapAsBinary(r.getId(), bsj.toByteArray()));
+        if (isNewML()) {
+          for (String l : allLangs()) {
+            Element le = this.pf.langUtils.copyToLanguage(baseElement, l, true, r.getElement().getChildValue("language"), pf.defaultTranslationLang, r.getErrors());
+            ByteArrayOutputStream bsjl = new ByteArrayOutputStream();
+            jp.compose(le, bsjl, OutputStyle.NORMAL, this.pf.igpkp.getCanonical());
+            this.pf.lnpms.get(l).addFile(cat, name, wrapAsBinary(r.getId(), bsjl.toByteArray()));
+          }
+        }
+      }
+      for (String v : this.pf.generateVersions) {
+        String ver = VersionUtilities.versionFromCode(v);
+        if (!includedInVersion(r, ver)) {
+          if (this.pf.cvAnalyser != null) {
+            this.pf.cvAnalyser.recordOmission(ver, r.fhirType()+"/"+r.getId());
+          }
+          continue;
+        }
+        // a Binary is the same in every version, and the instance inside it is not a FHIR resource,
+        // so there is nothing to convert
+        this.pf.vnpms.get(v).addFile(cat, name, wrapAsBinary(r.getId(), bsj.toByteArray()));
+      }
+    } else if (!r.isCustomResource()) {
       if (includedInVersion(r, this.pf.version)) {
         this.pf.npm.addFile(isExample(f,r ) ? NPMPackageGenerator.Category.EXAMPLE : NPMPackageGenerator.Category.RESOURCE, element.fhirTypeRoot()+"-"+r.getId()+".json", bsj.toByteArray());
         if (isNewML()) {
@@ -6634,7 +6970,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     saveNativeResourceOutputFormats(f, r, element, "");
     for (String lang : allLangs()) {
       Element e = (Element) element.copy(Base.COPY_DATA);
-      if (this.pf.langUtils.switchLanguage(e, lang, true, r.getElement().getChildValue("language"), pf.defaultTranslationLang, r.getErrors())) {
+      boolean changed = this.pf.langUtils.switchLanguage(e, lang, true, r.getElement().getChildValue("language"), pf.defaultTranslationLang, r.getErrors());
+      // With the multi-language template format, every language folder gets the resource's format
+      // pages (X.json.html etc.), and their "Raw" and "Download" links are relative - to X.json in
+      // that folder. So the raw files have to be there even when there was nothing to translate
+      // (switchLanguage reports no change - a custom resource such as a FeatureDefinition, wrapped
+      // as a Binary, is not marked with a language), or every one of those links is broken.
+      // In the old format the language copies are written over the root files, so there, only
+      // write them when the language actually changed something.
+      if (changed || this.settings.isNewMultiLangTemplateFormat()) {
         saveNativeResourceOutputFormats(f, r, e, lang);
       }
     }
