@@ -85,6 +85,9 @@ public class PublisherFields {
     String tempDir;
     String tempLangDir;
     String outputDir;
+    // in watch mode, the output folder: the build writes to outputDir, a staging folder that is synced into it
+    String watchOutputDir;
+    boolean watchOutputSynced;
     String specPath;
     String qaDir;
     String version;
@@ -210,6 +213,9 @@ public class PublisherFields {
     boolean brokenLinksError;
     boolean genExamples;
     boolean doTransforms;
+    /** what Rapido reuses from the last build (null unless in Rapido mode) */
+    RapidoTracker rapido;
+    RapidoTracker.TxFailures txFailures; // Rapido: the terminology calls of this build that got no answer
     boolean allInvariants = true;
     List<String> spreadsheets = new ArrayList<String>();
     List<String> bundles = new ArrayList<String>();
@@ -271,7 +277,8 @@ public class PublisherFields {
     int validationLogTime = 0;
     /**
      * The heading level a resource's narrative is seated at when it is composed into a page
-     * (see PublisherGenerator.seatNarrative). 3 suits the stock templates, whose page title is an
+     * (see PublisherGenerator.seatNarrative), and that the headings of a markdown page are seated at
+     * under the template's page title (PublisherGenerator.seatMarkdownPage). 3 suits the stock templates, whose page title is an
      * h2; a template that titles its pages differently overrides it with the IG parameter
      * 'narrative-heading-level'.
      */
@@ -305,6 +312,9 @@ public class PublisherFields {
     RenderingContext.FixedValueFormat fixedFormat = RenderingContext.FixedValueFormat.JSON;
     static PublisherConsoleLogger consoleLogger;
     IPublisherModule module;
+    // in watch mode, input's files before the module pre-processed the IG, and the files that changed while it did
+    Map<java.nio.file.Path, String> inputBeforeModule;
+    Set<java.nio.file.Path> moduleWrites;
     BaseRenderer bdr;
     boolean noXigLink;
 

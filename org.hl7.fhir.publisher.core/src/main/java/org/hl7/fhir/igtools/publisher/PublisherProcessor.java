@@ -555,6 +555,9 @@ public class PublisherProcessor extends PublisherBase  {
     if (pf.inputCache != null) {
       pf.inputCache.endPhase();
     }
+    if (pf.rapido != null) {
+      pf.rapido.finishValidation();
+    }
     logDebugMessage(LogCategory.PROGRESS, " .. check Profile Examples");
     logDebugMessage(LogCategory.PROGRESS, "gen narratives");
     for (FetchedFile f : pf.fileList) {
@@ -1312,6 +1315,7 @@ public class PublisherProcessor extends PublisherBase  {
                       }
                       rr.setMultiLangMode(langs.size() > 1).renderResource(rw);
                       this.pf.otherFilesRun.addAll(lrc.getFiles());
+                      f.getOutputNames().addAll(lrc.getFiles()); // for -rapido (see RapidoOutputs)
                     } else if (r.fhirType().equals("Bundle")) {
                       lrc.setAddName(true);
                       for (org.hl7.fhir.services.elementmodel.Element e : r.getElement().getChildrenByName("entry")) {
@@ -1664,7 +1668,7 @@ public class PublisherProcessor extends PublisherBase  {
               boolean ok = true;
               String tgturl = null;
               for (StructureMap.StructureMapStructureComponent st : map.getStructureList()) {
-                if (st.getMode() == StructureMap.StructureMapModelMode.TARGET) {
+                if (st.getMode() == StructureMap.StructureMapModelModeVS.TARGET) {
                   if (tgturl == null)
                     tgturl = st.getUrl();
                   else
@@ -1731,6 +1735,16 @@ public class PublisherProcessor extends PublisherBase  {
       file.getErrors().add(new ValidationMessage(ValidationMessage.Source.Publisher, ValidationMessage.IssueType.INVALID, file.getName(), "Unknown Parameters: "+ pf.unknownParams.toString(), ValidationMessage.IssueSeverity.WARNING));
     }
 
+    List<ValidationMessage> reused = pf.rapido == null ? null : pf.rapido.reuseValidation(file, r);
+    if (reused != null) {
+      // nothing that the resource depends on has changed since the last build
+      processValidationOutcomes(file, r, reused);
+      r.setValidated(true);
+      if (r.getConfig() == null) {
+        pf.igpkp.findConfiguration(file, r);
+      }
+      return;
+    }
     TimeTracker.Session tts = pf.tt.start("validation");
     List<ValidationMessage> errs = new ArrayList<ValidationMessage>();
     r.getElement().setUserData(UserDataNames.pub_context_file, file);
@@ -1754,6 +1768,9 @@ public class PublisherProcessor extends PublisherBase  {
           pf.inputCache.endValidation(cached, ok ? errs : null);
         }
       }
+    }
+    if (pf.rapido != null) {
+      pf.rapido.recordValidation(file, r, errs);
     }
     processValidationOutcomes(file, r, errs);
     r.setValidated(true);

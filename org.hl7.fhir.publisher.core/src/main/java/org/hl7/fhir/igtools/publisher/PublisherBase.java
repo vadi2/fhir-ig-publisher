@@ -117,9 +117,7 @@ public class PublisherBase implements ILoggingService {
 //      s = "";
 //    }
     Runtime runtime = Runtime.getRuntime();
-    long totalMemory = runtime.totalMemory();
-    long freeMemory = runtime.freeMemory();
-    long usedMemory = totalMemory - freeMemory;
+    long usedMemory = usedMemory(runtime.totalMemory(), runtime.freeMemory());
     if (pf != null && usedMemory > pf.maxMemory) {
       pf.maxMemory = usedMemory;
     }
@@ -135,6 +133,15 @@ public class PublisherBase implements ILoggingService {
       System.out.println("Terminating Process now");
       System.exit(1);
     }
+  }
+
+  /**
+   * totalMemory and freeMemory are two separate reads, so if another thread makes the heap grow in
+   * between, freeMemory can exceed the totalMemory read before it. That isn't a real figure, and
+   * Utilities.describeSize throws on a negative one, so it counts as 0.
+   */
+  static long usedMemory(long totalMemory, long freeMemory) {
+    return Math.max(0, totalMemory - freeMemory);
   }
 
   @Override
@@ -300,6 +307,9 @@ public class PublisherBase implements ILoggingService {
     String s = path.toLowerCase();
     if (!pf.allOutputs.add(s))
       throw new Error("Error generating build: the file "+path+" is being generated more than once (may differ by case)");
+    if (pf.rapido != null) {
+      pf.rapido.recordOutput(s);
+    }
     outputTracker.add(path);
     if (pf.inputCache != null) {
       pf.inputCache.noteOutput(s, path);
@@ -349,12 +359,19 @@ public class PublisherBase implements ILoggingService {
     return p.asString();
   }
 
+  /**
+   * the output folder: in watch mode, the build writes to a staging folder that is synced into it
+   */
+  protected String finalOutputDir() {
+    return pf.watchOutputDir != null ? pf.watchOutputDir : pf.outputDir;
+  }
+
   protected String targetUrl() {
     if (settings.getMode() == null)
-      return "file://"+ pf.outputDir;
+      return "file://"+ finalOutputDir();
     switch (settings.getMode()) {
     case AUTOBUILD: return settings.getTargetOutput() == null ? "https://build.fhir.org/ig/[org]/[repo]" : settings.getTargetOutput();
-    case MANUAL: return "file://"+ pf.outputDir;
+    case MANUAL: return "file://"+ finalOutputDir();
     case WEBSERVER: return "http://unknown";
     case PUBLICATION: return settings.getTargetOutput();
     default: return pf.igpkp.getCanonical();
@@ -626,9 +643,8 @@ public class PublisherBase implements ILoggingService {
     if (add) {
       pf.fileList.add(file);
     }
-    if (!settings.isRapidoMode() || pf.hasCheckedDependencies) {
-      pf.changeList.add(file);
-    }
+    // Rapido works out what it can reuse from the last build after loading, so every file goes through every step
+    pf.changeList.add(file);
     //  	}
   }
 
@@ -1184,7 +1200,7 @@ public class PublisherBase implements ILoggingService {
           d = c.getChildValue("definition");
         }
         CanonicalResource canonical = null;
-        if (VersionUtilities.getCanonicalResourceNames(pf.context.getFHIRVersion()).contains(c.fhirType())) {
+        if (pf.cu.isCanonicalResource(c.fhirType())) {
           try {
             canonical = (CanonicalResource)convertFromElement(c);
           } catch (Exception ex) {

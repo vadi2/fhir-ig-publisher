@@ -216,7 +216,7 @@ final class InputCacheInputs {
         d.add("dropped");
       }
     }
-    d.add(f.hasTitle()).add(f.getTitle()).add(f.getSize()).add(f.getHash()).add(f.getCalcHash());
+    d.add(f.hasTitle()).add(f.getTitle()).add(f.getSize()).add(f.getHash());
     d.add(new TreeMap<>(f.getValuesetsToLoad()).toString());
     return d.finish();
   }
