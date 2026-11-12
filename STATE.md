@@ -27,7 +27,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 | early-publish | session_013FrhV8MAcq78uViFCFE1ve | perf3/early-publish | #42 | DONE. PR 22:29, 0 checks, clean. page in output: prof 270.2 -> 170.1, inst 262.8 -> 156.1, page 23.8 -> 2.7 s. Also moves System.gc() after early publish. |
 | archives-reuse | session_013FrhV89txD9eAkM8cnaV3n | perf3/archives-reuse | #41 | DONE. PR 22:14, 0 checks, clean. archive step 28.7 -> 4.2 s (prof), 28.9 -> 3.5 (inst); whole-rebuild delta 46-52 s has ~20-25 s unexplained (disturbed base runs). +2732 lines. Combined package NOT kept (core mutates resources). |
 | native-skip | session_013FrhV7287Tkr83evM7MsqW | perf3/native-skip | - | running |
-| summaries-reuse | session_013FrhV9QcWhADhYPtwEjkoZ | perf3/summaries-reuse | - | running |
+| summaries-reuse | session_013FrhV9QcWhADhYPtwEjkoZ | perf3/summaries-reuse | #44 | DONE. PR 02:38, 0 checks, clean. Generate Summaries 4.7 -> 2.5 s (prof/inst); whole rebuild within noise; 495/495 list sets reused |
 | rapido-state | session_013FrhV9krvJaocgAxaWRabs | perf3/rapido-state | #39 | DONE. PR open 19:54, 0 checks, mergeable clean. prof -14.8 s, inst -10.3 s, page 0 |
 | narrative-skip (wave 2, stacked: PR base perf3/native-skip) | session_013FrhV6FEdUbpxzt5WmGXJF | perf3/narrative-skip | none | DROPPED 22:04: saves ~2 s of 272 s, not provably equal to a fresh build (~65 USD) |
 | translations-dirty (wave 2) | session_013FrhV5h5r3K9VwTsXxmcW2 | perf3/translations-dirty | #43 | DONE. PR 00:46, 0 checks, clean. translation step 4.96 -> 0.22 s; P/F -4 to -5 s on FSH edits; GC change left to #42 |
@@ -169,3 +169,4 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   failures, ~2.5 h background wait from 01:11 (so ~03:40). All idle-with-background-work, recently active: no nudges.
   Expect native-skip and summaries-reuse PRs ~02:30-03:00, tail-restart ~04:00+.
 - 02:17 tick (cheap): no new PRs (highest 43), no head moved. All 3 were active 01:08-01:29 with background runs.
+- 02:48 tick: PR #44 (summaries-reuse) opened, no checks, clean. Open: #39-#44. Remaining: native-skip, tail-restart.
