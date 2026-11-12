@@ -1,10 +1,10 @@
 # QA results, shard s5
 
-Status: in progress (Phase C)
+Status: done. 8 IGs: 3 same (tx-eco, cds-hooks, pocd), 3 pre-existing diffs (eu-lab, bfdr, smart-forms: FINDING-1, FINDING-3, used-by order), 2 REGRESSION (plan-net, nw-gmsa: FINDING-2, dependency profile markdown rewritten after Rapido differential builds, exposed by #49 perf/weak-edges, fixed by #53 which is not in qa/integration).
 
 - master.jar: origin/master 32046bcdd9b0ec91d93db76f9897b745e406139b
 - int.jar: qa/integration-ready 6c1abf463d8ae87d30871898c6abdaa63c7df673
-- VM: 4 CPU, 15 GB, swap file 4 GB (shrunk from 16 GB, then 10 GB, to free disk; swap stayed unused). At about 10:05 the disk filled during the bfdr watch run (W0 died with "No space left on device"); old run outputs were deleted, the swap shrunk, and bfdr Phase C (I1 onward) restarted from scratch at 10:32. Only res/ manifests are kept for finished IGs.. Times in seconds, wall clock of the whole java run (W*: edit to "Finished @"; W0 = first watch build).
+- VM: 4 CPU, 15 GB, swap file 4 GB (shrunk from 16 GB, then 10 GB, to free disk; swap stayed unused). At about 10:05 the disk filled during the bfdr watch run (W0 died with "No space left on device"); old run outputs were deleted, the swap shrunk, and bfdr Phase C (I1 onward) restarted from scratch at 10:32. Only res/ manifests are kept for finished IGs. From 15:32 to 17:47 two orphaned SUSHI processes used 2 CPUs, so the follow-up runs then (master reruns WM/WI-eu-lab, R1b/R1c smart-forms, the POSIX int run, WM-bfdr) have inflated times; their outputs are unaffected. The table's times were all taken before that. Times in seconds, wall clock of the whole java run (W*: edit to "Finished @"; W0 = first watch build).
 - Watch sequence: one watch session runs W1..W6 without a restart; its output is snapshotted after each step. F2 and F6 are separate fresh full builds run afterwards with the W2 and W6 edits applied.
 - Compare: file set + content after masking dates/times, run path, UUIDs; qa counts + message set from qa.xml.
 - eu-lab: SUSHI couldn't fetch hl7.fhir.eu.extensions.r4#current, so it was seeded from build.fhir.org (1.4.0-ci, 2026-10-29) before R1; same package for every build.
@@ -17,9 +17,25 @@ Status: in progress (Phase C)
 | HL7/uv-pocd | 8e377d42 | 7600m | 77 | 0/0/4 | 74 | 0/0/4 | 62 | 78, 1.2/28/24/63/58/29 | 71 | 71 | same |
 | hl7-eu/laboratory | 4571ab84 | 7600m | 168 | 5/11/62 | 130 | 5/11/62 | 91 | 136, 3.6/77/65/64/72/61 | 112 | 114 | pre-existing diffs: FINDING-1 (NamingSystem link version for urn:ietf:rfc:3986 varies between runs on master too), UUIDs, used-by order |
 | HL7/fhir-bfdr | 1f981246 | 7600m | 406 | 291/365/791 | 291 | 291/365/791 | 278 | 297, 7.1/208/185/246/265/212 | 290 | 287 | pre-existing diffs: FINDING-1 family (identifier system display NPI/SSN in watch builds differs from full builds on master too), used-by order, exception stacks |
-| HL7/davinci-pdex-plan-net | 8d9037d0 | 9g | 275 | 11/865/8 | 104 | 11/865/8 | 90 | 101, 5.6/55/51/76/77/54 | 94 | 117 | pending: FINDING-2 (watch differential build changes a link in package-combined.tgz), master watch rerun queued |
+| HL7/davinci-pdex-plan-net | 8d9037d0 | 9g | 275 | 11/865/8 | 104 | 11/865/8 | 90 | 101, 5.6/55/51/76/77/54 | 94 | 117 | REGRESSION: FINDING-2, PR #49 perf/weak-edges (latent replay bug, fixed by #53, not in int); reproduction see FINDING-2 |
 | aehrc/smart-forms-ig | 95651ff7 | 9g | 309 | 146/294/119 | 280 | 146/294/119 | 256 | 267, 4.1/249/235/240/246/248 | 273 | 265 | pre-existing diffs: FINDING-3 (column order of the AdministrativeGender map table varies between runs on master too), used-by order |
-| nw-gmsa/nw-gmsa.github.com | 7ec7380b | 9g | 553 | 85/3543/1674 | 545 | 85/3543/1674 | 537 | 642, 13/522/390/515/552/439 | 562 | 557 | pending: FINDING-2 (same pattern as plan-net), master watch rerun queued |
+| nw-gmsa/nw-gmsa.github.com | 7ec7380b | 9g | 553 | 85/3543/1674 | 545 | 85/3543/1674 | 537 | 642, 13/522/390/515/552/439 | 562 | 557 | REGRESSION: FINDING-2, PR #49 perf/weak-edges (latent replay bug, fixed by #53, not in int); reproduction see FINDING-2 |
+
+## FINDING-2: REGRESSION, PR #49 perf/weak-edges
+
+After a Rapido differential build, dependency profiles in package-combined.tgz get rewritten element markdown: plan-net us-core-location/organization-7.0.0 comment links become relative ("[Location](location.html#)"), nw-gmsa Composition-eu-lab-2.1.0 element 82 definition loses its trailing whitespace. Full builds and complete watch builds are fine.
+
+Reproduction (nw-gmsa 7ec7380b, LC_ALL=C.UTF-8, -Xmx9g, `-rapido -watch`): W1 append a sentence to a page, W2 edit a description in input/fsh/Encounter.fsh (complete build), W3 edit input/fsh/Examples/Organization-R0A.fsh (differential build). Then check output/package-combined.tgz!package/StructureDefinition-Composition-eu-lab-2.1.0.json (hash prefix 8ce1ca49 good, d1cca2ef bad).
+
+| jar | W3 build | W3 hash |
+|---|---|---|
+| master 32046bc | differential, 424 of 601 files rendered | 8ce1ca49 good |
+| base a4d1e90 (master + #1460 + #1461 + older #48/#49/#51) | differential, 378 of 601 | d1cca2ef bad |
+| #49 head 15bf459 (master + weak edges) | differential, 378 of 601 | d1cca2ef bad |
+| #49 head + #53 head 3731dee (local merge, one trivial constructor conflict, both lines kept) | differential, 378 of 601 | 8ce1ca49 good |
+| int 6c1abf4 | differential, 398 of 601 | d1cca2ef bad |
+
+The bug is in replaying a file's output without redoing its profile look ups (latent on master, per another session's root cause). #49's weak edges make fewer files render, so the Composition profile is replayed and the bug shows. #53 (perf3/differential-package-links) fixes it on top of #49; #53 is not in qa/integration and doesn't merge into it cleanly (RapidoTracker, PublisherRapidoWatchTest conflicts), so it wasn't tested on int itself. plan-net couldn't be checked with master/base/#49 (template copy failure, see plan-net), but it is the same pattern.
 
 ## Notes per IG
 
@@ -40,7 +56,7 @@ Status: in progress (Phase C)
 - Watch: W1 page rebuild 1.2 s (en/guidance.html), W2 differential (47 of 103 files), W3 differential (70 of 103), W4/W5 complete builds add and remove Patient-QaNewW4; W6 removes all edits.
 
 ### nw-gmsa
-- Built with LC_ALL=C.UTF-8 (all runs, both jars). Under the VM's POSIX locale master R1 stops after 80 s: "Unable to read input/images/NW GLH Genomic Testing Request Form \u2013 Rare Disease.png: its name can't be decoded with the file name encoding 'ANSI_X3.4-1968' ... run the IG Publisher with a UTF-8 locale". An int run under the POSIX locale is queued as an extra data point (#25 touches non-ASCII names).
+- Built with LC_ALL=C.UTF-8 (all runs, both jars). Under the VM's POSIX locale master R1 stops after 80 s: "Unable to read input/images/NW GLH Genomic Testing Request Form \u2013 Rare Disease.png: its name can't be decoded with the file name encoding 'ANSI_X3.4-1968' ... run the IG Publisher with a UTF-8 locale". An int run under the POSIX locale (#25 touches non-ASCII names) fails the same way, with the same message.
 - qa counts and messages (3247, 10 broken links) same in every build and watch step.
 - R1 vs int: R1 output was removed (disk), manifests only. Apart from timestamps, ref list order and llms order, the differing files are the examples Observation-m2-diagnostic-implication, Observation-brca1-variant and Bundle-ctdna9737383222-eulab-document. Their hash changes in nearly every build, including watch steps that don't touch them, and W6 vs F6 is identical after the UUID mask: random UUIDs in the narrative.
 - FINDING-2 again: after each Rapido differential build (W3, W6) package-combined.tgz holds a different StructureDefinition-Composition-eu-lab-2.1.0.json: the snapshot definition of element 82 loses its trailing whitespace. R1, I1, F2, F6 and the complete watch builds (W2, W4, W5) all have the master hash. Everything else in W6 vs F6 is the same after masking.
@@ -56,7 +72,7 @@ Status: in progress (Phase C)
 ### plan-net
 - qa counts and messages (884) same in every build and watch step.
 - R1 vs I1 content (R1 output kept this time): all 1246 differing text files and archive entries are the same after masking, except "used by" order in the ref lists and llms.txt page order (intended, see tx-eco).
-- FINDING-2: after each Rapido differential build (W2, W3, W6) package-combined.tgz holds a different StructureDefinition-us-core-location-7.0.0.json and StructureDefinition-us-core-organization-7.0.0.json: the snapshot comment of the address element links "[Location](location.html#)" where every full build (R1, I1, F2, F6) and the complete watch builds (W4, W5) have "[Location](http://hl7.org/fhir/R4/location.html#)". W6 vs F6: everything else same after masking (ref list order only). Classification pending: the same watch sequence with master.jar is queued; if master differs, the PR will be found with single PR head jars after the builds finish.
+- FINDING-2: after each Rapido differential build (W2, W3, W6) package-combined.tgz holds a different StructureDefinition-us-core-location-7.0.0.json and StructureDefinition-us-core-organization-7.0.0.json: the snapshot comment of the address element links "[Location](location.html#)" where every full build (R1, I1, F2, F6) and the complete watch builds (W4, W5) have "[Location](http://hl7.org/fhir/R4/location.html#)". W6 vs F6: everything else same after masking (ref list order only). A master watch can't be run on plan-net: the first watch build stops in the template's ant-davinci.xml:45 ("Could not find file output/en/index.html to copy", the watch builds into temp/pages/.watch-output), then idles; base a4d1e90 stops the same way, int doesn't. So FINDING-2 was classified and bisected on nw-gmsa, see there.
 - Watch: W1 page rebuild 5.6 s (en/implementation.html; root check fails falsely), W2 and W3 differential, W4/W5 complete builds add and remove Basic-QaNewW4; W6 removes all edits.
 
 ### bfdr
