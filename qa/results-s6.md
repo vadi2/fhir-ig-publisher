@@ -80,3 +80,13 @@ skip: source not reachable. The qas.json repo path is base64 (MOHW-TWCoreIG / "T
   "Subject type" in W2 and W6 (local "Subject Type Value Set" in all full builds); W6
   ValueSet-measure-stratifier-type.html has the extra CLD anchor pair (same as lars L2b).
 - verdict: pending master watch.
+
+## HL7/cqf-recommendations (hl7.fhir.uv.cpg) @ e2fb413
+- heap 7600m. QA 51 / 179 / 440 in every build, same message set.
+- times (s): R1 301, I1 274, I2 293; watch first 290, W1 66 (Page Rebuild; html checks not reused: a page has
+  conformance clauses), W2 219 (Differential, 492 of 986), W3 176 (Differential, 379 of 986), W4 287 and W5 280
+  (Complete, "changed: ig"), W6 186 (Differential, 489 of 986); F2 256, F6 258. The first I1 attempt failed when
+  the disk filled at 13:43; these numbers are from the fresh rerun.
+- every edit reached output/en/. F2 = W2, F6 = W6, W6 = I1 (no differences after masking).
+- verdict: **F-IDX only**. I1, I2 and W6 differ from R1 only in `hl7.fhir.uv.cpg.en.tgz` (and its copy in
+  full-ig.zip): `package/.index.db` ResourceList is empty on master and filled on int.
