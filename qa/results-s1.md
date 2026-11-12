@@ -15,9 +15,9 @@ Status: in progress (Phase C)
 | costateixeira/spenser | 63c79e0 | 7600m | 63 | 58/20/139 | 58 | 58/20/139 | 51 | W1 1.7, W2 27.5, W3 21.9, W4 53.8, W5 50.7, W6 30.6 | 49 | 56 | pass; F1 (intended), F3 pre-existing |
 | HL7/fhir-consent-management | aad3563 | 7600m | 75 | 2/0/0 | 76 | 2/0/0 | 75 | W1 8.6, W2 43.8, W3 42.5, W4 55.8, W5 51.5, W6 41.1 | 75 | 75 | pass; F1 (intended), F4 pre-existing |
 | HL7/emedicinal-product-info | 66968b7 | 7600m | 135 | 7/0/0 | 136 | 7/0/0 | 118 | W1 23.0, W2 79.8, W3 82.7, W4 109.5, W5 109.1, W6 85.8 | 119 | 117 | pass; F1 (intended), F3 pre-existing; comparison pages differ only in embedded Java stack traces |
-| hyweb-cdc/niis | b343858 | 7600m | 116 | 0/0/0 | 99 | 0/0/0 | 100 | W1 9.4 MISSING, W2 73.7, W3 72.7, W4 73.3, W5 84.5, W6 68.4 (NOT OK) | 93 | 94 | pass so far; F3 pre-existing; W1 being redone (spec error, see notes) |
-| uzinfocom-org/digital-health-ig | 31e406f | 7600m | 748 | 5/268/9446 | 715 | 5/268/9446 |  |  |  |  |  |
-| HL7/US-Core | 3a65397 |  |  |  |  |  |  |  |  |  |  |
+| hyweb-cdc/niis | b343858 | 7600m | 116 | 0/0/0 | 99 | 0/0/0 | 100 | W1 9.4 MISSING, W2 73.7, W3 72.7, W4 73.3, W5 84.5, W6 68.4 (NOT OK) | 93 | 94 | pass so far; F3 pre-existing; W1 redo queued (first redo hit disk full) |
+| uzinfocom-org/digital-health-ig | 31e406f | 7600m | 748 | 5/268/9446 | 715 | 5/268/9446 | 695 |  |  |  | in progress: R1-I1 only F1+F3; R1-I2 expansion params differ on 2nd build in same folder (master check queued); watch redo queued (disk full) |
+| HL7/US-Core | 3a65397 | 10g | 498 | 7/20/1 |  |  |  |  |  |  | in progress: R1 redone (first attempt hit disk full), Phase C running |
 
 ## Findings
 
@@ -37,6 +37,8 @@ Master watch on sample-ig for reference (same spec): W1 22.2 s on master vs 5.7 
 fhir-consent-management: the NPI link in example narratives (Consent, AuditEvent, Bundle, DocumentReference examples and their pages, ai.zip) is `terminology.hl7.org/5.0.0/` (label "NPI"), `5.3.0`, `6.5.0` or `7.1.0` (label "United States National Provider Identifier"). Master R1 had 6.5.0 and master R1-txfail had 5.0.0. Int builds: I1 5.3.0, I2 5.0.0, F2 7.1.0, F6 5.3.0. The package cache holds hl7.terminology.r4 5.0.0, 5.3.0, 6.1.0, 6.5.0, 7.1.0, 7.4.0 and 7.5.0. Watch outputs mix versions across pages, because pages that are not regenerated keep the version from the earlier build. With the version and label masked, the only remaining diffs are F1 (R1 vs I1/I2) and none at all (W2-F2, W6-F6, I1-W6).
 
 fhir-consent-management watch: the first run's W4 used an instance that my spec wrote wrong (missing Consent.identifier and source[x]). SUSHI reported 2 errors, the build failed, the watch kept running, and the test timed out. That run is kept as W-badspec, not counted. Watch redone from scratch with W4 = a copy of ConsentExample.
+
+Disk full at 17:35 (compare extracting large tgz outputs while US-Core R1 loaded packages). Lost: digital-health-ig watch, niis W1 redo, US-Core R1 (exit 1). compare.py now reads tgz in place; all three are rerun from scratch, the failed runs are kept as *-diskfull and not counted.
 
 ## Compare method notes
 
