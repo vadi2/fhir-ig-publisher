@@ -198,14 +198,16 @@ public class ValidationServices implements IValidatorResourceFetcher, IValidatio
       if (parts.length == 2) {
         for (FetchedFile f : files) {
           for (FetchedResource r : f.getResources()) {
-            // type and id first: reading the element is reading the resource
-            if (parts[parts.length-1].equals(r.getId()) && parts[parts.length-2].equals(r.fhirType()) && r.getElement() != null)
-              return r.getElement();
-            // an instance of a logical model is loaded as a Binary, and referred to as one
-            // (Binary/{id}), but its element is of the logical model's type - so resolve the
-            // reference to the Binary that it is published as
-            if ("Binary".equals(parts[parts.length-2]) && "Binary".equals(r.fhirType()) && r.getId().equals(parts[parts.length-1]))
-              return binaryFor(r);
+            // the id first: reading the element is reading the resource
+            if (parts[parts.length-1].equals(r.getId()) && r.getElement() != null) {
+              if (parts[parts.length-2].equals(r.getElement().fhirType()))
+                return r.getElement();
+              // an instance of a logical model is loaded as a Binary, and referred to as one
+              // (Binary/{id}), but its element is of the logical model's type - so resolve the
+              // reference to the Binary that it is published as
+              if ("Binary".equals(parts[parts.length-2]) && "Binary".equals(r.fhirType()))
+                return binaryFor(r);
+            }
           }
         }
       }
