@@ -206,3 +206,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 09:20 tick: all sessions alive (s7 waiting on int.jar with Phase C queued; utg on manifests; dedup measuring). Findings so far are 2, both intended changes: llms.txt page order now by file name (#1461 ws2 merge, AIProcessor Arrays.sort; s3/s4/s5/s6); spec.internals drops the *.ai.html targets the AI step deletes (#48 349fc124; s2). No real regressions yet.
 - 09:22 code-simplifier dispatched on #22/#25 round 2 (local agent, notes in scratchpad stale-22-25/SIMPLIFY.md). #38 decision re-asked.
 - 09:35 simplifier done: #22 8d040a57, #25 0afd39ac (merged ws6). Suites: only GitUtilitiesTests[4]. #22/#25 ready pending Vadim unstacking #22.
+- 09:45 #22 unstacked by Vadim, base now watch-page-rebuild (clean). #25 based on #22 (clean). #38 decision still open.
