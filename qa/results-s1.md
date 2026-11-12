@@ -13,8 +13,8 @@ Status: in progress (Phase C)
 | ChitSR/sample-ig | 0701fa3 | 7600m | 78 | 1/6/3 | 35 | 1/6/3 | 32 | W1 5.7, W2 20.0, W3 20.2, W4 24.0, W5 22.0, W6 18.2 | 36 | 36 | pass; F1 (intended), F2 pre-existing |
 | HL7/demo-collect | 0cd5dc5 | 7600m | 107 | 0/0/0 | 48 | 0/0/0 | 51 | W1 1.5, W2 26.7, W3 26.9, W4 39.2, W5 30.4, W6 29.8 | 53 | 54 | pass; only diff vs master = F1 (intended, #48) |
 | costateixeira/spenser | 63c79e0 | 7600m | 63 | 58/20/139 | 58 | 58/20/139 | 51 | W1 1.7, W2 27.5, W3 21.9, W4 53.8, W5 50.7, W6 30.6 | 49 | 56 | pass; F1 (intended), F3 pre-existing |
-| HL7/fhir-consent-management | aad3563 | 7600m | 75 | 2/0/0 | 76 | 2/0/0 | 75 |  |  |  |  |
-| HL7/emedicinal-product-info | 66968b7 | 7600m | 135 | 7/0/0 |  |  |  |  |  |  |  |
+| HL7/fhir-consent-management | aad3563 | 7600m | 75 | 2/0/0 | 76 | 2/0/0 | 75 | W1 8.6, W2 43.8, W3 42.5, W4 55.8, W5 51.5, W6 41.1 | 75 | 75 | pass; F1 (intended), F4 pre-existing |
+| HL7/emedicinal-product-info | 66968b7 | 7600m | 135 | 7/0/0 | 136 | 7/0/0 | 118 |  |  |  |  |
 | hyweb-cdc/niis | b343858 | 7600m | 116 | 0/0/0 |  |  |  |  |  |  |  |
 | uzinfocom-org/digital-health-ig | 31e406f | 7600m | 748 | 5/268/9446 |  |  |  |  |  |  |  |
 | HL7/US-Core | 3a65397 |  |  |  |  |  |  |  |  |  |  |
@@ -32,6 +32,11 @@ sample-ig: the W2/W6 qa.txt has `ERROR: <dir>/temp/pages/.watch-output/en/Struct
 **F3. `package/.index.db` ResourceList rows in the package tgz files are filled in some runs and empty in others (pre-existing, master flake).** sample-ig: master R1 0 rows, master R1b 2 rows, every int build 2. spenser: jct.fhir.spenser.fr.tgz has 0 rows with master R1 and 13 with int I1, while en/nl/pt/package.tgz have 0 with both. Master varies between its own two runs, so not caused by the integration branch.
 
 Master watch on sample-ig for reference (same spec): W1 22.2 s on master vs 5.7 s on int.
+
+**F4. Which terminology.hl7.org version an Identifier link to `NamingSystem-npi.html` points at changes from run to run (pre-existing, master too).**
+fhir-consent-management: the NPI link in example narratives (Consent, AuditEvent, Bundle, DocumentReference examples and their pages, ai.zip) is `terminology.hl7.org/5.0.0/` (label "NPI"), `5.3.0`, `6.5.0` or `7.1.0` (label "United States National Provider Identifier"). Master R1 had 6.5.0 and master R1-txfail had 5.0.0. Int builds: I1 5.3.0, I2 5.0.0, F2 7.1.0, F6 5.3.0. The package cache holds hl7.terminology.r4 5.0.0, 5.3.0, 6.1.0, 6.5.0, 7.1.0, 7.4.0 and 7.5.0. Watch outputs mix versions across pages, because pages that are not regenerated keep the version from the earlier build. With the version and label masked, the only remaining diffs are F1 (R1 vs I1/I2) and none at all (W2-F2, W6-F6, I1-W6).
+
+fhir-consent-management watch: the first run's W4 used an instance that my spec wrote wrong (missing Consent.identifier and source[x]). SUSHI reported 2 errors, the build failed, the watch kept running, and the test timed out. That run is kept as W-badspec, not counted. Watch redone from scratch with W4 = a copy of ConsentExample.
 
 ## Compare method notes
 
