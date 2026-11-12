@@ -43,5 +43,5 @@ Status: in progress (Phase C)
 ### kip
 - R1 vs I1/I2/M1/M2: expansions.* differ only in Bundle id, lastUpdated and expansion identifier (masked; compare.py reported them because its timestamp mask overlapped the UUID). en.tgz package/.index.db and qa-txservers.html as on other IGs, master too.
 - Watch (no examples in this IG: W3 edits a CodeSystem concept, W4 adds a CodeSystem, W5 deletes it): all edits shown. F2 vs W2, F6 vs W6 and I1 vs W6: same masked expansions diff plus qa-txservers use count. No stale output.
-- Watch steps are slow (W1 page edit 83 s): every step after the first was a Complete Build or a large partial rebuild; master not timed in watch mode for this IG.
+- Rapido build kinds: W1 Page Rebuild (83 s, mostly the html checks that cannot be reused), W2/W3/W6 Differential Build (8 to 13 of 1037 files), W4/W5 Complete Build (file added/removed).
 
