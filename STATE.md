@@ -30,7 +30,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 | summaries-reuse | session_013FrhV9QcWhADhYPtwEjkoZ | perf3/summaries-reuse | - | running |
 | rapido-state | session_013FrhV9krvJaocgAxaWRabs | perf3/rapido-state | #39 | DONE. PR open 19:54, 0 checks, mergeable clean. prof -14.8 s, inst -10.3 s, page 0 |
 | narrative-skip (wave 2, stacked: PR base perf3/native-skip) | session_013FrhV6FEdUbpxzt5WmGXJF | perf3/narrative-skip | none | DROPPED 22:04: saves ~2 s of 272 s, not provably equal to a fresh build (~65 USD) |
-| translations-dirty (wave 2; + optional System.gc commit) | session_013FrhV5h5r3K9VwTsXxmcW2 | perf3/translations-dirty | - | running |
+| translations-dirty (wave 2) | session_013FrhV5h5r3K9VwTsXxmcW2 | perf3/translations-dirty | #43 | DONE. PR 00:46, 0 checks, clean. translation step 4.96 -> 0.22 s; P/F -4 to -5 s on FSH edits; GC change left to #42 |
 | qa-prep-reuse (wave 2) | session_013FrhV6SxKUeigqo6vSYCQF | perf3/qa-prep-reuse | #40 | DONE. PR 22:02, 0 checks, clean. QA prep 7.6 -> 2.3 s (prof), 8.1 -> 2.2 (inst), 3.8 -> 1.0 (page); page rebuild 19.6 -> 16.2 s |
 | tail-restart (wave 2, stacked: PR base perf3/early-publish) | session_013FrhV6xnSEZUwAnAQoiLim | perf3/tail-restart | - | running (launched 19:18) |
 
@@ -160,3 +160,5 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   translations-dirty: base-jar watch ~40 min, PR draft ready. tail-restart: A/B bench ~2 h left (from 23:10), 108 USD.
   native-skip: idle since 22:40 with "n3 build running" (98 min) -> nudged (check n3, carry on; drop if the 1,205 output
   diffs are not the base's own). If still silent at 01:17, read its last assistant events.
+- 00:47 tick: PR #43 (translations-dirty) opened, no checks, clean. Open: #39-#43. native-skip answered the nudge
+  (active 00:44, "waiting on b2 to finish"). Remaining: native-skip, summaries-reuse, tail-restart.
