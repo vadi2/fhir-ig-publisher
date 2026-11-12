@@ -14,7 +14,7 @@ Status: in progress (Phase C)
 | IG | commit | heap | R1 | R1 qa e/w/h | I1 | I2 | W first, W1..W6 | F2 | F6 | qa (all int builds) | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | IHE/ITI.DIS | 5a37d30b52 | 7600m | 103 | 0/23/119 | 74 | 66 | 66, 10/37/32/43/39/30 (all edits seen) | 60 | 60 | 0/23/119 | REGRESSION (order only, looks intended): llms.txt/llms.md page order, HL7 #1461 watch-page-rebuild (in base). pre-existing diffs: THO version in a NamingSystem narrative link, package .index.db rows, used-by list order |
-| hl7germany/medication-ig-de-r4 | 06c8d75d78 | 7600m | 174 | 1673/2112/815 | 150 | 168 | 143, 12/107/98/131/130/106 (all edits seen) | 144 | 144 | 1673/2112/815 | pending master rerun |
+| hl7germany/medication-ig-de-r4 | 06c8d75d78 | 7600m | 174 | 1673/2112/815 | 150 | 168 | 143, 12/107/98/131/130/106 (all edits seen) | 144 | 144 | 1673/2112/815 | REGRESSION (order only, looks intended): llms.txt/llms.md page order, HL7 #1461 (as dis). pre-existing diffs: package .index.db rows, tx.fhir.org bcp:47 expansion display in package-combined.tgz, used-by list order |
 | HL7/davinci-pdex-formulary | 549af4d87a | 7600m | 116 | 0/0/22 | | | | | | | |
 | ahdis/ch-ekm | cb48773900 | 7600m | 315 | 794/8352/4461 | | | | | | | |
 | HL7/phd | 565d3336a2 | 7600m | 100 | 0/0/2 | | | | | | | |
@@ -33,4 +33,4 @@ Status: in progress (Phase C)
 
 ### medde
 - QA counts and messages equal in every build. Every int build equals every other int build (I1 = I2, W2 = F2, W6 = F6, W6 = I1).
-- vs R1: package.tgz `.index.db` rows (28 vs 0), and package-combined.tgz ValueSet-all-languages (tx.fhir.org bcp:47 expansion) display "Interlingua (International Auxiliary Language" in R1 vs "... Association)" in every int build. Master rerun pending.
+- vs R1: package.tgz `.index.db` rows (28 vs 0), and package-combined.tgz ValueSet-all-languages (tx.fhir.org bcp:47 expansion) display "Interlingua (International Auxiliary Language" in R1 vs "... Association)" in every int build. Master rerun M1 (fresh, 155 s) has the int values for both, so both are pre-existing (they vary between master runs). int vs M1: order only (llms.txt page order, as dis; used-by lists).
