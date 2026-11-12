@@ -1,6 +1,6 @@
 # QA results, shard s2
 
-Status: in progress (Phase C)
+Status: done. 6 IGs run, 2 skipped (SUSHI errors at HEAD). PASS: kip. REGRESSION PR #48 perf/watch-fsh-tail: spec.internals drops *.ai.html targets (aitransparency, be-medication, au-ps, uz-integ) and watch keeps Jekyll resident (uz-integ memory, JVM OOM-killed with 4 GB swap). REGRESSION PR #45 perf3/tail-restart: ig-guidance watch never settles on qa/integration-ready; fixed by f9f0579e (re-test passes). uz-integ watch only W1..W2 (VM disk/memory limits).
 
 - master.jar: origin/master 32046bcdd9b0ec91d93db76f9897b745e406139b
 - int.jar: qa/integration-ready 6c1abf463d8ae87d30871898c6abdaa63c7df673
@@ -16,7 +16,7 @@ Status: in progress (Phase C)
 | sfaassn2025-source/CRA-IG | 7dc650f | | 25 (fail) | | | | | | | skip: SUSHI 3 errors at HEAD (Claim.supportingInfo category; CodeSystem url conflict with twss base dependency) |
 | sfaassn2025-source/VFS-IG | 4afd1fe | | 14 (fail) | | | | | | | skip: SUSHI 1 error at HEAD (twss-case-type CodeSystem url conflict with twss base dependency) |
 | KIP-infrastructure/implementation-guide | 5b5773c | 7600m | 236 | 40/2349/3539 | 224 | 227 | 82.8/167.5/162.7/230.0/239.5/169.0 (all edits shown) | 212 | 220 | PASS: only masked diffs (expansion ids/timestamps) and pre-existing en.tgz package/.index.db, qa-txservers use count; no *.ai.html pages so spec.internals is identical |
-| uzinfocom-org/digital-health-integration | fa87466 | 7600m | 1197 | 25/363/7650 | | | | | | |
+| uzinfocom-org/digital-health-integration | fa87466 | 7600m | 1197 | 25/363/7650 | 1083 | 965 | W1 30.9 (shown); W2 build finished (Differential) but the snapshot copy ran out of disk on this VM; W3..W6 not run (see notes) | | | REGRESSION: spec.internals targets drop 846 *.ai.html pages (PR #48); REGRESSION (watch memory): Jekyll kept running between watch builds holds 5.5 GB resident, swap peak 7.7 GB vs 2.5 GB on master, JVM OOM-killed at W2 with 4 GB swap (PR #48); pre-existing diffs: terminology.hl7.org version in identifier links (624 files), second build in same folder changes ~140 ValueSet expansion narratives (master M2 same), en.tgz package/.index.db |
 
 ## Notes
 
@@ -47,4 +47,16 @@ Status: in progress (Phase C)
 - R1 vs I1/I2/M1/M2: expansions.* differ only in Bundle id, lastUpdated and expansion identifier (masked; compare.py reported them because its timestamp mask overlapped the UUID). en.tgz package/.index.db and qa-txservers.html as on other IGs, master too.
 - Watch (no examples in this IG: W3 edits a CodeSystem concept, W4 adds a CodeSystem, W5 deletes it): all edits shown. F2 vs W2, F6 vs W6 and I1 vs W6: same masked expansions diff plus qa-txservers use count. No stale output.
 - Rapido build kinds: W1 Page Rebuild (83 s, mostly the html checks that cannot be reused), W2/W3/W6 Differential Build (8 to 13 of 1037 files), W4/W5 Complete Build (file added/removed).
+
+### uz-integ
+- R1 vs I1: 624 files differ only in the terminology.hl7.org version of the NamingSystem-uri link in example narratives (7.5.0 vs 7.1.0; master M1 also differs from R1 the same way, as au-ps), expansion identifiers (masked), en.tgz package/.index.db, and spec.internals (5155 targets on master, 4309 on integration, the 846 *.ai.html; PR #48 as the other IGs).
+- R1 vs I2 (second build in same folder) adds 111 html and 32 json ValueSet expansion narratives ("Expansion from tx.fhir.org based on Loinc v2.83" vs a "based on:" list); master M2 has exactly the same set, so pre-existing. I2 and M2 also each have one ValueSet in definitions.* that differs (a different one in each: screening-ultrasound-breast-symmetry-vs in I2, screening-ultrasound-axillary-node-differentiation-vs in M2); content not inspected (compare snippet cut at 300 chars and the outputs were already deleted for disk).
+- Watch memory REGRESSION (PR #48): with -rapido -watch the integration jar keeps Jekyll running between builds (commits e85860f2 "Watch mode: keep Jekyll running, and reuse what the steps after it found" and 26aaf1ac; in the integration base and in PR #48 head 9614fa3, not on master). On this IG that ruby process holds 5.5 GB resident next to a 9 GB JVM (-Xmx7600m).
+  - try1, 4 GB swap: JVM OOM-killed by the memory cgroup during W2 (java 9.1 GB RSS, ruby 4.3 GB RSS + 4 GB swapped).
+  - try2, 8 GB swap: survived W1, W2 (swap peak 7.7 GB of 8); the W2 snapshot copy then hit the disk limit, so W3..W6 and F2/F6 were not run.
+  - master jar, same VM, W1..W2: java peak 9.2 GB, no resident ruby, swap peak 2.5 GB.
+  - PR #48 jar (9614fa3) W1..W2: ruby 5.5 GB, swap peak 7.7 GB, as integration.
+  - Repro: `-rapido -watch` on uzinfocom-org/digital-health-integration fa87466, -Xmx7600m, 15 GB RAM VM; after the first build watch `ps -C ruby -o rss` and `free`.
+  - Watch timings for reference: W1 page edit 31 s integration (Page Rebuild) vs 474 s master (Differential Build); W2 profile edit about 570 s integration vs 928 s master.
+- W1 and W2 edits reached output in all three watch runs.
 
