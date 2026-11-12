@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Calendar;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
@@ -34,7 +35,9 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.FileNode;
@@ -45,6 +48,7 @@ import org.hl7.fhir.model.IModelContext;
 import org.hl7.fhir.model.core.CanonicalResource;
 import org.hl7.fhir.model.core.DateTimeType;
 import org.hl7.fhir.model.core.DomainResource;
+import org.hl7.fhir.model.core.ElementDefinition;
 import org.hl7.fhir.model.core.Resource;
 import org.hl7.fhir.model.core.StructureDefinition;
 import org.hl7.fhir.model.core.ValueSet;
@@ -54,6 +58,7 @@ import org.hl7.fhir.services.client.EFhirClientException;
 import org.hl7.fhir.services.client.ITerminologyClientFactoryN;
 import org.hl7.fhir.services.client.ITerminologyClientN;
 import org.hl7.fhir.services.elementmodel.Element;
+import org.hl7.fhir.services.renderers.utils.RenderingContext;
 import org.hl7.fhir.standalone.terminology.client.TerminologyClientManager;
 import org.hl7.fhir.utilities.FileUtilities;
 import org.hl7.fhir.utilities.ToolingClientLogger;
@@ -61,6 +66,7 @@ import org.hl7.fhir.utilities.Utilities;
 import org.hl7.fhir.utilities.filesystem.ManagedFileAccess;
 import org.hl7.fhir.utilities.json.model.JsonArray;
 import org.hl7.fhir.utilities.json.model.JsonElement;
+import org.hl7.fhir.utilities.json.model.JsonNumber;
 import org.hl7.fhir.utilities.json.model.JsonObject;
 import org.hl7.fhir.utilities.json.model.JsonPrimitive;
 import org.hl7.fhir.utilities.json.model.JsonProperty;
@@ -93,7 +99,7 @@ public class RapidoTracker {
   public static final String PHASE_HTML = "html";
   public static final String PHASE_SHEETS = "sheets";
 
-  private static final int STATE_VERSION = 4;
+  private static final int STATE_VERSION = 6;
 
   private final PublisherFields pf;
   private final String stateFile;
@@ -121,6 +127,9 @@ public class RapidoTracker {
   private Set<String> statusBefore;
   /** how many of the IG's profiles the resource being validated was known to conform to before it was validated */
   private int profilesBefore;
+  /** how many validations were reused, and how many were done, for the log */
+  private int validationsReused;
+  private int validationsDone;
   /** the date the loader puts on canonical resources that have none; it differs every build */
   private final String buildDate;
 
@@ -128,6 +137,7 @@ public class RapidoTracker {
     this.pf = pf;
     this.stateFile = Utilities.path(pf.tempDir, "_rapido", "state.json");
     this.buildDate = new DateTimeType(pf.getExecTime()).asStringValue();
+    pf.sdMapCache.setListener(this::recordElementMap);
   }
 
   // ---- analysis ------------------------------------------------------------------------------------------------------
@@ -1028,8 +1038,15 @@ public class RapidoTracker {
       Set<String> sw = statusWarnings();
       statusBefore = sw == null ? null : new HashSet<>(sw);
       profilesBefore = r.getFoundProfiles().size();
+    } else {
+      validationsReused++;
     }
     return res;
+  }
+
+  /** e.g. "reused 12 of 15 validations", for the log */
+  public String validationSummary() {
+    return "reused "+validationsReused+" of "+(validationsReused+validationsDone)+" validations";
   }
 
   private List<ValidationMessage> savedValidation(FetchedFile f, FetchedResource r) {
@@ -1062,6 +1079,10 @@ public class RapidoTracker {
     if (sources == null) {
       return null;
     }
+    // the validator attaches the profiles it validated an element against to the element, for the qa page's signposts
+    if (!restoreSignposts(r.getElement(), rv.getJsonArray("signposts"), res)) {
+      return null;
+    }
     for (FetchedResource source : sources) {
       source.addFoundExample(r);
       r.getFoundProfiles().add(((CanonicalResource) source.getResource()).getUrl());
@@ -1073,6 +1094,7 @@ public class RapidoTracker {
 
   /** records the messages from validating a resource, before the publisher adds them to the file */
   public void recordValidation(FetchedFile f, FetchedResource r, List<ValidationMessage> errs) {
+    validationsDone++;
     Set<String> sw = statusWarnings();
     if (!keys.containsKey(f) || sw == null || statusBefore == null) {
       return; // without knowing what the validator had seen, the result can't be reused
@@ -1101,7 +1123,121 @@ public class RapidoTracker {
       }
       msgs.add(m);
     }
+    JsonArray signposts = recordSignposts(r.getElement(), errs);
+    if (signposts == null) {
+      return;
+    }
+    rv.add("signposts", signposts);
     newFile(f).forceObject("validation").set(Integer.toString(f.getResources().indexOf(r)), rv);
+  }
+
+  /**
+   * The messages the validator attached to the elements of the resource (Element.addMessage(): the profiles it
+   * validated each element against), with where each element is (the index of each child from the root) and its path.
+   * A message that is also one of the resource's messages is recorded as its index there, so that it comes back as the
+   * same object, as in a stock build. null if a message can't be saved.
+   */
+  static JsonArray recordSignposts(Element root, List<ValidationMessage> errs) {
+    JsonArray res = new JsonArray();
+    Map<ValidationMessage, Integer> index = new IdentityHashMap<>();
+    for (int i = 0; i < errs.size(); i++) {
+      index.putIfAbsent(errs.get(i), i);
+    }
+    return root == null || recordSignposts(root, "", index, res) ? res : null;
+  }
+
+  private static boolean recordSignposts(Element e, String at, Map<ValidationMessage, Integer> index, JsonArray res) {
+    if (e.hasMessages()) {
+      JsonObject o = new JsonObject();
+      o.add("at", at);
+      o.add("path", String.valueOf(e.getPath()));
+      JsonArray msgs = o.forceArray("messages");
+      for (ValidationMessage vm : e.getMessages()) {
+        Integer i = index.get(vm);
+        if (i != null) {
+          msgs.add(i);
+        } else {
+          JsonObject m = writeMessage(vm);
+          if (m == null) {
+            return false;
+          }
+          msgs.add(m);
+        }
+      }
+      res.add(o);
+    }
+    if (e.hasChildren()) {
+      int i = 0;
+      for (Element c : e.getChildList()) {
+        if (!recordSignposts(c, at.isEmpty() ? Integer.toString(i) : at+"."+i, index, res)) {
+          return false;
+        }
+        i++;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * Attaches the messages recordSignposts() recorded to the elements of the resource, as validating it would have.
+   * false (and nothing attached) if an element isn't where it was, or a message can't be read.
+   *
+   * @param msgs the resource's messages, as restored
+   */
+  static boolean restoreSignposts(Element root, JsonArray signposts, List<ValidationMessage> msgs) {
+    if (signposts == null || root == null) {
+      return signposts != null && signposts.size() == 0;
+    }
+    Map<Element, List<ValidationMessage>> found = new LinkedHashMap<>();
+    for (JsonElement je : signposts.getItems()) {
+      if (!(je instanceof JsonObject)) {
+        return false;
+      }
+      JsonObject o = (JsonObject) je;
+      Element e = root;
+      String at = o.asString("at");
+      if (at == null) {
+        return false;
+      }
+      if (!at.isEmpty()) {
+        for (String s : at.split("\\.")) {
+          int i;
+          try {
+            i = Integer.parseInt(s);
+          } catch (NumberFormatException ex) {
+            return false;
+          }
+          if (!e.hasChildren() || i < 0 || i >= e.getChildList().size()) {
+            return false;
+          }
+          e = e.getChildList().get(i);
+        }
+      }
+      if (!String.valueOf(e.getPath()).equals(o.asString("path")) || o.getJsonArray("messages") == null) {
+        return false;
+      }
+      List<ValidationMessage> list = new ArrayList<>();
+      for (JsonElement m : o.getJsonArray("messages").getItems()) {
+        ValidationMessage vm = null;
+        if (m instanceof JsonObject) {
+          vm = readMessage((JsonObject) m);
+        } else if (m instanceof JsonNumber) {
+          Integer i = ((JsonNumber) m).getInteger();
+          vm = i != null && i >= 0 && i < msgs.size() ? msgs.get(i) : null;
+        }
+        if (vm == null) {
+          return false;
+        }
+        list.add(vm);
+      }
+      found.put(e, list);
+    }
+    for (Map.Entry<Element, List<ValidationMessage>> e : found.entrySet()) {
+      for (ValidationMessage vm : e.getValue()) {
+        e.getKey().addMessage(vm);
+      }
+    }
+    return true;
   }
 
   /**
@@ -1306,6 +1442,9 @@ public class RapidoTracker {
         }
       }
     }
+    if (problem == null && PHASE_HTML.equals(phase)) {
+      problem = anchorChange(j);
+    }
     if (problem != null) {
       renderClean.remove(f);
       why.put(f, problem);
@@ -1350,6 +1489,45 @@ public class RapidoTracker {
     public final List<String[]> tracked = new ArrayList<>();
     public final List<long[]> fragUseNumbers = new ArrayList<>();
     public final List<String> fragUseKeys = new ArrayList<>();
+    /** the profiles whose elements the phase looked up in the shared element map cache (see ElementMapCache) */
+    public final List<String> elementMaps = new ArrayList<>();
+    /** the anchors the phase put in the build's anchor sets, by language (see anchorSets) */
+    public final Map<String, List<String>> anchors = new TreeMap<>();
+  }
+
+  /**
+   * The cache of profiles' elements by id that the core's StructureDefinitionRenderer shares across a build. The
+   * first look up of a profile in it updates the urls in the markdown of that profile's snapshot elements, in place
+   * (relative links become absolute); after that, everything that uses the profile from the context sees them so,
+   * the combined package included. A file whose html is replayed doesn't render its profiles, so the look ups its
+   * rendering made are recorded, and done again when it's replayed. Only the look ups that found the profile are
+   * recorded (the ones already in the cache, and the ones that put it there): a profile that isn't found isn't
+   * cached, and the renderer may expect that (a logical model's root element has no base type)
+   */
+  public static class ElementMapCache extends HashMap<String, Map<String, ElementDefinition>> {
+    private static final long serialVersionUID = 1L;
+    private transient Consumer<String> listener;
+
+    public void setListener(Consumer<String> listener) {
+      this.listener = listener;
+    }
+
+    @Override
+    public Map<String, ElementDefinition> get(Object key) {
+      Map<String, ElementDefinition> res = super.get(key);
+      if (res != null && listener != null && key instanceof String url) {
+        listener.accept(url);
+      }
+      return res;
+    }
+
+    @Override
+    public Map<String, ElementDefinition> put(String key, Map<String, ElementDefinition> value) {
+      if (listener != null) {
+        listener.accept(key);
+      }
+      return super.put(key, value);
+    }
   }
 
   public static class NpmEntry {
@@ -1378,6 +1556,12 @@ public class RapidoTracker {
     private final int[] resErrorsBefore;
     private final boolean[] umlBefore;
     private final int expansionsBefore;
+    private final Set<String> elementMaps = new TreeSet<>();
+    private final Map<String, Set<String>> anchorsBefore = new HashMap<>();
+    /** the anchors the phase found in the build's anchor sets before it, by language (see AnchorSet) */
+    private final Map<String, Set<String>> anchorsTaken = new ConcurrentHashMap<>();
+    /** whether all the build's anchor sets tell the tracker which anchors are found taken */
+    private boolean anchorsWatched = true;
 
     private Recording(FetchedFile file, String phase) {
       this.file = file;
@@ -1398,6 +1582,145 @@ public class RapidoTracker {
       expansionsBefore = pf.expansions.size();
       if (PHASE_HTML.equals(phase)) {
         journal.add("messages", messagesHash(file));
+        for (Map.Entry<String, Set<String>> e : anchorSets().entrySet()) {
+          anchorsBefore.put(e.getKey(), new HashSet<>(e.getValue()));
+          anchorsWatched = anchorsWatched && e.getValue() instanceof AnchorSet;
+        }
+      }
+    }
+  }
+
+  /**
+   * The anchors the renderers have put in pages, by language ("" for the default one). A file's html is generated with
+   * a RenderingContext that shares its anchor set with the build's (generateHtmlOutputsInner copies it with its
+   * anchors), and a renderer doesn't put an anchor that's in that set in a page: when a code system and a value set
+   * have the same id, the one rendered second has no anchors for it in its page. Anchors are plain ids, so this goes
+   * for any two resources with the same id, of any type, in any files. A file whose html is replayed doesn't render,
+   * so the anchors its rendering put in the sets are recorded, and put in them again when it's replayed; and the
+   * anchors it found already there are recorded too. Its pages are what rendering it would give only if, at its place
+   * in the loop, none of the first are in the sets and all of the second are (see anchorChange)
+   */
+  private Map<String, Set<String>> anchorSets() {
+    Map<String, Set<String>> res = new TreeMap<>();
+    if (pf.rc != null) {
+      res.put("", watch("", pf.rc));
+    }
+    if (pf.rcLangs != null) {
+      for (RenderingContext rc : pf.rcLangs.langValues()) {
+        if (rc != pf.rc && rc.getLocale() != null) {
+          String lang = rc.getLocale().toLanguageTag();
+          res.put(lang, watch(lang, rc));
+        }
+      }
+    }
+    return res;
+  }
+
+  /**
+   * The context's anchor set, swapped for an AnchorSet with the same anchors the first time. The core has no way to
+   * give a context a set, so the field is set directly. The copies of a context that share its set (copy(true)) are
+   * made for one file's rendering, and anchorSets is only called between files, so none of them is left with the
+   * old set. If the set can't be swapped it's returned as it is, and a file's html isn't recorded (see stopRecording)
+   */
+  private Set<String> watch(String lang, RenderingContext rc) {
+    Set<String> set = rc.getAnchors();
+    if (!(set instanceof AnchorSet)) {
+      try {
+        Field fld = RenderingContext.class.getDeclaredField("anchors");
+        fld.setAccessible(true);
+        AnchorSet as = new AnchorSet(set);
+        fld.set(rc, as);
+        if (rc.getAnchors() != as) {
+          return set;
+        }
+        set = as;
+      } catch (Exception e) {
+        return set;
+      }
+    }
+    ((AnchorSet) set).listener = a -> anchorFound(lang, a);
+    return set;
+  }
+
+  /** a renderer found the anchor in the set for the language */
+  private void anchorFound(String lang, String anchor) {
+    Recording rec = recording;
+    if (rec != null) {
+      Set<String> before = rec.anchorsBefore.get(lang);
+      // one it added itself doesn't count: the file's own rendering puts it back
+      if (before != null && before.contains(anchor)) {
+        rec.anchorsTaken.computeIfAbsent(lang, k -> ConcurrentHashMap.newKeySet()).add(anchor);
+      }
+    }
+  }
+
+  /**
+   * A build's anchor set (see anchorSets) that tells the tracker which anchors a renderer found in it: the core's
+   * renderers ask contains (hasAnchor, stripAnchorsByName) before they put an anchor in a page
+   */
+  static class AnchorSet extends HashSet<String> {
+    private static final long serialVersionUID = 1L;
+    private transient Consumer<String> listener;
+
+    AnchorSet(Collection<String> anchors) {
+      super(anchors);
+    }
+
+    @Override
+    public boolean contains(Object o) {
+      boolean res = super.contains(o);
+      Consumer<String> l = listener;
+      if (res && l != null && o instanceof String s) {
+        l.accept(s);
+      }
+      return res;
+    }
+  }
+
+  /**
+   * Why the file's html can't be replayed at this place in the loop because of the build's anchor sets (see
+   * anchorSets), or null
+   */
+  private String anchorChange(JsonObject j) {
+    Map<String, Set<String>> sets = anchorSets();
+    JsonObject added = j.getJsonObject("anchors");
+    JsonObject taken = j.getJsonObject("anchorsTaken");
+    if (added == null || taken == null) {
+      return "no record of its anchors";
+    }
+    String problem = anchorMismatch(sets, added, false, "an anchor it put in its pages is taken: ");
+    if (problem == null) {
+      problem = anchorMismatch(sets, taken, true, "an anchor it found taken is free: ");
+    }
+    return problem;
+  }
+
+  /**
+   * The first recorded anchor that's in the build's set for its language when it shouldn't be, or not when it should
+   * be, as the problem with it, or null
+   */
+  private static String anchorMismatch(Map<String, Set<String>> sets, JsonObject anchors, boolean shouldBeTaken, String problem) {
+    for (String lang : anchors.getNames()) {
+      Set<String> set = sets.get(lang);
+      if (set == null) {
+        return "it has anchors for a language the build doesn't have: "+lang;
+      }
+      for (String a : anchors.getJsonArray(lang).asStrings()) {
+        if (set.contains(a) != shouldBeTaken) {
+          return problem+a;
+        }
+      }
+    }
+    return null;
+  }
+
+  /** what a replayed file's rendering did to the build's anchor sets (see anchorSets) */
+  public void redoAnchors(Journal j) {
+    Map<String, Set<String>> sets = anchorSets();
+    for (Map.Entry<String, List<String>> e : j.anchors.entrySet()) {
+      Set<String> set = sets.get(e.getKey());
+      if (set != null) {
+        set.addAll(e.getValue());
       }
     }
   }
@@ -1476,7 +1799,39 @@ public class RapidoTracker {
         return;
       }
     }
+    if (!rec.anchorsWatched) {
+      return;
+    }
+    JsonArray em = j.forceArray("elementMaps");
+    for (String s : rec.elementMaps) {
+      em.add(s);
+    }
+    JsonObject an = j.forceObject("anchors");
+    for (Map.Entry<String, Set<String>> e : anchorSets().entrySet()) {
+      Set<String> before = rec.anchorsBefore.get(e.getKey());
+      if (before != null && before.size() != e.getValue().size()) { // the sets only grow
+        Set<String> added = new TreeSet<>(e.getValue());
+        added.removeAll(before);
+        JsonArray a = an.forceArray(e.getKey());
+        for (String s : added) {
+          a.add(s);
+        }
+      }
+    }
+    JsonObject at = j.forceObject("anchorsTaken");
+    for (Map.Entry<String, Set<String>> e : new TreeMap<>(rec.anchorsTaken).entrySet()) {
+      JsonArray a = at.forceArray(e.getKey());
+      for (String s : new TreeSet<>(e.getValue())) {
+        a.add(s);
+      }
+    }
     newFile(f).set(rec.phase, j);
+  }
+
+  private void recordElementMap(String url) {
+    if (recording != null) {
+      recording.elementMaps.add(url);
+    }
   }
 
   private static boolean threw(List<ValidationMessage> list) {
@@ -1574,6 +1929,11 @@ public class RapidoTracker {
       List<String> a = ((JsonArray) e).asStrings();
       res.fragUseKeys.add(a.get(0));
       res.fragUseNumbers.add(new long[] {Long.parseLong(a.get(1)), Long.parseLong(a.get(2))});
+    }
+    res.elementMaps.addAll(j.forceArray("elementMaps").asStrings());
+    JsonObject an = j.forceObject("anchors");
+    for (String k : an.getNames()) {
+      res.anchors.put(k, an.getJsonArray(k).asStrings());
     }
     return res;
   }
