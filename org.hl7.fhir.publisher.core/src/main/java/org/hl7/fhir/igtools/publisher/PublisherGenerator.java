@@ -643,6 +643,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       pf.staleTemp.delete(stale);
     }
     pf.staleTemp.save(claimed);
+    Set<String> unnamed = pf.staleTemp.unnamedClaims();
+    if (!unnamed.isEmpty()) {
+      log("Rapido Mode: " + unnamed.size() + " of the paths this build claims in the temp folder name no file, so they aren't kept track of (e.g. " + unnamed.iterator().next() + ")");
+    }
   }
 
   /**
@@ -4146,6 +4150,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     if (!pf.rapido.isCompleteBuild()) {
       List<Path> left = pf.staleTemp.findTemplateLeftovers();
+      int unreadable = pf.staleTemp.unreadableTemplateWrites();
+      if (unreadable > 0) {
+        log("Rapido Mode: " + unreadable + " lines of the record of what the template's onGenerate wrote in the last build name no file in the temp folder, so what they named isn't deleted before it runs again");
+      }
       if (!left.isEmpty()) {
         // most are files it copies every time (e.g. its assets), so one line, not one per file
         log("Rapido Mode: deleting the " + left.size() + " files the template's onGenerate wrote in the last build, before it runs again (e.g. " + pf.staleTemp.relative(left.get(0)) + ")");

@@ -436,6 +436,31 @@ class PublisherRapidoWatchTest {
     assertEquals("no record of what the last build claimed in the temp folder", pf.rapido.getReason());
   }
 
+  /**
+   * the last build ran under another locale, so read the temp folder's file names in another encoding: what it left
+   * there can't be told, a complete build
+   */
+  @Test
+  void afterABuildUnderAnotherFileSystemEncodingTheBuildIsComplete() throws Exception {
+    finish(build("a"));
+    Files.writeString(temp("_rapido").resolve("claimed-encoding.txt"), "x-another-encoding");
+
+    PublisherFields pf = build("a2");
+
+    assertTrue(pf.rapido.isCompleteBuild());
+    assertTrue(pf.rapido.getReason().startsWith("the last build read the temp folder's file names as x-another-encoding"), pf.rapido.getReason());
+  }
+
+  /** a claimed path that names no file is said once, not dropped silently */
+  @Test
+  void aClaimedPathThatNamesNoFileIsLogged() throws Exception {
+    PublisherFields pf = build("a");
+    pf.otherFilesRun.add(dir.resolve("temp") + "/a\0b.html");
+    finish(pf);
+
+    verify(pf.logger).logMessage(contains("1 of the paths this build claims in the temp folder name no file"));
+  }
+
   /** each -rapido build tracks the temp folder; a differential one marks where a complete one would clear it */
   @Test
   void eachBuildTracksTheTempFolder() throws Exception {

@@ -176,9 +176,9 @@ public class RapidoTracker {
       // a reused file's outputs are what it wrote in the temp folder in the last build (see RapidoOutputs)
       reason = "what the last build wrote in the temp folder isn't all there";
     }
-    if (reason == null && pf.staleTemp != null && !pf.staleTemp.hasClaims()) {
+    if (reason == null && pf.staleTemp != null) {
       // what the last build left in the temp folder that this one won't write can't be told (see StaleTempFiles)
-      reason = "no record of what the last build claimed in the temp folder";
+      reason = pf.staleTemp.whyNoClaims();
     }
     complete = reason != null;
     if (complete) {
