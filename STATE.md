@@ -215,3 +215,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 11:40 #38 fixed against core 13744e48 rebased on 7.0.5 (local SNAPSHOT, pom change uncommitted): head 39b12ede, all 8 findings confirmed+fixed + 2 extra (hashTree counted output/temp; Requirements-fromNarrative.json in IG root). sample-ig: 2nd build replays 20/20, output+qa same. Suite 579, only GitUtilities[4]. code-simplifier running (stale-38/SIMPLIFY.md).
 - 11:58 #38 simplified: a5505de4 (pom not committed). Suite 580, only GitUtilities[4]. #38 done pending core hook upstream.
 - 12:05 #45 review round: b872f882 (SUSHI skip fixed; loader wiring already right, now tested; $ folder patterns narrowed). Suite 787, only GitUtilities[4]. s2 told to use b872f882. code-simplifier on 14c0cdb..b872f882 running (fix-45/SIMPLIFY.md).
+- 12:15 #45 simplified: db61068c (test-only change). Suite 787, only GitUtilities[4]. #45 done.
