@@ -6,6 +6,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -20,9 +21,12 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
@@ -52,6 +56,7 @@ public class JekyllDriver {
   public static final String DISABLE_PROPERTY = "ig.jekyll.driver";
   private static final String MARK = "@@ig-jekyll-driver@@ ";
   private static final String EOF = "\u0000eof";
+  private static final String JEKYLL_CACHE = ".jekyll-cache";
 
   /** What a command did */
   public static class Result {
@@ -147,6 +152,10 @@ public class JekyllDriver {
   private Path script;
   // the output files as Jekyll last wrote them: path (relative to the destination) => stamp (see stamp())
   private Map<String, String> stamps;
+  // the names at the top of the source that aren't tracked, while the source files are tracked (see trackSources())
+  private Set<String> untracked;
+  // the source files as Jekyll last read them, when they are tracked: path (relative to the source) => stamp and digest
+  private Map<String, String[]> sources;
 
   JekyllDriver(List<String> command, Map<String, String> env) {
     this.command = command;
@@ -225,7 +234,149 @@ public class JekyllDriver {
 
   /** Builds the whole site from source into destination */
   public Result build(String source, String destination, long timeout, Consumer<String> log) throws IOException {
-    return stamped(destination, send(source, destination, "{\"cmd\":\"build\"}", timeout, log));
+    Result r = stamped(destination, send(source, destination, "{\"cmd\":\"build\"}", timeout, log));
+    if (r.isOk() && untracked != null) {
+      rescan(source, destination, null, log);
+    }
+    return r;
+  }
+
+  /**
+   * After Jekyll has read the source files: takes them as what it read (see changedSources()); if they can't be
+   * scanned, that isn't known, and the next complete build renders the whole site (Jekyll itself did what it was asked)
+   */
+  private void rescan(String source, String destination, Map<String, String[]> was, Consumer<String> log) {
+    try {
+      sources = scanSources(source, destination, was);
+    } catch (IOException | UncheckedIOException e) {
+      sources = null;
+      log.accept("unable to tell which source files it read (" + e.getMessage() + "), so the next complete build renders the whole site");
+    }
+  }
+
+  /**
+   * Whether to keep track of the content of the site's source files from the next build on, so that changedSources()
+   * can tell which ones changed (null: not to): the names at the top of the source folder to leave out, which the
+   * caller writes there after Jekyll has run, and Jekyll doesn't read (a name ending in '*': the names that start with
+   * what comes before it). The destination and Jekyll's cache are always
+   * left out
+   */
+  public synchronized void trackSources(Collection<String> untracked) {
+    Set<String> s = untracked == null ? null : new HashSet<>(untracked);
+    if (s == null || !s.equals(this.untracked)) {
+      sources = null;
+    }
+    this.untracked = s;
+  }
+
+  /**
+   * The source files (relative to source) whose content isn't what Jekyll last read, and those added or removed since,
+   * sorted; or null if that isn't known (the source files aren't tracked, or Jekyll isn't running for this site). The
+   * update that follows is to be given them: what they are now is taken as what Jekyll has read
+   */
+  public synchronized List<String> changedSources(String source, String destination) throws IOException {
+    if (sources == null || !isRunningFor(source, destination)) {
+      return null;
+    }
+    Map<String, String[]> was = sources;
+    // (until it's known again)
+    sources = null;
+    Map<String, String[]> now = scanSources(source, destination, was);
+    List<String> changed = new ArrayList<>();
+    for (Map.Entry<String, String[]> e : now.entrySet()) {
+      String[] w = was.get(e.getKey());
+      if (w == null || w[1] == null || e.getValue()[1] == null || !w[1].equals(e.getValue()[1])) {
+        changed.add(e.getKey());
+      }
+    }
+    for (String f : was.keySet()) {
+      if (!now.containsKey(f)) {
+        changed.add(f);
+      }
+    }
+    Collections.sort(changed);
+    sources = now;
+    return changed;
+  }
+
+  /**
+   * The files under source (by sitePath()), but not those in destination, Jekyll's cache or the untracked names, with
+   * their stamp and a digest of their content (taken from was for a file whose stamp is the same; null if it can't be
+   * read: then the file counts as changed)
+   */
+  private Map<String, String[]> scanSources(String source, String destination, Map<String, String[]> was) throws IOException {
+    Path root = Paths.get(source).toAbsolutePath().normalize();
+    Set<Path> skip = new HashSet<>();
+    skip.add(Paths.get(destination).toAbsolutePath().normalize());
+    skip.add(root.resolve(JEKYLL_CACHE));
+    List<String> prefixes = new ArrayList<>();
+    for (String s : untracked) {
+      if (s.endsWith("*")) {
+        prefixes.add(s.substring(0, s.length() - 1));
+      } else {
+        skip.add(root.resolve(s));
+      }
+    }
+    List<Path> files = new ArrayList<>();
+    Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
+      @Override
+      public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
+        return skipped(dir) ? FileVisitResult.SKIP_SUBTREE : FileVisitResult.CONTINUE;
+      }
+
+      private boolean skipped(Path p) {
+        if (skip.contains(p)) {
+          return true;
+        }
+        if (root.equals(p.getParent())) {
+          for (String prefix : prefixes) {
+            if (p.getFileName().toString().startsWith(prefix)) {
+              return true;
+            }
+          }
+        }
+        return false;
+      }
+
+      @Override
+      public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) {
+        if (!skipped(file)) {
+          files.add(file);
+        }
+        return FileVisitResult.CONTINUE;
+      }
+    });
+    Map<String, String[]> res = new ConcurrentHashMap<>();
+    files.parallelStream().forEach(f -> {
+      String rel = sitePath(root.relativize(f));
+      String stamp = stamp(f);
+      String[] w = was == null ? null : was.get(rel);
+      res.put(rel, stamp != null && w != null && stamp.equals(w[0]) ? w : new String[] {stamp, digest(f)});
+    });
+    return new HashMap<>(res);
+  }
+
+  /** A digest of the file's content, or null if it can't be read */
+  static String digest(Path f) {
+    try (InputStream in = Files.newInputStream(f)) {
+      MessageDigest md = MessageDigest.getInstance("SHA-1");
+      byte[] buf = new byte[65536];
+      int n;
+      while ((n = in.read(buf)) > 0) {
+        md.update(buf, 0, n);
+      }
+      return hex(md.digest());
+    } catch (IOException | NoSuchAlgorithmException e) {
+      return null;
+    }
+  }
+
+  private static String hex(byte[] bytes) {
+    StringBuilder b = new StringBuilder();
+    for (byte x : bytes) {
+      b.append(String.format("%02x", x));
+    }
+    return b.toString();
   }
 
   /**
@@ -250,7 +401,24 @@ public class JekyllDriver {
       // Jekyll can only have left files as they were when asked to: take them all as new
       r = r.withWritten(null);
     }
-    return stamped(destination, r);
+    r = stamped(destination, r);
+    if (r.isOk() && sources != null) {
+      if (r.isFull()) {
+        rescan(source, destination, sources, log);
+      } else {
+        // what Jekyll has read now
+        Path root = Paths.get(source).toAbsolutePath().normalize();
+        for (String f : changed) {
+          Path p = root.resolve(f);
+          if (Files.isRegularFile(p)) {
+            sources.put(f, new String[] {stamp(p), digest(p)});
+          } else {
+            sources.remove(f);
+          }
+        }
+      }
+    }
+    return r;
   }
 
   /** Writes these output files (relative to destination) again as the last build or update wrote them */
@@ -294,6 +462,8 @@ public class JekyllDriver {
   private Result stamped(String destination, Result r) throws IOException {
     if (!r.isOk()) {
       stamps = null;
+      // (what it read is no longer known)
+      sources = null;
     } else if (r.isAllWritten()) {
       stamps = stampTree(destination);
     } else if (stamps != null) {
@@ -545,6 +715,7 @@ public class JekyllDriver {
       destination = null;
     }
     stamps = null;
+    sources = null;
   }
 
   /**

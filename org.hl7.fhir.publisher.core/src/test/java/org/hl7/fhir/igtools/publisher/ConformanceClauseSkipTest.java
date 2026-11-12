@@ -74,7 +74,7 @@ class ConformanceClauseSkipTest {
     HTMLInspector inspector = new HTMLInspector(null, "root", new ArrayList<>(), new ArrayList<>(), null, "http://example.org/ig",
       "example.ig", "0.1.0", null, new ArrayList<>(), null, false, null, new ArrayList<>(), false, new ArrayList<>(), null);
     ConformanceStatementHandler handler = new ConformanceStatementHandler(inspector, null, null, new ArrayList<>(), false, null);
-    handler.useLanguageOf(inspector.new LoadedFile("/ig/output/en/page.html", "page.html", 0, 0, null, false, true));
+    handler.useLanguageOf(new HTMLInspector.LoadedFile("/ig/output/en/page.html", "page.html", 0, 0, null, false, true));
     String[][] cases = {{"Systems SHALL do this", "SHALL"}, {"Systems SHALL NOT do this", "SHALLNOT"},
       {"Systems SHOULD do this", "SHOULD"}, {"Systems SHOULD NOT do this", "SHOULD-NOT"}, {"Systems MAY do this", "MAY"}};
     for (String[] c : cases) {

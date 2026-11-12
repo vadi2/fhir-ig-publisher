@@ -1,0 +1,265 @@
+package org.hl7.fhir.igtools.publisher;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.startsWith;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
+
+import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.Arrays;
+import java.util.Collections;
+
+import org.hl7.fhir.igtools.templates.Template;
+import org.hl7.fhir.utilities.logging.ILoggingService;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
+
+/**
+ * Watch mode: a complete build lets the Jekyll that's kept running render just what depends on the temp files whose
+ * content changed, when the output it goes on from is still there, and so is what the last html checks found
+ */
+class WatchCompleteBuildJekyllTest {
+
+  @TempDir
+  Path dir;
+
+  private JekyllDriver driver;
+  private PublisherSettings settings;
+  private PublisherFields pf;
+  private String temp;
+  private String out;
+
+  @BeforeEach
+  void setUp() throws Exception {
+    Path script = dir.resolve("fake-jekyll.sh");
+    Files.write(script, "while read l; do printf '@@ig-jekyll-driver@@ {\"ok\":true,\"full\":true}\\n'; done\n".getBytes(StandardCharsets.UTF_8));
+    driver = new JekyllDriver(Arrays.asList("sh", script.toString().replace(File.separatorChar, '/')), System.getenv());
+    settings = new PublisherSettings();
+    settings.setWatchMode(true);
+    pf = new PublisherFields();
+    pf.logger = mock(ILoggingService.class);
+    pf.tempDir = dir.resolve("temp").toString();
+    pf.outputDir = dir.resolve("output").toString();
+    write("temp/a.html", "a");
+    write("temp/_rapido/state.json", "{}");
+    PublisherIGLoader loader = loader();
+    loader.setUpWatchOutput();
+    temp = new File(pf.tempDir).getAbsolutePath();
+    out = new File(pf.outputDir).getAbsolutePath();
+  }
+
+  @AfterEach
+  void stop() {
+    driver.stop();
+  }
+
+  private PublisherIGLoader loader() {
+    PublisherIGLoader loader = new PublisherIGLoader(settings);
+    loader.setPf(pf);
+    loader.setJekyllDriver(driver);
+    return loader;
+  }
+
+  private void write(String rel, String content) throws IOException {
+    Path f = dir.resolve(rel);
+    Files.createDirectories(f.getParent());
+    Files.write(f, content.getBytes(StandardCharsets.UTF_8));
+  }
+
+  @Test
+  void theStagedOutputIsKeptWhileJekyllIsRunningForIt() throws Exception {
+    PublisherIGLoader loader = loader();
+    assertFalse(loader.keepsStagedOutput());
+    assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
+    assertTrue(loader.keepsStagedOutput());
+
+    settings.setGenerationOff(true);
+    assertFalse(loader.keepsStagedOutput());
+    settings.setGenerationOff(false);
+    loader.setJekyllDriver(null);
+    assertFalse(loader.keepsStagedOutput());
+    loader.setJekyllDriver(driver);
+    String staging = pf.watchOutputDir;
+    pf.watchOutputDir = null;
+    assertFalse(loader.keepsStagedOutput());
+    pf.watchOutputDir = staging;
+    assertTrue(loader.keepsStagedOutput());
+    driver.stop();
+    assertFalse(loader.keepsStagedOutput());
+  }
+
+  @Test
+  void aBuildEmptiesTheStagingUnlessJekyllGoesOnFromIt() throws Exception {
+    PublisherIGLoader loader = loader();
+    assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
+    Files.write(Paths.get(out, "a.html"), "a".getBytes(StandardCharsets.UTF_8));
+    Files.write(Paths.get(out, "qa.json"), "{}".getBytes(StandardCharsets.UTF_8));
+    Files.write(Paths.get(out, "package.tgz"), "tgz".getBytes(StandardCharsets.UTF_8));
+    loader.clearOutputUnlessKept();
+    assertTrue(pf.stagedOutputKept);
+    assertTrue(new File(out, "a.html").exists());
+    // (a build that fails before it writes its qa.json mustn't seem to have written that one: see recordWatchFailure)
+    assertFalse(new File(out, "qa.json").exists());
+    // (nor is the combined package made from the last build's package)
+    assertFalse(new File(out, "package.tgz").exists());
+
+    driver.stop();
+    loader.clearOutputUnlessKept();
+    assertFalse(pf.stagedOutputKept);
+    assertFalse(new File(out, "a.html").exists());
+  }
+
+  @Test
+  void whyJekyllCouldntWriteAPageAgainIsKept() throws Exception {
+    JekyllDriver failing = mock(JekyllDriver.class);
+    IOException why = new IOException("the pipe broke");
+    when(failing.isRunningFor(any(), any())).thenReturn(true);
+    when(failing.rewrite(any(), any(), any(), anyLong(), any())).thenThrow(why);
+    PublisherGenerator g = new PublisherGenerator(settings);
+    g.setPf(pf);
+    g.setWatchTools(failing, null);
+    HTMLInspector.OutputRewriteFailure e = assertThrows(HTMLInspector.OutputRewriteFailure.class,
+        () -> g.rewriteOutputs(null, Collections.singletonList(Paths.get(out, "a.html").toString())));
+    assertSame(why, e.getCause());
+  }
+
+  private PublisherGenerator generator(PageRebuild carried) {
+    PublisherGenerator g = new PublisherGenerator(settings);
+    g.setPf(pf);
+    g.setWatchTools(driver, null);
+    g.setPageRebuild(carried);
+    return g;
+  }
+
+  private static PageRebuild carried() {
+    PageRebuild res = new PageRebuild();
+    res.setHtmlRecords(new HtmlCheckRecords((String) null));
+    return res;
+  }
+
+  @Test
+  void aBuildThatStoppedKeepingItsStateLeavesNothingForTheNext() {
+    // what it has is the last build's: this build's html checks and AI step didn't go into it
+    PageRebuild state = carried();
+    generator(state).keepForPageRebuild(() -> {
+      throw new IOException("disk full");
+    });
+    state.finished();
+    assertNull(state.carryOver().getHtmlRecords());
+
+    PageRebuild kept = carried();
+    generator(kept).keepForPageRebuild(() -> {});
+    kept.finished();
+    assertNotNull(kept.carryOver().getHtmlRecords());
+  }
+
+  @Test
+  void aCompleteBuildGoesOnFromTheLastBuildsOutputAndChecks() throws Exception {
+    pf.stagedOutputKept = true;
+    PublisherGenerator g = generator(carried());
+    // the first build: nothing to go on from
+    assertEquals(null, g.changedSources(temp, out));
+    assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
+    assertEquals(Collections.emptyList(), g.changedSources(temp, out));
+    write("temp/a.html", "a2");
+    write("temp/_rapido/state.json", "{\"a\": 1}");
+    write("temp/full-ig.zip", "zip");
+    write("temp/.ai-outputs/0", "the AI step's file, kept while Jekyll runs");
+    assertEquals(Arrays.asList("a.html"), g.changedSources(temp, out));
+  }
+
+  @Test
+  void theAiStepsFilesAreKeptWhileJekyllRunsUnlessTheTemplatesCheckMaySeeThem() throws Exception {
+    PageRebuild state = carried();
+    assertNotNull(generator(null).keepAiOutputs(state, out));
+    assertNull(generator(null).keepAiOutputs(null, out));
+    // the check runs before the AI step, and must see what `jekyll build` leaves
+    pf.template = mock(Template.class);
+    when(pf.template.whyOnCheckMaySeeOutput(out)).thenReturn("it has no script");
+    assertNull(generator(null).keepAiOutputs(state, out));
+
+    // what fails as it keeps them makes the AI step write them again, not the build fail
+    pf.template = null;
+    PageRebuild failing = mock(PageRebuild.class);
+    AIProcessor.Cache cache = mock(AIProcessor.Cache.class);
+    when(failing.getAiCache()).thenReturn(cache);
+    doThrow(new java.io.UncheckedIOException(new IOException("disk full"))).when(cache).keepOutputs(any());
+    assertNull(generator(null).keepAiOutputs(failing, out));
+    doThrow(new IOException("disk full")).when(cache).keepOutputs(any());
+    assertNull(generator(null).keepAiOutputs(failing, out));
+  }
+
+  @Test
+  void withoutTheLastBuildsOutputOrChecksJekyllBuildsEverything() throws Exception {
+    pf.stagedOutputKept = true;
+    PublisherGenerator g = generator(carried());
+    g.changedSources(temp, out);
+    assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
+    write("temp/a.html", "a2");
+
+    pf.stagedOutputKept = false;
+    assertEquals(null, g.changedSources(temp, out));
+    verify(pf.logger).logMessage("Rapido Mode: Jekyll renders the whole site (the last build's staged output isn't kept)");
+    pf.stagedOutputKept = true;
+    // (the last build didn't finish, or its checks can't be used again)
+    assertEquals(null, generator(new PageRebuild()).changedSources(temp, out));
+    verify(pf.logger).logMessage("Rapido Mode: Jekyll renders the whole site (the last build's html checks can't be reused)");
+    assertEquals(null, generator(null).changedSources(temp, out));
+    verify(pf.logger).logMessage("Rapido Mode: Jekyll renders the whole site (there's no state kept from the last build)");
+    assertEquals(Arrays.asList("a.html"), g.changedSources(temp, out));
+    // what Jekyll read isn't known before it has built the site (the first call), and once it's stopped
+    driver.stop();
+    assertEquals(null, g.changedSources(temp, out));
+    verify(pf.logger, times(2)).logMessage(startsWith("Rapido Mode: Jekyll renders the whole site (what it last read isn't known"));
+  }
+
+  @Test
+  void theHtmlChecksGoOnFromTheLastBuildsOnlyIfJekyllLeftTheOtherOutputFilesAsThatBuildLeftThem() {
+    HtmlCheckRecords last = new HtmlCheckRecords((String) null);
+    // a complete build: Jekyll wrote these, and left the others
+    assertEquals(last, PublisherGenerator.recordsForCheck(null, Collections.singleton("a.html"), last));
+    // it wrote everything
+    assertNull(PublisherGenerator.recordsForCheck(null, null, last));
+    // a page rebuild: its own
+    PageRebuild replay = carried();
+    assertEquals(replay.getHtmlRecords(), PublisherGenerator.recordsForCheck(replay, null, last));
+  }
+
+  @Test
+  void notWhenTheTemplatesCheckMayLookAtTheOutput() throws Exception {
+    pf.stagedOutputKept = true;
+    pf.template = mock(Template.class);
+    when(pf.template.whyOnCheckMaySeeOutput(out)).thenReturn("it has no script");
+    PublisherGenerator g = generator(carried());
+    assertEquals(null, g.changedSources(temp, out));
+    assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
+    write("temp/a.html", "a2");
+    assertEquals(null, g.changedSources(temp, out));
+    // nor are the temp files kept track of
+    assertEquals(null, driver.changedSources(temp, out));
+
+    when(pf.template.whyOnCheckMaySeeOutput(out)).thenReturn(null);
+    assertEquals(null, g.changedSources(temp, out));
+    assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
+    write("temp/a.html", "a3");
+    assertEquals(Arrays.asList("a.html"), g.changedSources(temp, out));
+  }
+}

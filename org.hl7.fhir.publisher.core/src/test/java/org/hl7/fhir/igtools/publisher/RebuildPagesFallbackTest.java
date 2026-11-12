@@ -2,13 +2,17 @@ package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.lang.reflect.Field;
 import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.List;
 
@@ -105,5 +109,134 @@ class RebuildPagesFallbackTest {
     assertNull(f.get(p));
     assertEquals("Rapido Mode: the page rebuild failed (java.lang.Error: Output file x is being generated more than once), so doing a complete build",
         log.get(log.size() - 1));
+  }
+
+  @Test
+  void aPageRebuildReportsItsOwnTime() throws Exception {
+    PublisherFields pf = new PublisherFields();
+    pf.vsCache = dir.toString();
+    pf.logger = new ILoggingService() {
+      public void logMessage(String message) {
+      }
+
+      public void logDebugMessage(LogCategory category, String message) {
+      }
+    };
+    Calendar first = Calendar.getInstance();
+    first.add(Calendar.HOUR, -1);
+    pf.pinExecTime(first);
+    pf.setReportTime(first);
+    Calendar[] reported = {null};
+    PageRebuild state = new PageRebuild() {
+      @Override
+      public List<FetchedFile> pagesFor(SourceSnapshot.Changes changes, List<String> reason) {
+        return new ArrayList<>();
+      }
+
+      @Override
+      public PublisherFields getPf() {
+        return pf;
+      }
+
+      @Override
+      public void restore() throws IOException {
+        reported[0] = pf.getReportTime();
+        throw new IOException("stop here");
+      }
+    };
+    Publisher p = new Publisher();
+    p.setPf(pf);
+    Field f = Publisher.class.getDeclaredField("pageRebuild");
+    f.setAccessible(true);
+    f.set(p, state);
+
+    p.rebuildPages(new WatchSession(dir, Collections.emptyList()));
+    assertTrue(reported[0].after(first), reported[0].getTime().toString());
+    // (the package and spec files keep the first build's time)
+    assertSame(first, pf.getExecTime());
+  }
+
+  @Test
+  void whenACompleteBuildCantGoOnFromWhatTheLastBuildLeft() throws Exception {
+    List<String> log = new ArrayList<>();
+    Publisher p = new Publisher();
+    p.setPf(new PublisherFields());
+    p.getPf().logger = new ILoggingService() {
+      public void logMessage(String message) {
+        log.add(message);
+      }
+
+      public void logDebugMessage(LogCategory category, String message) {
+      }
+    };
+    Field f = Publisher.class.getDeclaredField("pageRebuild");
+    f.setAccessible(true);
+    PageRebuild carried = new PageRebuild();
+    List<Object> builtWith = new ArrayList<>();
+    int[] resets = {0};
+    p.completeBuild(carried, () -> {
+      builtWith.add(f.get(p));
+      if (builtWith.size() == 1) {
+        throw new Exception("Publishing failed", new HTMLInspector.OutputRewriteFailure("Jekyll can't write en/a.md again"));
+      }
+    }, () -> resets[0]++);
+    assertEquals(2, builtWith.size());
+    assertSame(carried, builtWith.get(0));
+    assertNotSame(carried, builtWith.get(1));
+    assertEquals(1, resets[0]);
+    assertEquals(List.of("Rapido Mode: Complete Build again, without what the last build left (Publishing failed)"), log);
+
+    // any other failure, or one without anything from the last build, is the build's
+    builtWith.clear();
+    assertThrows(IOException.class, () -> p.completeBuild(new PageRebuild(), () -> {
+      builtWith.add(f.get(p));
+      throw new IOException("a FSH error");
+    }, () -> resets[0]++));
+    assertThrows(HTMLInspector.OutputRewriteFailure.class, () -> p.completeBuild(null, () -> {
+      builtWith.add(f.get(p));
+      throw new HTMLInspector.OutputRewriteFailure("Jekyll can't write en/a.md again");
+    }, () -> resets[0]++));
+    assertEquals(2, builtWith.size());
+    assertEquals(1, resets[0]);
+  }
+
+  @Test
+  void onlyACompleteBuildThatFinishedPassesWhatItFoundOn() throws Exception {
+    Publisher p = new Publisher();
+    p.setPf(new PublisherFields());
+    p.getPf().logger = new ILoggingService() {
+      public void logMessage(String message) {
+      }
+
+      public void logDebugMessage(LogCategory category, String message) {
+      }
+    };
+    Field f = Publisher.class.getDeclaredField("pageRebuild");
+    f.setAccessible(true);
+    HtmlCheckRecords found = new HtmlCheckRecords((String) null);
+    p.completeBuild(null, () -> ((PageRebuild) f.get(p)).setHtmlRecords(found), () -> {});
+    assertSame(found, ((PageRebuild) f.get(p)).carryOver().getHtmlRecords());
+
+    // a build that fails late still holds the last build's records: they mustn't go on
+    PageRebuild carried = ((PageRebuild) f.get(p)).carryOver();
+    assertThrows(IOException.class, () -> p.completeBuild(carried, () -> {
+      throw new IOException("a fatal html check message");
+    }, () -> {}));
+    assertEquals("the last build didn't finish", carried.getNotReusable());
+    assertNull(carried.carryOver().getHtmlRecords());
+
+    // a build done again: what it used finished, the state it dropped didn't
+    PageRebuild again = new PageRebuild();
+    again.setHtmlRecords(found);
+    again.finished();
+    PageRebuild dropped = again.carryOver();
+    p.completeBuild(dropped, () -> {
+      if (f.get(p) == dropped) {
+        throw new HTMLInspector.OutputRewriteFailure("Jekyll can't write en/a.md again");
+      }
+      ((PageRebuild) f.get(p)).setHtmlRecords(found);
+    }, () -> {});
+    assertSame(found, ((PageRebuild) f.get(p)).carryOver().getHtmlRecords());
+    assertNull(dropped.carryOver().getHtmlRecords());
   }
 }

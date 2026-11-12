@@ -2,6 +2,7 @@ package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.ByteArrayOutputStream;
@@ -93,13 +94,7 @@ class AIProcessorTest {
   void anOldTemplateToo() throws IOException {
     // the pages are in the output folder itself, and the zip is written as ai-prep.zip and then renamed
     Path out = dir.resolve("old");
-    site(out);
-    try (Stream<Path> s = Files.list(out.resolve("en"))) {
-      for (Path p : (Iterable<Path>) s::iterator) {
-        Files.move(p, out.resolve(p.getFileName()));
-      }
-    }
-    Files.delete(out.resolve("en"));
+    oldSite(out);
     AIProcessor.Cache cache = new AIProcessor.Cache();
     run(out, cache, null, true);
     assertSameAsFullRun(out, true);
@@ -125,7 +120,156 @@ class AIProcessorTest {
     assertSameAsFullRun(out, true);
   }
 
+  @Test
+  void theNextBuildKeepsWhatThePagesAndZipsGave() throws IOException {
+    Path out = dir.resolve("out");
+    site(out);
+    AIProcessor.Cache cache = new AIProcessor.Cache();
+    run(out, cache, null);
+    Map<String, String> before = stamps(out);
+
+    // a complete build that wrote the resources' pages again: the other pages aren't read (they may have what the html
+    // check changed in them), and nothing is written
+    AIProcessor.Cache next = cache.carryOver();
+    run(out, next, set(out, "en/CodeSystem-cs1.html", "en/ValueSet-vs1.html", "en/Patient-p1.html"));
+    assertEquals(Collections.emptySet(), next.getWritten());
+    assertEquals(before, stamps(out));
+    assertSameAsFullRun(out);
+  }
+
+  @Test
+  void aNewPackageOnlyChangesWhatChangedInIt() throws IOException {
+    // as in each complete build: the resources' pages aren't read again (Jekyll would have to write them again, as
+    // the html check changes them), and only the markdown of the resource that changed is written
+    Path out = dir.resolve("out");
+    site(out);
+    AIProcessor.Cache cache = new AIProcessor.Cache();
+    run(out, cache, null);
+    Files.write(out.resolve("package.tgz"), tgz(PACKAGE_JSON, SPEC_INTERNALS,
+        "package/CodeSystem-cs1.json", "{\"resourceType\":\"CodeSystem\",\"id\":\"cs1\",\"url\":\"http://x/cs1\",\"title\":\"CS One\",\"version\":\"2\"}",
+        VS1, P1));
+    AIProcessor.Cache next = cache.carryOver();
+    run(out, next, new HashSet<>());
+    assertEquals(set(out, "en/CodeSystem-cs1.md", "en/ai.zip"), next.getWritten());
+    assertSameAsFullRun(out);
+
+    // the same content in a new package: nothing
+    Files.write(out.resolve("package.tgz"), Files.readAllBytes(out.resolve("package.tgz")));
+    run(out, next, new HashSet<>());
+    assertEquals(Collections.emptySet(), next.getWritten());
+
+    // and another change, for the same cache
+    Files.write(out.resolve("package.tgz"), tgz(PACKAGE_JSON, SPEC_INTERNALS,
+        "package/CodeSystem-cs1.json", "{\"resourceType\":\"CodeSystem\",\"id\":\"cs1\",\"url\":\"http://x/cs1\",\"title\":\"CS One\",\"version\":\"3\"}",
+        VS1, P1));
+    run(out, next, new HashSet<>());
+    assertEquals(set(out, "en/CodeSystem-cs1.md", "en/ai.zip"), next.getWritten());
+    assertSameAsFullRun(out);
+  }
+
+  @Test
+  void whatItMadeIsKeptWhileJekyllRuns() throws IOException {
+    // Jekyll removes the output files that aren't the site's: they are put back after, unless Jekyll wrote a file there
+    Path out = dir.resolve("out");
+    site(out);
+    AIProcessor.Cache cache = new AIProcessor.Cache();
+    run(out, cache, null);
+    Map<String, String> made = contents(out);
+    // (what a session stopped while Jekyll ran left)
+    Files.createDirectories(dir.resolve(".ai-outputs"));
+    write(dir, ".ai-outputs/0", "left");
+    cache.keepOutputs(dir.resolve(".ai-outputs"));
+    assertFalse(Files.exists(out.resolve("en/page1.md")));
+    assertFalse(Files.exists(out.resolve("en/ai.zip")));
+    assertFalse(Files.exists(out.resolve("llms.txt")));
+    assertTrue(Files.exists(out.resolve("en/page1.html")));
+    write(out, "en/page2.md", "a page of the site");
+    cache.putBackOutputs();
+    assertEquals("a page of the site", new String(Files.readAllBytes(out.resolve("en/page2.md")), StandardCharsets.UTF_8));
+    write(out, "en/page2.md", made.get("en/page2.md"));
+    assertEquals(made, contents(out));
+    try (Stream<Path> s = Files.list(dir)) {
+      assertEquals(List.of("out"), s.map(p -> p.getFileName().toString()).toList());
+    }
+
+    // the run finds them as it left them, and writes nothing (the zip too, though the move changed its inode time)
+    write(out, "en/page2.md", "a page of the site");
+    cache.keepOutputs(dir.resolve(".ai-outputs"));
+    write(out, "en/page2.md", "a page of the site");
+    cache.putBackOutputs();
+    run(out, cache, new HashSet<>());
+    assertEquals(set(out, "en/page2.md"), cache.getWritten());
+    assertSameAsFullRun(out);
+  }
+
+  @Test
+  void whatItNoLongerMakesIsRemoved() throws IOException {
+    Path out = dir.resolve("out");
+    site(out);
+    noLongerMade(out, "en/", false);
+  }
+
+  @Test
+  void whatItNoLongerMakesIsRemovedWithAnOldTemplateToo() throws IOException {
+    Path out = dir.resolve("old");
+    oldSite(out);
+    noLongerMade(out, "", true);
+  }
+
+  private void noLongerMade(Path out, String folder, boolean old) throws IOException {
+    AIProcessor.Cache cache = new AIProcessor.Cache();
+    run(out, cache, null, old);
+    Files.delete(out.resolve(folder + "page2.html"));
+    AIProcessor.Cache next = cache.carryOver();
+    next.keepOutputs(dir.resolve(".ai-outputs"));
+    next.putBackOutputs();
+    assertTrue(Files.exists(out.resolve(folder + "page2.md")));
+    run(out, next, new HashSet<>(), old);
+    assertFalse(Files.exists(out.resolve(folder + "page2.md")));
+    assertSameAsFullRun(out, old);
+  }
+
   // --- helpers -------------------------------------------------------------------------------------------------
+
+  @Test
+  void aPageItHasntReadThatJekyllCantWriteAgainFailsTheRunSoTheBuildIsDoneAgain() throws IOException {
+    Path out = dir.resolve("out");
+    site(out);
+    // a new cache knows none of the pages, which aren't new since the last run either
+    AIProcessor.Cache cache = new AIProcessor.Cache();
+    cache.prepare(new HashSet<>(), files -> new HashSet<>(files));
+    // (what Publisher.completeBuild() builds again for, without what the last build left)
+    assertThrows(HTMLInspector.OutputRewriteFailure.class, () -> process(new AIProcessor(out.toString(), cache), false));
+  }
+
+  @Test
+  void theSpecFileListsTheTopLevelPagesTheAiStepLeaves() throws IOException {
+    for (boolean generationOff : new boolean[] {false, true}) {
+      for (boolean old : new boolean[] {false, true}) {
+        Path out = dir.resolve("spec-" + generationOff + "-" + old);
+        if (old) {
+          oldSite(out);
+        } else {
+          site(out);
+        }
+        write(out, "index.html", page("Home", "the home page"));
+        write(out, "index.ai.html", page("Home", "the home page for the AI step"));
+        PublisherSettings settings = new PublisherSettings();
+        settings.setGenerationOff(generationOff);
+        settings.setNewMultiLangTemplateFormat(!old);
+        PublisherGenerator gen = new PublisherGenerator(settings);
+        PublisherFields pf = new PublisherFields();
+        pf.defaultTranslationLang = "en";
+        gen.setPf(pf);
+        assertEquals(!generationOff, gen.runAiStep(out.toString(), null));
+        String[] names = out.toFile().list();
+        List<String> left = Stream.of(names).filter(n -> n.endsWith(".html")).sorted().toList();
+        String c = "generation off: " + generationOff + ", old template: " + old;
+        assertEquals(generationOff || old, left.contains("index.ai.html"), c);
+        assertEquals(left, PublisherGenerator.specTargets(names, gen.aiPagesRemoved()).stream().sorted().toList(), c);
+      }
+    }
+  }
 
   private void run(Path out, AIProcessor.Cache cache, Set<String> fresh) throws IOException {
     run(out, cache, fresh, false);
@@ -164,6 +308,17 @@ class AIProcessorTest {
     }
   }
 
+  /** The site as an old template has it: the pages are in the output folder itself */
+  private void oldSite(Path out) throws IOException {
+    site(out);
+    try (Stream<Path> s = Files.list(out.resolve("en"))) {
+      for (Path p : (Iterable<Path>) s::iterator) {
+        Files.move(p, out.resolve(p.getFileName()));
+      }
+    }
+    Files.delete(out.resolve("en"));
+  }
+
   private void site(Path out) throws IOException {
     Files.createDirectories(out.resolve("en"));
     write(out, "en/index.html", page("Home", "the home page"));
@@ -174,19 +329,33 @@ class AIProcessorTest {
     write(out, "en/ValueSet-vs1.html", page("VS1", "a value set"));
     write(out, "en/Patient-p1.html", page("P1", "an example"));
     write(out, "en/toc.html", page("Toc", "the table of contents"));
-    Files.write(out.resolve("package.tgz"), tgz(
-        "package/package.json", "{\"name\":\"test.ig\",\"version\":\"0.1.0\",\"title\":\"Test IG\",\"fhirVersions\":[\"5.0.0\"],\"dependencies\":{}}",
-        "package/other/spec.internals", "{}",
+    Files.write(out.resolve("package.tgz"), tgz(PACKAGE_JSON, SPEC_INTERNALS,
         "package/CodeSystem-cs1.json", "{\"resourceType\":\"CodeSystem\",\"id\":\"cs1\",\"url\":\"http://x/cs1\",\"title\":\"CS One\"}",
-        "package/ValueSet-vs1.json", "{\"resourceType\":\"ValueSet\",\"id\":\"vs1\",\"url\":\"http://x/vs1\",\"name\":\"VSOne\"}",
-        "package/example/Patient-p1.json", "{\"resourceType\":\"Patient\",\"id\":\"p1\"}"));
+        VS1, P1));
   }
+
+  private static final String[] PACKAGE_JSON = {"package/package.json", "{\"name\":\"test.ig\",\"version\":\"0.1.0\",\"title\":\"Test IG\",\"fhirVersions\":[\"5.0.0\"],\"dependencies\":{}}"};
+  private static final String[] SPEC_INTERNALS = {"package/other/spec.internals", "{}"};
+  private static final String[] VS1 = {"package/ValueSet-vs1.json", "{\"resourceType\":\"ValueSet\",\"id\":\"vs1\",\"url\":\"http://x/vs1\",\"name\":\"VSOne\"}"};
+  private static final String[] P1 = {"package/example/Patient-p1.json", "{\"resourceType\":\"Patient\",\"id\":\"p1\"}"};
 
   private static String page(String title, String text) {
     return "<html><head><title>" + title + "</title></head><body><div><p>" + text + "</p></div></body></html>";
   }
 
-  private static byte[] tgz(String... nameAndContent) throws IOException {
+  private static byte[] tgz(Object... entries) throws IOException {
+    List<String> nameAndContent = new ArrayList<>();
+    for (Object e : entries) {
+      if (e instanceof String[]) {
+        nameAndContent.addAll(List.of((String[]) e));
+      } else {
+        nameAndContent.add((String) e);
+      }
+    }
+    return tgzOf(nameAndContent.toArray(new String[0]));
+  }
+
+  private static byte[] tgzOf(String... nameAndContent) throws IOException {
     ByteArrayOutputStream b = new ByteArrayOutputStream();
     try (TarArchiveOutputStream t = new TarArchiveOutputStream(new GZIPOutputStream(b))) {
       for (int i = 0; i < nameAndContent.length; i += 2) {

@@ -52,6 +52,16 @@ public class PublisherFields {
 
     FHIRToolingClient webTxServer;
     @Getter private Calendar execTime = Calendar.getInstance();
+    /**
+     * When the build ran, for the qa reports. The same as execTime, except in watch mode, where execTime stays at the
+     * day's first build (see WatchSession.buildTime) and this is still when the build ran
+     */
+    @Getter @Setter private Calendar reportTime = execTime;
+
+    /** the time the build says it was built at (the report time stays when it ran) */
+    void pinExecTime(Calendar time) {
+        execTime = time;
+    }
 
 
     Locale forcedLanguage;
@@ -88,6 +98,9 @@ public class PublisherFields {
     // in watch mode, the output folder: the build writes to outputDir, a staging folder that is synced into it
     String watchOutputDir;
     boolean watchOutputSynced;
+    // in watch mode, whether the staging folder still has what the last build wrote, for the Jekyll that's kept running
+    // (see PublisherIGLoader.keepsStagedOutput())
+    boolean stagedOutputKept;
     String specPath;
     String qaDir;
     String version;

@@ -2,7 +2,9 @@ package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotSame;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
@@ -106,6 +108,26 @@ class PageRebuildTest {
 
   interface IORunnable {
     void run() throws IOException;
+  }
+
+  @Test
+  void aCompleteBuildGetsWhatAFinishedBuildsChecksFound() {
+    PageRebuild last = new PageRebuild();
+    HtmlCheckRecords records = new HtmlCheckRecords((String) null);
+    last.setHtmlRecords(records);
+    last.finished();
+    PageRebuild next = last.carryOver();
+    assertNotSame(last, next);
+    assertSame(records, next.getHtmlRecords());
+    assertNotSame(last.getAiCache(), next.getAiCache());
+    assertNull(next.getPf());
+  }
+
+  @Test
+  void aBuildThatDidntFinishLeavesNothingForTheNext() {
+    PageRebuild last = new PageRebuild();
+    last.setHtmlRecords(new HtmlCheckRecords((String) null));
+    assertNull(last.carryOver().getHtmlRecords());
   }
 
   @Test
@@ -329,7 +351,7 @@ class PageRebuildTest {
   private HtmlCheckRecords.FileRecord checked(String path) throws IOException {
     HTMLInspector inspector = new HTMLInspector(null, "root", new ArrayList<>(), new ArrayList<>(), null, "http://example.org/ig",
         "example.ig", "0.1.0", null, new ArrayList<>(), null, false, null, new ArrayList<>(), false, new ArrayList<>(), null);
-    HtmlCheckRecords.FileRecord res = new HtmlCheckRecords.FileRecord(inspector.new LoadedFile(abs(path), path, 0, 0, null, false, true),
+    HtmlCheckRecords.FileRecord res = new HtmlCheckRecords.FileRecord(new HTMLInspector.LoadedFile(abs(path), path, 0, 0, null, false, true),
         new ArrayList<>(), new ArrayList<>());
     res.stamp();
     return res;

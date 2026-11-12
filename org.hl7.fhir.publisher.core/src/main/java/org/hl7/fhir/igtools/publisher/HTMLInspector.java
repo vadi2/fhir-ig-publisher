@@ -45,6 +45,9 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.UUID;
+
+import org.apache.commons.codec.digest.DigestUtils;
 
 import javax.annotation.Nonnull;
 
@@ -183,7 +186,7 @@ public class HTMLInspector {
     }
   }
 
-  public class LoadedFile {
+  public static class LoadedFile {
     String filename;
     private long lastModified;
     private int iteration;
@@ -344,6 +347,20 @@ public class HTMLInspector {
   public interface OutputRewriter {
     /** Writes these files (full paths) again as Jekyll wrote them; returns the ones that Jekyll doesn't write */
     Set<String> rewrite(Collection<String> files) throws IOException;
+  }
+
+  /**
+   * Output files that the build needed written again as Jekyll wrote them (see OutputRewriter) couldn't be: a build
+   * that goes on from what the last one left can build again without it
+   */
+  public static class OutputRewriteFailure extends IOException {
+    public OutputRewriteFailure(String message) {
+      super(message);
+    }
+
+    public OutputRewriteFailure(String message, Throwable cause) {
+      super(message, cause);
+    }
   }
 
   public HTMLInspector(IWorkerContext context, String rootFolder, List<SpecMapManager> specs, List<LinkedSpecification> linkSpecs, ILoggingService log,
@@ -641,8 +658,9 @@ public class HTMLInspector {
 
   /**
    * What the checks of the files depend on apart from the files: if it's different, what was found before can't be put
-   * back. The resources and the specifications aren't compared, just whether they're the same objects (they are in a
-   * page rebuild)
+   * back. The objects a build makes anew (the specifications, the resources...) are compared by what a file's check
+   * reads from them, so that a complete rebuild in watch mode can put back what the last build's check found (see
+   * contentSignature())
    */
   private Map<String, String> recordSignature() {
     Map<String, String> b = new LinkedHashMap<>();
@@ -670,9 +688,79 @@ public class HTMLInspector {
     String[] names = {"context", "specs", "linkSpecs", "sources", "module", "relatedIGs", "fragmentUses", "trackedFragments", "ig"};
     Object[] objects = {context, specs, linkSpecs, sources, module, relatedIGs, fragmentUses, trackedFragments, ig};
     for (int i = 0; i < names.length; i++) {
-      b.put(names[i], String.valueOf(System.identityHashCode(objects[i])));
+      b.put(names[i], contentSignature(names[i], objects[i]));
     }
     return b;
+  }
+
+  /**
+   * What a file's check reads from one of the objects the check is set up with, as a digest. The context and the IG
+   * are only read by the conformance clause handler, and a file with conformance clauses makes the records unusable
+   * (see recordCheck()); the tracked fragments are only read once all the files are checked
+   */
+  String contentSignature(String name, Object o) {
+    if (o == null) {
+      return "null";
+    }
+    StringBuilder b = new StringBuilder();
+    switch (name) {
+    case "context":
+      b.append(context.getFHIRVersion());
+      break;
+    case "ig":
+      b.append(ig.getUrl()).append('|').append(ig.getVersion());
+      break;
+    case "specs":
+      for (SpecMapManager spm : specs) {
+        b.append(spm == null ? "null" : spm.contentSignature()).append('\n');
+      }
+      break;
+    case "linkSpecs":
+      for (LinkedSpecification ls : linkSpecs) {
+        b.append(ls.getSpm() == null ? "null" : ls.getSpm().contentSignature()).append('\n');
+      }
+      break;
+    case "sources":
+      // the check looks for links to the IG's canonical resources by their URLs
+      Set<String> urls = new TreeSet<>();
+      for (FetchedFile f : sources) {
+        for (FetchedResource r : f.getResources()) {
+          if (r.getResource() instanceof CanonicalResource && ((CanonicalResource) r.getResource()).getUrl() != null) {
+            urls.add(((CanonicalResource) r.getResource()).getUrl());
+          }
+        }
+      }
+      for (String u : urls) {
+        b.append(u).append('\n');
+      }
+      break;
+    case "module":
+      // what a module resolves only depends on the reference
+      b.append(o.getClass().getName());
+      break;
+    case "relatedIGs":
+      for (RelatedIG r : relatedIGs) {
+        b.append(r.getCode()).append('|').append(r.getWebLocation()).append('|');
+        try {
+          b.append(r.getSpm() == null ? "null" : r.getSpm().contentSignature());
+        } catch (IOException e) {
+          // then it isn't known what the check would find there, nor if it's the same as last time
+          log.logMessage("Rapido Mode: what the html checks look up in " + r.getCode() + " isn't known (" + e.getMessage() + ")");
+          return "unknown " + UUID.randomUUID();
+        }
+        b.append('\n');
+      }
+      break;
+    case "fragmentUses":
+      b.append(new TreeSet<>(fragmentUses.keySet()));
+      break;
+    case "trackedFragments":
+      b.append(new TreeMap<>(trackedFragments));
+      break;
+    default:
+      return String.valueOf(System.identityHashCode(o));
+    }
+    return DigestUtils.sha1Hex(b.toString());
   }
 
   /**
@@ -850,7 +938,7 @@ public class HTMLInspector {
     }
     Set<String> unknown = rewriter == null ? new HashSet<>(files) : rewriter.rewrite(files);
     if (required && !unknown.isEmpty()) {
-      throw new IOException("The html checks changed " + unknown.iterator().next() + ", and Jekyll can't write it again");
+      throw new OutputRewriteFailure("The html checks changed " + unknown.iterator().next() + ", and Jekyll can't write it again");
     }
   }
 

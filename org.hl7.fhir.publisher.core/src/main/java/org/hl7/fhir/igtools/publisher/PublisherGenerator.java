@@ -747,6 +747,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     } catch (IOException | RuntimeException e) {
       log("Unable to keep the state for a page rebuild: " + e);
       pageRebuild.notReusable("its state couldn't be kept (" + e + ")");
+      pageRebuild.dropped();
       pageRebuild.discard();
       pageRebuild = null;
     }
@@ -770,6 +771,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       keepForPageRebuild(() -> pageRebuild.beforeJekyll());
     }
 
+    // a complete build in watch mode: what the last build's html checks found (if Jekyll leaves the output files it
+    // doesn't write again as that build left them, the checks need it, however this build's state is kept)
+    HtmlCheckRecords lastChecks = replay == null && pageRebuild != null ? pageRebuild.getHtmlRecords() : null;
+    // and the AI step's cache: if the state stops being kept after Jekyll, the AI step still needs it, for the files
+    // it put back after Jekyll and no longer makes, and the output files Jekyll didn't write again
+    AIProcessor.Cache lastAi = replay != null ? replay.getAiCache() : pageRebuild != null ? pageRebuild.getAiCache() : null;
     boolean jekyllOk;
     // the output files that are new since the last build or rebuild (null: all of them)
     Set<String> fresh;
@@ -893,6 +900,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         generateZips(df);
       }
       keepForPageRebuild(() -> pageRebuild.afterPackage());
+      if (fresh != null) {
+        if (pageRebuild != null) {
+          fresh.addAll(pageRebuild.getPackageOutputs());
+          freshFrom.append(", ").append(pageRebuild.getPackageOutputs().size()).append(" by the package step");
+        } else {
+          // (they are among the files changed since they were checked)
+          freshFrom.append(", the package step's");
+        }
+      }
     }
 
     log("Checking Output HTML");
@@ -927,22 +943,14 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     // watch mode: what the last build or rebuild kept of the steps below
     PageRebuild kept = replay != null ? replay : pageRebuild;
     HTMLInspector.OutputRewriter rewriter = files -> rewriteOutputs(replay, files);
-    if (!settings.isGenerationOff()) {
-      AIProcessor.Cache aiCache = kept == null ? null : kept.getAiCache();
-      if (aiCache != null) {
-        aiCache.prepare(fresh, rewriter);
-      }
-      AIProcessor ai = new AIProcessor(pf.inspector.getRootFolder(), aiCache);
-      if (isNewML()) {
-        ai.processNewTemplates(allLangs());
-      } else {
-        ai.processOldTemplates();
-      }
-      if (aiCache != null && fresh != null) {
-        // the AI step's files are new, and so are the pages it had Jekyll write again
-        fresh.addAll(aiCache.getWritten());
-        freshFrom.append(", ").append(aiCache.getWritten().size()).append(" by the AI step");
-      }
+    AIProcessor.Cache aiCache = settings.isGenerationOff() ? null : lastAi;
+    if (aiCache != null) {
+      aiCache.prepare(fresh, rewriter);
+    }
+    if (runAiStep(pf.inspector.getRootFolder(), aiCache) && aiCache != null && fresh != null) {
+      // the AI step's files are new, and so are the pages it had Jekyll write again
+      fresh.addAll(aiCache.getWritten());
+      freshFrom.append(", ").append(aiCache.getWritten().size()).append(" by the AI step");
     }
 
     pf.inspector.setReqFolder(pf.repoRoot);
@@ -961,11 +969,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (pf.ipsComparator != null && pf.ipsComparator.hasLast()) {
       pf.inspector.getComparisonFiles().add(pf.ipsComparator.getBaseFile());
     }
-    if (kept != null && !settings.isGenerationOff()) {
-      if (replay != null && fresh != null) {
+    HtmlCheckRecords lastRecords = recordsForCheck(replay, fresh, lastChecks);
+    if ((kept != null || lastRecords != null) && !settings.isGenerationOff()) {
+      if (fresh != null) {
         log("Rapido Mode: the output files new since the last html check: " + freshFrom);
       }
-      pf.inspector.recordChecks(replay != null ? replay.getHtmlRecords() : null, fresh, rewriter);
+      pf.inspector.recordChecks(lastRecords, fresh, rewriter);
     }
     List<ValidationMessage> linkmsgs = settings.isGenerationOff() ? new ArrayList<ValidationMessage>() : pf.inspector.check(statusMessage, statusMessages);
     if (kept != null) {
@@ -4692,10 +4701,17 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     // the template's check script runs next, and may look at the output: it must see what `jekyll build` would leave
     String seesOutput = update && pf.template != null ? pf.template.whyOnCheckMaySeeOutput(out) : null;
     boolean restore = seesOutput != null;
+    // a complete build: the temp files whose content changed, if Jekyll can just render what depends on them
+    List<String> changedSources = replay == null ? changedSources(temp, out) : null;
     MyFilterHandler filter = new MyFilterHandler();
     JekyllDriver.Result res;
+    AIProcessor.Cache ai = keepAiOutputs(replay != null ? replay : pageRebuild, out);
     try {
-      if (update) {
+      if (changedSources != null) {
+        log("Run jekyll: render the pages that depend on the " + changedSources.size() + " temp " + (changedSources.size() == 1 ? "file" : "files")
+            + " whose content changed (Jekyll kept running, in folder " + pf.tempDir + ")");
+        res = jekyllDriver.update(temp, out, changedSources, pf.jekyllTimeout, filter::line);
+      } else if (update) {
         List<String> changed = new ArrayList<>();
         for (String f : changedTempFiles) {
           changed.add(JekyllDriver.sitePath(Paths.get(temp).relativize(Paths.get(f).toAbsolutePath())));
@@ -4733,6 +4749,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       log("Jekyll (kept running) has failed (" + e.getMessage() + "), so running it as usual");
       jekyllDriver.stop();
       return String.valueOf(e.getMessage());
+    } finally {
+      if (ai != null) {
+        ai.putBackOutputs();
+      }
     }
     tts.end();
     if (!res.isOk()) {
@@ -4740,7 +4760,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       jekyllDriver.stop();
       return String.valueOf(res.getError());
     }
-    if (update && res.isFull()) {
+    if ((update || changedSources != null) && res.isFull()) {
       log("Jekyll: rendered the whole site again (" + res.getReason() + ")"
           + (res.isAllWritten() ? "" : "; " + res.getWritten().size() + " output files changed"));
     }
@@ -4752,6 +4772,80 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     return null;
   }
+
+  /**
+   * Watch mode: what the last html check found, for this one to go on from (see HTMLInspector.recordChecks()): a page
+   * rebuild's; or in a complete build, the last build's if Jekyll left the output files it didn't write again as that
+   * build left them (fresh: the files written since); else none
+   */
+  static HtmlCheckRecords recordsForCheck(PageRebuild replay, Set<String> fresh, HtmlCheckRecords lastChecks) {
+    return replay != null ? replay.getHtmlRecords() : fresh != null ? lastChecks : null;
+  }
+
+  /**
+   * Watch mode, in a complete build: the files in the temp folder (relative to it) whose content isn't what the Jekyll
+   * that's kept running last read, so that it can render just what depends on them, leaving the other output files as
+   * the last build left them; or null if it can't. It can if the last build's staged output is still there (see
+   * PublisherIGLoader.keepsStagedOutput()), what the last build's html checks found was carried over to this one (the
+   * output files Jekyll doesn't write again still have what those checks changed in them), and the template's check
+   * script doesn't look at the output (as for a page rebuild, it would have to see what `jekyll build` would leave)
+   */
+  List<String> changedSources(String temp, String out) {
+    String seesOutput = pf.template == null ? null : pf.template.whyOnCheckMaySeeOutput(out);
+    jekyllDriver.trackSources(seesOutput == null ? UNTRACKED_TEMP : null);
+    String whyNot = seesOutput != null ? "the template's check may look at the output: " + seesOutput
+        : !pf.stagedOutputKept ? "the last build's staged output isn't kept"
+        : pageRebuild == null ? "there's no state kept from the last build"
+        : pageRebuild.getHtmlRecords() == null ? "the last build's html checks can't be reused" : null;
+    if (whyNot != null) {
+      log("Rapido Mode: Jekyll renders the whole site (" + whyNot + ")");
+      return null;
+    }
+    long start = System.currentTimeMillis();
+    try {
+      List<String> res = jekyllDriver.changedSources(temp, out);
+      if (res != null) {
+        log("Rapido Mode: " + res.size() + " temp " + (res.size() == 1 ? "file" : "files") + " changed since Jekyll last ran ("
+            + (System.currentTimeMillis() - start) + " ms)");
+      } else {
+        log("Rapido Mode: Jekyll renders the whole site (what it last read isn't known: it was started again, failed or stopped since)");
+      }
+      return res;
+    } catch (IOException e) {
+      log("Unable to tell which temp files changed since Jekyll last ran (" + e.getMessage() + "), so Jekyll builds everything");
+      return null;
+    }
+  }
+
+  /**
+   * Watch mode, before the Jekyll that's kept running runs: keeps aside the files the last AI step made (see
+   * AIProcessor.Cache.keepOutputs()), in AI_OUTPUTS_KEPT in the temp folder; returns the cache to put them back after,
+   * or null if there's none (or they can't be kept: then the AI step writes them again). Not if the template's check
+   * may look at the output, which it does before the AI step, as Jekyll left it
+   */
+  AIProcessor.Cache keepAiOutputs(PageRebuild state, String out) {
+    AIProcessor.Cache ai = state == null || settings.isGenerationOff() ? null : state.getAiCache();
+    if (ai == null || (pf.template != null && pf.template.whyOnCheckMaySeeOutput(out) != null)) {
+      return null;
+    }
+    try {
+      ai.keepOutputs(Paths.get(pf.tempDir, AI_OUTPUTS_KEPT));
+      return ai;
+    } catch (IOException | RuntimeException e) {
+      log("Unable to keep the AI step's files while Jekyll runs, so they are written again (" + e.getMessage() + ")");
+      return null;
+    }
+  }
+
+  // where the AI step's files are kept while Jekyll runs, in the temp folder (Jekyll doesn't read a folder whose name
+  // starts with a dot)
+  static final String AI_OUTPUTS_KEPT = ".ai-outputs";
+
+  // the files that each build writes to the temp folder after Jekyll has run, and Jekyll doesn't read: Rapido's state
+  // (see RapidoTracker) and the final zip (see finishGenerate()); the AI step's files kept while Jekyll runs; and the
+  // package step's files a page rebuild moves aside while Jekyll runs (see PageRebuild.keepCheckedPackageOutputs())
+  static final List<String> UNTRACKED_TEMP = Collections.unmodifiableList(Arrays.asList("_rapido", "full-ig.zip", AI_OUTPUTS_KEPT,
+      PageRebuild.CHECKED_FOLDER_PREFIX + "*"));
 
   /**
    * Watch mode, before Jekyll writes these output files (relative to out) again for the template's check: moves aside
@@ -4827,7 +4921,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * the package step's files from the copies the page rebuild keeps, the others by Jekyll. Returns the ones that
    * can't be written again
    */
-  private Set<String> rewriteOutputs(PageRebuild replay, Collection<String> files) throws IOException {
+  Set<String> rewriteOutputs(PageRebuild replay, Collection<String> files) throws IOException {
     Set<String> res = new HashSet<>();
     String temp = new File(pf.tempDir).getAbsolutePath();
     String out = new File(pf.outputDir).getAbsolutePath();
@@ -4844,9 +4938,14 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       res.addAll(byRelative.values());
       return res;
     }
-    JekyllDriver.Result r = jekyllDriver.rewrite(temp, out, byRelative.keySet(), pf.jekyllTimeout, new MyFilterHandler()::line);
+    JekyllDriver.Result r;
+    try {
+      r = jekyllDriver.rewrite(temp, out, byRelative.keySet(), pf.jekyllTimeout, new MyFilterHandler()::line);
+    } catch (IOException e) {
+      throw new HTMLInspector.OutputRewriteFailure("Jekyll could not write output files again: " + e.getMessage(), e);
+    }
     if (!r.isOk()) {
-      throw new IOException("Jekyll could not write output files again: " + r.getError());
+      throw new HTMLInspector.OutputRewriteFailure("Jekyll could not write output files again: " + r.getError());
     }
     for (String f : r.getUnknown()) {
       res.add(byRelative.get(f));
@@ -5009,7 +5108,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
 
-  private void addFileToNpm(NPMPackageGenerator.Category other, String name, byte[] cnt) throws IOException {
+  void addFileToNpm(NPMPackageGenerator.Category other, String name, byte[] cnt) throws IOException {
     if (pf.rapido != null) {
       pf.rapido.recordNpm(other.name(), null, name, cnt);
     }
@@ -5027,6 +5126,39 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     for (NPMPackageGenerator vnpm : pf.vnpms.values()) {
       vnpm.addFile(other, name, cnt);
     }
+  }
+
+  /** The AI step, unless generation is off (then it returns false) */
+  boolean runAiStep(String root, AIProcessor.Cache aiCache) throws IOException {
+    if (settings.isGenerationOff()) {
+      return false;
+    }
+    AIProcessor ai = new AIProcessor(root, aiCache);
+    if (isNewML()) {
+      ai.processNewTemplates(allLangs());
+    } else {
+      ai.processOldTemplates();
+    }
+    return true;
+  }
+
+  /** Whether the AI step removes the top-level *.ai.html pages */
+  boolean aiPagesRemoved() {
+    return !settings.isGenerationOff() && isNewML();
+  }
+
+  /**
+   * The pages at the top of the output that the spec file lists as link targets: not the *.ai.html pages if the AI
+   * step removes them (see AIProcessor.processNewTemplates()), as they aren't in the output when the build ends
+   */
+  static List<String> specTargets(String[] names, boolean aiPagesRemoved) {
+    List<String> res = new ArrayList<>();
+    for (String s : names) {
+      if (s.endsWith(".html") && !(aiPagesRemoved && s.endsWith(".ai.html"))) {
+        res.add(s);
+      }
+    }
+    return res;
   }
 
   private File makeSpecFile() throws Exception {
@@ -5053,10 +5185,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         map.path(u, this.pf.igpkp.getLinkFor(r, true));
       }
     }
-    for (String s : new File(pf.outputDir).list()) {
-      if (s.endsWith(".html")) {
-        map.target(s);
-      }
+    for (String s : specTargets(new File(pf.outputDir).list(), aiPagesRemoved())) {
+      map.target(s);
     }
     File df = File.createTempFile("fhir", "tmp");
     df.deleteOnExit();
@@ -5408,10 +5538,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
-  private byte[] validationSummaryOO() throws IOException {
+  byte[] validationSummaryOO() throws IOException {
     Bundle bnd = new Bundle();
     bnd.setType(Bundle.BundleType.COLLECTION);
-    bnd.setTimestamp(new Date());
+    bnd.setTimestamp(pf.getExecTime().getTime());
     for (FetchedFile f : pf.fileList) {
       for (FetchedResource r : f.getResources()) {
         OperationOutcome oo = new OperationOutcome();

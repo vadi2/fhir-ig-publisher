@@ -1,5 +1,7 @@
 package org.hl7.fhir.igtools.publisher;
 
+import org.hl7.fhir.services.elementmodel.Element;
+import org.hl7.fhir.services.elementmodel.Property;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
@@ -12,18 +14,21 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Calendar;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.lang.reflect.Modifier;
 
 import org.hl7.fhir.igtools.publisher.PublisherUtils.LinkedSpecification;
 import org.hl7.fhir.igtools.publisher.modules.IPublisherModule;
 import org.hl7.fhir.igtools.publisher.modules.NullModule;
 import org.hl7.fhir.model.core.ImplementationGuide;
 import org.hl7.fhir.model.core.Requirements;
+import org.hl7.fhir.model.core.StructureDefinition;
 import org.hl7.fhir.services.context.IWorkerContext;
 import org.hl7.fhir.utilities.logging.ILoggingService;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
@@ -239,5 +244,186 @@ class HtmlCheckReplayTest {
     assertEquals(Collections.singleton(abs("a.html")), rewritten);
     assertTrue(log.contains("Rapido Mode: the html checks of 0 of 2 files are reused; not the others: the check is set up "
         + "differently (version)"), log.toString());
+  }
+
+  @Test
+  void aFileTheLastCheckChangedThatJekyllCantWriteAgainFailsTheCheckSoTheBuildIsDoneAgain() throws IOException {
+    page("a.html", "<h1>A</h1><p>text</p>");
+    HTMLInspector first = inspector();
+    first.recordChecks(null, null, files -> Collections.emptySet());
+    check(first);
+    HtmlCheckRecords records = first.getRecords();
+    assertNotNull(records);
+    records.files.get(abs("a.html")).modified = true;
+
+    HTMLInspector other = inspector("0.2.0");
+    other.recordChecks(records, new HashSet<>(), files -> new HashSet<>(files));
+    // (what Publisher.completeBuild() builds again for, without what the last build left)
+    assertThrows(HTMLInspector.OutputRewriteFailure.class, () -> other.check(null, null));
+  }
+
+  /**
+   * The inspector of a new build (a complete rebuild in watch mode): the specifications, the resources and the rest are
+   * new objects, made from a core spec with this target and an IG with a profile with this URL
+   */
+  private HTMLInspector newBuildInspector(String target, String profileUrl) throws IOException {
+    SpecMapManager core = new SpecMapManager("hl7.fhir.r4.core", "4.0.1", "4.0.1", "1", "1", Calendar.getInstance(), "http://hl7.org/fhir/R4");
+    core.setBase("http://hl7.org/fhir/R4");
+    core.target(target);
+    List<SpecMapManager> specs = new ArrayList<>(Collections.singletonList(core));
+    FetchedFile f = new FetchedFile("input/resources/sd.json");
+    FetchedResource r = f.addResource("sd");
+    r.setResource(new StructureDefinition().setUrl(profileUrl));
+    // (no narrative to check)
+    Property p = Mockito.mock(Property.class);
+    Mockito.when(p.getType("StructureDefinition")).thenReturn("StructureDefinition");
+    r.setElement(new Element("StructureDefinition", p));
+    r.setPath("StructureDefinition-sd.html");
+    List<FetchedFile> sources = new ArrayList<>(Collections.singletonList(f));
+    Mockito.when(context.fetchResource(Mockito.eq(Requirements.class), Mockito.anyString(), Mockito.any())).thenReturn(new Requirements());
+    HTMLInspector res = new HTMLInspector(context, dir.resolve("out").toString(), specs, new ArrayList<>(linkSpecs), logger, "http://example.org/ig",
+        "example.ig", "0.1.0", new HashMap<>(), sources, new NullModule(), false, fragmentUses, relatedIGs, false, new ArrayList<>(), null);
+    res.setIg(new ImplementationGuide().setUrl("http://example.org/ig/ImplementationGuide/example.ig"));
+    res.setExemptHtmlPatterns(new ArrayList<>());
+    res.setReqFolder(dir.toString());
+    return res;
+  }
+
+  // the fragments a new build's check tracks the use of (null: none)
+  private Map<String, PublisherBase.FragmentUseRecord> fragmentUses;
+
+  private HtmlCheckRecords firstBuild() throws IOException {
+    page("a.html", "<h1>A</h1><p><a href=\"http://hl7.org/fhir/R4/patient.html\">Patient</a></p>");
+    page("b.html", "<h1>B</h1><p><a href=\"http://example.org/ig/StructureDefinition/a\">profile</a></p>");
+    HTMLInspector first = newBuildInspector("patient.html", "http://example.org/ig/StructureDefinition/a");
+    first.recordChecks(null, null, files -> Collections.emptySet());
+    check(first);
+    HtmlCheckRecords records = first.getRecords();
+    assertNotNull(records, first.getRecordsNotUsable());
+    return records;
+  }
+
+  @Test
+  void aNewBuildsCheckOfTheSameContentPutsBackWhatTheLastBuildFound() throws IOException {
+    HtmlCheckRecords records = firstBuild();
+    HTMLInspector again = newBuildInspector("patient.html", "http://example.org/ig/StructureDefinition/a");
+    List<String> all = check(again);
+    HTMLInspector next = newBuildInspector("patient.html", "http://example.org/ig/StructureDefinition/a");
+    next.recordChecks(records, new HashSet<>(), files -> Collections.emptySet());
+    assertEquals(all, check(next));
+    assertTrue(log.contains("Rapido Mode: the html checks of 2 of 2 files are reused"), log.toString());
+  }
+
+  @Test
+  void aNewBuildWithOtherSpecTargetsChecksEverythingAgain() throws IOException {
+    HtmlCheckRecords records = firstBuild();
+    HTMLInspector next = newBuildInspector("observation.html", "http://example.org/ig/StructureDefinition/a");
+    next.recordChecks(records, new HashSet<>(), files -> Collections.emptySet());
+    List<String> found = check(next);
+    assertTrue(found.stream().anyMatch(m -> m.contains("patient.html")), found.toString());
+    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 2 files are reused; not the others: the check is set up "
+        + "differently (specs)"), log.toString());
+  }
+
+  @Test
+  void aNewBuildWithOtherResourceUrlsChecksEverythingAgain() throws IOException {
+    HtmlCheckRecords records = firstBuild();
+    HTMLInspector next = newBuildInspector("patient.html", "http://example.org/ig/StructureDefinition/b");
+    next.recordChecks(records, new HashSet<>(), files -> Collections.emptySet());
+    List<String> found = check(next);
+    assertTrue(found.stream().anyMatch(m -> m.contains("StructureDefinition/a")), found.toString());
+    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 2 files are reused; not the others: the check is set up "
+        + "differently (sources)"), log.toString());
+  }
+
+  @Test
+  void aNewBuildWithARelatedIgThatCantBeReadChecksEverythingAgain() throws IOException {
+    RelatedIG broken = Mockito.mock(RelatedIG.class);
+    Mockito.when(broken.getCode()).thenReturn("other");
+    Mockito.when(broken.getSpm()).thenThrow(new IOException("not found"));
+    relatedIGs.add(broken);
+    HtmlCheckRecords records = firstBuild();
+    HTMLInspector next = newBuildInspector("patient.html", "http://example.org/ig/StructureDefinition/a");
+    next.recordChecks(records, new HashSet<>(), files -> Collections.emptySet());
+    check(next);
+    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 2 files are reused; not the others: the check is set up "
+        + "differently (relatedIGs)"), log.toString());
+  }
+
+  /** A specification with this page, as a linked specification or related IG has */
+  private static SpecMapManager otherSpec(String target) {
+    SpecMapManager res = new SpecMapManager("other.ig", "1.0.0", "1.0.0", "1", "1", Calendar.getInstance(), "http://example.org/other");
+    res.setBase("http://example.org/other");
+    res.target(target);
+    return res;
+  }
+
+  /** The new build is checked again, and the log tells why */
+  private void checkedAgainBecauseOf(HtmlCheckRecords records, String why) throws IOException {
+    HTMLInspector next = newBuildInspector("patient.html", "http://example.org/ig/StructureDefinition/a");
+    next.recordChecks(records, new HashSet<>(), files -> Collections.emptySet());
+    check(next);
+    assertTrue(log.contains("Rapido Mode: the html checks of 0 of 2 files are reused; not the others: the check is set up "
+        + "differently (" + why + ")"), log.toString());
+  }
+
+  @Test
+  void aNewBuildWithAChangedLinkedSpecificationChecksEverythingAgain() throws IOException {
+    linkSpecs.add(new LinkedSpecification(otherSpec("a.html"), null));
+    HtmlCheckRecords records = firstBuild();
+    linkSpecs.set(0, new LinkedSpecification(otherSpec("b.html"), null));
+    checkedAgainBecauseOf(records, "linkSpecs");
+  }
+
+  @Test
+  void aNewBuildThatTracksOtherFragmentsChecksEverythingAgain() throws IOException {
+    fragmentUses = new HashMap<>(Map.of("X", Mockito.mock(PublisherBase.FragmentUseRecord.class)));
+    HtmlCheckRecords records = firstBuild();
+    fragmentUses = new HashMap<>(Map.of("Y", Mockito.mock(PublisherBase.FragmentUseRecord.class)));
+    checkedAgainBecauseOf(records, "fragmentUses");
+  }
+
+  @Test
+  void aNewBuildWithARelatedIgThatChangedChecksEverythingAgain() throws IOException {
+    relatedIGs.add(relatedIg(otherSpec("a.html")));
+    HtmlCheckRecords records = firstBuild();
+    relatedIGs.set(0, relatedIg(otherSpec("b.html")));
+    checkedAgainBecauseOf(records, "relatedIGs");
+  }
+
+  private static RelatedIG relatedIg(SpecMapManager spm) throws IOException {
+    RelatedIG res = Mockito.mock(RelatedIG.class);
+    Mockito.when(res.getCode()).thenReturn("other");
+    Mockito.when(res.getWebLocation()).thenReturn("http://example.org/other");
+    Mockito.when(res.getSpm()).thenReturn(spm);
+    return res;
+  }
+
+  @Test
+  void aNewBuildsCheckOfTheSameContentMarksTheFragmentsUsedThatTheLastOneFound() throws IOException {
+    // its records are of other objects: the use of a fragment is marked in the new build's
+    PublisherBase.FragmentUseRecord was = Mockito.mock(PublisherBase.FragmentUseRecord.class);
+    fragmentUses = new HashMap<>(Map.of("X", was));
+    page("a.html", "<h1>A</h1><!-- fragment:X --><p>the fragment</p>");
+    HTMLInspector first = newBuildInspector("patient.html", "http://example.org/ig/StructureDefinition/a");
+    first.recordChecks(null, null, files -> Collections.emptySet());
+    check(first);
+    Mockito.verify(was).setUsed();
+    HtmlCheckRecords records = first.getRecords();
+    assertNotNull(records, first.getRecordsNotUsable());
+
+    PublisherBase.FragmentUseRecord now = Mockito.mock(PublisherBase.FragmentUseRecord.class);
+    fragmentUses = new HashMap<>(Map.of("X", now));
+    HTMLInspector next = newBuildInspector("patient.html", "http://example.org/ig/StructureDefinition/a");
+    next.recordChecks(records, new HashSet<>(), files -> Collections.emptySet());
+    check(next);
+    assertTrue(log.contains("Rapido Mode: the html checks of 1 of 1 files are reused"), log.toString());
+    Mockito.verify(now).setUsed();
+  }
+
+  /** what the records keep of a loaded file must not keep the inspector, and the build with it, in memory */
+  @Test
+  void aLoadedFileDoesntHoldItsInspector() {
+    assertTrue(Modifier.isStatic(HTMLInspector.LoadedFile.class.getModifiers()));
   }
 }
