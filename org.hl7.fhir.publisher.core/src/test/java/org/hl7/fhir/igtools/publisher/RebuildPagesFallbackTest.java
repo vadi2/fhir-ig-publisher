@@ -55,7 +55,7 @@ class RebuildPagesFallbackTest {
     assertFalse(p.rebuildPages(new WatchSession(dir, Collections.emptyList())));
     assertTrue(discarded[0]);
     assertNull(f.get(p));
-    assertEquals(List.of("Rapido Mode: Complete Build (the changes couldn't be checked: java.io.IOException: a path that can't be read)"), log);
+    assertEquals(List.of("Rapido Mode: Not a Page Rebuild (the changes couldn't be checked: java.io.IOException: a path that can't be read)"), log);
   }
 
   @Test

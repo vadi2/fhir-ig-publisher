@@ -622,6 +622,30 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   /**
+   * Rapido: saves what this build claims in the temp folder and, in a differential build, deletes the files there that
+   * the last build claimed and this one neither wrote nor claims (see StaleTempFiles), so that Jekyll sees what it would
+   * see after a complete build
+   */
+  void deleteStaleTempFiles() throws IOException {
+    if (pf.staleTemp == null) {
+      return;
+    }
+    Set<String> claimed = new HashSet<>(pf.allOutputs);
+    claimed.addAll(pf.otherFilesRun);
+    for (FetchedFile f : pf.fileList) {
+      claimed.addAll(f.getOutputNames());
+    }
+    if (!pf.rapido.isCompleteBuild()) {
+      List<Path> stale = pf.staleTemp.find(claimed);
+      for (Path p : stale) {
+        log("Rapido Mode: deleting " + pf.staleTemp.relative(p) + " from the temp folder (the last build wrote it, this one didn't)");
+      }
+      pf.staleTemp.delete(stale);
+    }
+    pf.staleTemp.save(claimed);
+  }
+
+  /**
    * The pages that the build wraps the page in, if it is one that has a page template (see applyPageTemplate()): what
    * they say doesn't depend on the page's content
    */
@@ -767,6 +791,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       if (!settings.isGenerationOff()) {
         templateBeforeJekyll();
       }
+      deleteStaleTempFiles();
       keepForPageRebuild(() -> pageRebuild.beforeJekyll());
     }
 
@@ -4114,12 +4139,39 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /** Rapido: the template's onGenerate script sees the temp folder as it would in a stock build (see StaleTempFiles) */
+  private void beforeTemplateGenerate() throws IOException {
+    if (pf.staleTemp == null) {
+      return;
+    }
+    if (!pf.rapido.isCompleteBuild()) {
+      List<Path> left = pf.staleTemp.findTemplateLeftovers();
+      if (!left.isEmpty()) {
+        // most are files it copies every time (e.g. its assets), so one line, not one per file
+        log("Rapido Mode: deleting the " + left.size() + " files the template's onGenerate wrote in the last build, before it runs again (e.g. " + pf.staleTemp.relative(left.get(0)) + ")");
+      }
+      pf.staleTemp.delete(left);
+    }
+    try {
+      if (!pf.staleTemp.markTemplate()) {
+        log("Rapido Mode: the file system's status-change times didn't move, so what the template's onGenerate writes isn't recorded, and the next build doesn't delete it before onGenerate runs");
+      }
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+      throw new IOException(e);
+    }
+  }
+
   void templateBeforeGenerate() throws IOException, FHIRException {
     if (pf.template != null) {
       logMessage("Run Template");
       TimeTracker.Session tts = pf.tt.start("template");
       List<String> newFileList = new ArrayList<String>();
+      beforeTemplateGenerate();
       checkOutcomes(pf.template.beforeGenerateEvent(pf.context, pf.publishedIg, pf.tempDir, pf.otherFilesRun, newFileList, allLangs()));
+      if (pf.staleTemp != null) {
+        pf.staleTemp.saveTemplateWrites();
+      }
       // the fetched paths are canonical, and tempDir may not be (a symlink, or an 8.3 short name on Windows)
       String canonicalTempDir = new File(this.pf.tempDir).getCanonicalPath();
       for (String newFile: newFileList) {

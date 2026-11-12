@@ -348,7 +348,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       }
     }
     if (pages == null) {
-      log("Rapido Mode: Complete Build (" + reason.get(0) + ")");
+      log("Rapido Mode: Not a Page Rebuild (" + reason.get(0) + ")");
       state.discard();
       return false;
     }
@@ -1254,6 +1254,15 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     }
   }
 
+  /**
+   * What tracks the files each build claims in the temp folder. The output staging folder is the output, not what
+   * Jekyll reads (see PublisherIGLoader.setUpWatchOutput())
+   */
+  StaleTempFiles newStaleTempFiles() throws IOException {
+    return new StaleTempFiles(pf.tempDir, Arrays.asList(Utilities.path(pf.tempDir, "_rapido"),
+        Utilities.path(pf.tempDir, PublisherIGLoader.WATCH_OUTPUT_STAGING)));
+  }
+
   public void checkDependencies(FetchedFile igf, IniFile buildTracker) throws Exception {
     if (!settings.isRapidoMode()) {
       buildTracker.setStringProperty("status", "uuid", HierarchicalTableGenerator.uuid, null);
@@ -1270,6 +1279,11 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     buildTracker.setBooleanProperty("status", "started", true, null);
     buildTracker.save();
 
+    // each build saves what it claims in the temp folder; in a differential build, what the last build claimed and this
+    // one neither writes nor claims is deleted before Jekyll runs (see PublisherGenerator.deleteStaleTempFiles()). A
+    // differential build without a record of what the last one claimed is a complete one (see RapidoTracker.analyse())
+    StaleTempFiles staleTemp = newStaleTempFiles();
+    pf.staleTemp = staleTemp.isSupported() ? staleTemp : null;
     pf.rapido = new RapidoTracker(pf);
     pf.rapido.analyse(igf, failure);
     if (pf.rapido.isCompleteBuild()) {
@@ -1277,6 +1291,11 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       loader.clearTempFolder();
       pf.rapido.setUuid(HierarchicalTableGenerator.uuid);
     } else {
+      if (pf.staleTemp != null) {
+        pf.staleTemp.mark();
+      } else {
+        log("Rapido Mode: the file system has no status-change times, so what the last build wrote in the temp folder and this one doesn't isn't removed");
+      }
       log("Rapido Mode: Differential Build ("+pf.rapido.countRenderDirty()+" of "+pf.fileList.size()+" files to render, "+pf.rapido.countValidationDirty()+" to validate)");
       for (String s : pf.rapido.listRenderDirty()) {
         System.out.println("  "+s);
