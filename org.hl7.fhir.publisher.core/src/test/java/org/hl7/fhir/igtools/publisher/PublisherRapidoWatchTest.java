@@ -2,9 +2,11 @@ package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -20,17 +22,29 @@ import java.util.Calendar;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.function.Consumer;
 
 import org.hl7.fhir.igtools.templates.Template;
+import org.hl7.fhir.model.ModelContext;
+import org.hl7.fhir.model.core.ElementDefinition;
 import org.hl7.fhir.model.core.StructureDefinition;
+import org.hl7.fhir.model.core.StructureDefinition.TypeDerivationRule;
 import org.hl7.fhir.services.elementmodel.Element;
+import org.hl7.fhir.services.renderers.RendererFactory;
+import org.hl7.fhir.services.renderers.utils.RenderingContext;
+import org.hl7.fhir.standalone.context.SimpleWorkerContext;
 import org.hl7.fhir.utilities.IniFile;
+import org.hl7.fhir.utilities.MarkDownProcessor;
 import org.hl7.fhir.utilities.NamedItemList;
+import org.hl7.fhir.utilities.UserDataNames;
 import org.hl7.fhir.utilities.logging.ILoggingService;
+import org.hl7.fhir.utilities.npm.FilesystemPackageCacheManager;
+import org.hl7.fhir.utilities.npm.NpmPackage;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueType;
 import org.hl7.fhir.utilities.validation.ValidationMessage.Source;
+import org.hl7.fhir.utilities.validation.ValidationOptions;
 import org.hl7.fhir.utilities.xhtml.HierarchicalTableGenerator;
 import org.hl7.fhir.validation.BaseValidator;
 import org.hl7.fhir.validation.instance.InstanceValidator;
@@ -203,6 +217,94 @@ class PublisherRapidoWatchTest {
 
   private static final String PROFILE = "http://example.org/ig/StructureDefinition/p";
 
+  private static final String BASE = "http://example.org/dep/StructureDefinition/base";
+  private static final String RELATIVE = "Also see the [Location](location.html#) resource.";
+
+  /**
+   * Rendering a profile looks up the profile it's based on in the element map cache the build shares, and the first
+   * look up makes the relative links in that profile's snapshot absolute, in the context: the combined package has
+   * them so. A file whose html is replayed does the look ups its rendering did, so that the profile comes out as it
+   * does from a complete build
+   */
+  @Test
+  void aReplayedFileDoesTheLookUpsItsRenderingDid() throws Exception {
+    context = r5();
+    PublisherFields pf = build("a");
+    StructureDefinition base = base(context, pf);
+    rendering = f -> {
+      if (f.getLoadPath().equals("Patient-b.json")) {
+        lookUp(pf, BASE);
+      }
+    };
+    finish(pf);
+    String complete = comment(base);
+    assertNotEquals(RELATIVE, complete);
+
+    PublisherFields pf2 = build("a2");
+    base = base(context, pf2); // loaded again, as each build does
+    FetchedFile b = file(pf2, "Patient-b.json");
+    assertTrue(pf2.rapido.canReplay(b, RapidoTracker.PHASE_HTML));
+    PublisherGenerator generator = new PublisherGenerator(new PublisherSettings());
+    generator.setPf(pf2);
+    generator.replayGeneration(b, RapidoTracker.PHASE_HTML);
+
+    assertEquals(complete, comment(base));
+  }
+
+  private static SimpleWorkerContext r5;
+  /** the context the builds use, if any */
+  private SimpleWorkerContext context;
+
+  private static SimpleWorkerContext r5() throws Exception {
+    if (r5 == null) {
+      NpmPackage npm;
+      try {
+        npm = new FilesystemPackageCacheManager.Builder().build().loadPackage("hl7.fhir.r5.core", "5.0.0");
+      } catch (Exception e) {
+        npm = null;
+      }
+      assumeTrue(npm != null, "hl7.fhir.r5.core#5.0.0 can't be fetched");
+      r5 = new SimpleWorkerContext.SimpleWorkerContextBuilder(ModelContext.fullCoreContext()).withAllowLoadingDuplicates(true).fromPackage(npm);
+    }
+    return r5;
+  }
+
+  /** a profile from a dependency, as the loader leaves it: a relative link in its snapshot, and where its pages are */
+  private static StructureDefinition base(SimpleWorkerContext context, PublisherFields pf) {
+    StructureDefinition old = context.fetchResource(StructureDefinition.class, BASE);
+    if (old != null) {
+      context.dropResource(old);
+    }
+    StructureDefinition sd = new StructureDefinition();
+    sd.setId("base");
+    sd.setUrl(BASE);
+    sd.setName("Base");
+    sd.setType("Patient");
+    sd.setDerivation(TypeDerivationRule.CONSTRAINT);
+    sd.setBaseDefinition("http://hl7.org/fhir/StructureDefinition/Patient");
+    ElementDefinition ed = sd.getSnapshot().addElement();
+    ed.setId("Patient");
+    ed.setPath("Patient");
+    ed.setComment(RELATIVE);
+    sd.setUserData(UserDataNames.render_webroot, "http://example.org/dep/");
+    context.cacheResource(sd);
+    pf.rc = new RenderingContext(context, new RendererFactory(), new MarkDownProcessor(MarkDownProcessor.Dialect.COMMON_MARK),
+        ValidationOptions.defaults(), "http://hl7.org/fhir/R5/", "", null, RenderingContext.ResourceRendererMode.TECHNICAL,
+        RenderingContext.GenerationRules.IG_PUBLISHER);
+    return sd;
+  }
+
+  /** what the core's StructureDefinitionRenderer does for an element of a profile based on the url */
+  private static void lookUp(PublisherFields pf, String url) {
+    org.hl7.fhir.services.renderers.StructureDefinitionRenderer sdr = new org.hl7.fhir.services.renderers.StructureDefinitionRenderer(pf.rc);
+    sdr.setSdMapCache(pf.sdMapCache);
+    sdr.getElementById(url, "Patient", null);
+  }
+
+  private static String comment(StructureDefinition sd) {
+    return sd.getSnapshot().getElementFirstRep().getComment();
+  }
+
   /** a profile in the IG, which Patient/b is found to conform to when it's validated */
   private FetchedFile profile(PublisherFields pf) {
     FetchedResource r = mock(FetchedResource.class);
@@ -311,6 +413,8 @@ class PublisherRapidoWatchTest {
 
   /** the files whose html the last finish reused */
   private final List<String> replayed = new ArrayList<>();
+  /** what rendering a file does, besides writing its page */
+  private Consumer<FetchedFile> rendering;
 
   /**
    * What the rest of a build does for -rapido: each file's html and spreadsheet phases are reused if they can be, and
@@ -334,6 +438,9 @@ class PublisherRapidoWatchTest {
         continue;
       }
       pf.rapido.startRecording(f, RapidoTracker.PHASE_HTML);
+      if (rendering != null) {
+        rendering.accept(f);
+      }
       if (f.getLoadPath().startsWith("Patient-")) {
         Path page = dir.resolve("temp").resolve(f.getLoadPath().replace(".json", ".html"));
         Files.createDirectories(page.getParent());
@@ -380,6 +487,10 @@ class PublisherRapidoWatchTest {
     pf.igpkp = mock(IGKnowledgeProvider.class);
     when(pf.igpkp.getCanonical()).thenReturn("http://example.org/ig");
     pf.template = mock(Template.class);
+    if (context != null) {
+      pf.context = context;
+      pf.pcm = new FilesystemPackageCacheManager.Builder().build(); // where the packages it loaded are
+    }
     pf.getExecTime().add(Calendar.DATE, daysLater);
     pf.fileList.addAll(List.of(ig, patient, other, observation, page));
     pf.changeList.addAll(pf.fileList); // as the loader leaves it

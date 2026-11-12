@@ -2133,7 +2133,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * Rapido: the file's outputs from the last build are still in the temp folder. Do what generating them would have
    * done to the rest of the build
    */
-  private void replayGeneration(FetchedFile f, String phase) throws IOException {
+  void replayGeneration(FetchedFile f, String phase) throws IOException {
     RapidoTracker.Journal j = pf.rapido.replay(f, phase);
     f.getOutputNames().addAll(j.outputs);
     for (String s : j.allOutputs) {
@@ -2168,6 +2168,35 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         pf.fragmentUses.put(j.fragUseKeys.get(i), frag);
       }
       frag.record(j.fragUseNumbers.get(i)[0], j.fragUseNumbers.get(i)[1]);
+    }
+    redoElementMaps(f, j.elementMaps);
+  }
+
+  /**
+   * Rapido: the first look up of a profile in the shared element map cache updates the urls in the markdown of that
+   * profile's snapshot elements (see RapidoTracker.ElementMapCache). Do the look ups the file's rendering did, so that
+   * the profiles it used come out as they do from a complete build: the combined package has them
+   */
+  private void redoElementMaps(FetchedFile f, List<String> urls) {
+    StructureDefinition src = null;
+    for (FetchedResource r : f.getResources()) {
+      if (src == null && r.getResource() instanceof StructureDefinition) {
+        src = (StructureDefinition) r.getResource();
+      }
+    }
+    org.hl7.fhir.services.renderers.StructureDefinitionRenderer sdr = null;
+    for (String url : urls) {
+      if (!pf.sdMapCache.containsKey(url)) {
+        if (sdr == null) {
+          sdr = new org.hl7.fhir.services.renderers.StructureDefinitionRenderer(pf.rc.copy(true));
+          sdr.setSdMapCache(pf.sdMapCache);
+        }
+        try {
+          sdr.getElementById(url, "", src);
+        } catch (FHIRException e) {
+          // not found when the file was rendered either
+        }
+      }
     }
   }
 

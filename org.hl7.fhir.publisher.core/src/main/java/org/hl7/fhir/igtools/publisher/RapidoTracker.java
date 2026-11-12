@@ -35,6 +35,7 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Consumer;
 import java.util.stream.Stream;
 
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.FileNode;
@@ -45,6 +46,7 @@ import org.hl7.fhir.model.IModelContext;
 import org.hl7.fhir.model.core.CanonicalResource;
 import org.hl7.fhir.model.core.DateTimeType;
 import org.hl7.fhir.model.core.DomainResource;
+import org.hl7.fhir.model.core.ElementDefinition;
 import org.hl7.fhir.model.core.Resource;
 import org.hl7.fhir.model.core.StructureDefinition;
 import org.hl7.fhir.model.core.ValueSet;
@@ -94,7 +96,7 @@ public class RapidoTracker {
   public static final String PHASE_HTML = "html";
   public static final String PHASE_SHEETS = "sheets";
 
-  private static final int STATE_VERSION = 4;
+  private static final int STATE_VERSION = 5;
 
   private final PublisherFields pf;
   private final String stateFile;
@@ -132,6 +134,7 @@ public class RapidoTracker {
     this.pf = pf;
     this.stateFile = Utilities.path(pf.tempDir, "_rapido", "state.json");
     this.buildDate = new DateTimeType(pf.getExecTime()).asStringValue();
+    pf.sdMapCache.setListener(this::recordElementMap);
   }
 
   // ---- analysis ------------------------------------------------------------------------------------------------------
@@ -1480,6 +1483,32 @@ public class RapidoTracker {
     public final List<String[]> tracked = new ArrayList<>();
     public final List<long[]> fragUseNumbers = new ArrayList<>();
     public final List<String> fragUseKeys = new ArrayList<>();
+    /** the profiles whose elements the phase looked up in the shared element map cache (see ElementMapCache) */
+    public final List<String> elementMaps = new ArrayList<>();
+  }
+
+  /**
+   * The cache of profiles' elements by id that the core's StructureDefinitionRenderer shares across a build. The
+   * first look up of a profile in it updates the urls in the markdown of that profile's snapshot elements, in place
+   * (relative links become absolute); after that, everything that uses the profile from the context sees them so,
+   * the combined package included. A file whose html is replayed doesn't render its profiles, so the look ups its
+   * rendering made are recorded, and done again when it's replayed
+   */
+  public static class ElementMapCache extends HashMap<String, Map<String, ElementDefinition>> {
+    private static final long serialVersionUID = 1L;
+    private transient Consumer<String> listener;
+
+    public void setListener(Consumer<String> listener) {
+      this.listener = listener;
+    }
+
+    @Override
+    public Map<String, ElementDefinition> get(Object key) {
+      if (listener != null && key instanceof String) {
+        listener.accept((String) key);
+      }
+      return super.get(key);
+    }
   }
 
   public static class NpmEntry {
@@ -1508,6 +1537,7 @@ public class RapidoTracker {
     private final int[] resErrorsBefore;
     private final boolean[] umlBefore;
     private final int expansionsBefore;
+    private final Set<String> elementMaps = new TreeSet<>();
 
     private Recording(FetchedFile file, String phase) {
       this.file = file;
@@ -1606,7 +1636,17 @@ public class RapidoTracker {
         return;
       }
     }
+    JsonArray em = j.forceArray("elementMaps");
+    for (String s : rec.elementMaps) {
+      em.add(s);
+    }
     newFile(f).set(rec.phase, j);
+  }
+
+  private void recordElementMap(String url) {
+    if (recording != null) {
+      recording.elementMaps.add(url);
+    }
   }
 
   private static boolean threw(List<ValidationMessage> list) {
@@ -1705,6 +1745,7 @@ public class RapidoTracker {
       res.fragUseKeys.add(a.get(0));
       res.fragUseNumbers.add(new long[] {Long.parseLong(a.get(1)), Long.parseLong(a.get(2))});
     }
+    res.elementMaps.addAll(j.forceArray("elementMaps").asStrings());
     return res;
   }
 
