@@ -1560,8 +1560,6 @@ public class RapidoTracker {
     private final Map<String, Set<String>> anchorsBefore = new HashMap<>();
     /** the anchors the phase found in the build's anchor sets before it, by language (see AnchorSet) */
     private final Map<String, Set<String>> anchorsTaken = new ConcurrentHashMap<>();
-    /** whether all the build's anchor sets tell the tracker which anchors are found taken */
-    private boolean anchorsWatched = true;
 
     private Recording(FetchedFile file, String phase) {
       this.file = file;
@@ -1584,7 +1582,6 @@ public class RapidoTracker {
         journal.add("messages", messagesHash(file));
         for (Map.Entry<String, Set<String>> e : anchorSets().entrySet()) {
           anchorsBefore.put(e.getKey(), new HashSet<>(e.getValue()));
-          anchorsWatched = anchorsWatched && e.getValue() instanceof AnchorSet;
         }
       }
     }
@@ -1617,28 +1614,19 @@ public class RapidoTracker {
   }
 
   /**
-   * The context's anchor set, swapped for an AnchorSet with the same anchors the first time. The core has no way to
-   * give a context a set, so the field is set directly. The copies of a context that share its set (copy(true)) are
-   * made for one file's rendering, and anchorSets is only called between files, so none of them is left with the
-   * old set. If the set can't be swapped it's returned as it is, and a file's html isn't recorded (see stopRecording)
+   * The context's anchor set, replaced by an AnchorSet with the same anchors the first time. The copies of a context
+   * that share its set (copy(true)) are made for one file's rendering, and anchorSets is only called between files,
+   * so none of them is left with the old set
    */
   private Set<String> watch(String lang, RenderingContext rc) {
-    Set<String> set = rc.getAnchors();
-    if (!(set instanceof AnchorSet)) {
-      try {
-        Field fld = RenderingContext.class.getDeclaredField("anchors");
-        fld.setAccessible(true);
-        AnchorSet as = new AnchorSet(set);
-        fld.set(rc, as);
-        if (rc.getAnchors() != as) {
-          return set;
-        }
-        set = as;
-      } catch (Exception e) {
-        return set;
-      }
+    AnchorSet set;
+    if (rc.getAnchors() instanceof AnchorSet as) {
+      set = as;
+    } else {
+      set = new AnchorSet(rc.getAnchors());
+      rc.setAnchors(set);
     }
-    ((AnchorSet) set).listener = a -> anchorFound(lang, a);
+    set.listener = a -> anchorFound(lang, a);
     return set;
   }
 
@@ -1798,9 +1786,6 @@ public class RapidoTracker {
       } catch (Exception e) {
         return;
       }
-    }
-    if (!rec.anchorsWatched) {
-      return;
     }
     JsonArray em = j.forceArray("elementMaps");
     for (String s : rec.elementMaps) {
