@@ -15,7 +15,7 @@ Status: in progress (Phase C)
 | HL7Chile/MHD-CL | 360872e | 7600m | 133 | 0/28/5 | 67 | 0/28/5 | 55 | 0/27/5 | 57 / 3 / 33 / 31 / 34 / 33 / 30 | 0/27/5 | 0/27/5 | 73 | 0/28/5 | REGRESSION: llms.txt page order (HL7 #1461, likely intended); pre-existing diffs: SCT edition warning missing on reused folders, package .index.db rows |
 | hl7-eu/readi | 0dd3e92 | 7600m | 72 | 165/59/55 | 54 | 165/59/55 | 50 | 165/59/55 | 55 / 2 / 30 / 27 / 40 / 34 / 27 | 165/59/55 | 165/59/55 | 51 | 165/59/55 | REGRESSION: spec.internals drops the .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version in narrative links |
 | RIVO-Noord/zorgviewer-ig | aab62e4 | 7600m | 139 | 669/137/128 | 126 | 669/137/128 | 92 | 669/137/128 | 131 / 6 / 90 / 72 / 72 / 69 / 71 | 669/137/128 | 669/137/128 | 115 | 669/137/128 | REGRESSION: llms.txt page order (HL7 #1461) only; pre-existing diffs: watch QA paths under temp/pages/.watch-output, "used by" csv order |
-| HL7/davinci-ra | f003bae | 7600m | 188 | 0/0/0 |  |  |  |  |  |  |  |  |  |  |
+| HL7/davinci-ra | f003bae | 7600m | 188 | 0/0/0 | 96 | 0/0/0 | 86 | 0/0/0 | 93 / 10 / 60 / 50 / 67 / 68 / 61 | 0/0/0 | 0/0/0 | 98 | 0/0/0 | REGRESSION: spec.internals drops .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version and identifier display in narratives |
 | HL7/imaging-service-request-ig | def90dc | 7600m | 111 | 195/225/244 |  |  |  |  |  |  |  |  |  |  |
 | hl7au/au-fhir-core | 3de0d01 | 7600m | 171 | 62/220/47 |  |  |  |  |  |  |  |  |  |  |
 | sfaassn2025-source/base | e11fe94 | 7600m | 354 | 0/3/2 |  |  |  |  |  |  |  |  |  |  |
@@ -44,3 +44,12 @@ Status: in progress (Phase C)
 - masked: the order of the "used by" lists in codesystem-ref-all-list.csv, codesystem-ref-list.csv, valueset-ref-all-list.csv (and csvs.zip, full-ig.zip) changes between any two builds, master included.
 - QA counts identical everywhere (669/137/128, 43 broken links). W2 output = F2 and W6 output = I1 apart from the csv order.
 - Rapido: every watch resource edit (W2..W6) was a Complete Build because "terminology server calls failed in the last build (5)" (an STU3 IG with tx calls that fail every time, no 502s); master does the same, and also for W1 (int.jar: Page Rebuild, 6 s, master 72 s).
+
+### HL7/davinci-ra
+
+- **REGRESSION (intended), #48**: spec.internals in definitions.{json,xml}.zip, package.tgz, package.r4.tgz, package.r4b.tgz, hl7.fhir.us.davinci-ra.en.tgz, validator*.pack, full-ig.zip no longer lists the `*.ai.html` targets, as for readi.
+- **REGRESSION (order only), HL7 #1461**: llms.txt, en/llms.txt, en/ai.zip page order.
+- pre-existing: up to 255 files per pair differ only in narrative text that depends on which terminology.hl7.org version a NamingSystem comes from: link `terminology.hl7.org/5.0.0|7.2.0|7.5.0/NamingSystem-*.html` and display `NPI` vs `United States National Provider Identifier`, `URI` vs `Uniform Resource Identifier (URI)`. Master varies the same way: R1 vs a second fresh master build 247 files, the second fresh vs a master rebuild in the same folder 25 files; with these strings normalised, master vs master 2 and 0 files, and every int.jar pair only the items in this list.
+- noise: comparison-v2.0.0/xx-79-... and comparison-v2.1.0/xx-128-ra-parameters-cc-remark-patch... show a Java stack trace (an exception in the comparison, master too); the frames differ with the code and the call path (watch: `completeBuild`).
+- masked: "used by" order in valueset-ref-all-list.csv / csvs.zip.
+- QA identical everywhere (0/0/0, same suppressed counts). No 502s.
