@@ -4,7 +4,7 @@ Status: in progress (Phase C)
 
 - master.jar: origin/master 32046bcdd9b0ec91d93db76f9897b745e406139b
 - int.jar: qa/integration-ready 6c1abf463d8ae87d30871898c6abdaa63c7df673
-- VM: 4 CPU, 15 GB, swap file 10 GB (shrunk from 16 GB to free disk, swap stayed unused). Times in seconds, wall clock of the whole java run (W*: edit to "Finished @"; W0 = first watch build).
+- VM: 4 CPU, 15 GB, swap file 4 GB (shrunk from 16 GB, then 10 GB, to free disk; swap stayed unused). At about 10:05 the disk filled during the bfdr watch run (W0 died with "No space left on device"); old run outputs were deleted, the swap shrunk, and bfdr Phase C (I1 onward) restarted from scratch at 10:32. Only res/ manifests are kept for finished IGs.. Times in seconds, wall clock of the whole java run (W*: edit to "Finished @"; W0 = first watch build).
 - Watch sequence: one watch session runs W1..W6 without a restart; its output is snapshotted after each step. F2 and F6 are separate fresh full builds run afterwards with the W2 and W6 edits applied.
 - Compare: file set + content after masking dates/times, run path, UUIDs; qa counts + message set from qa.xml.
 - eu-lab: SUSHI couldn't fetch hl7.fhir.eu.extensions.r4#current, so it was seeded from build.fhir.org (1.4.0-ci, 2026-10-29) before R1; same package for every build.
@@ -16,7 +16,7 @@ Status: in progress (Phase C)
 | HL7/cds-hooks-library | 8afbe0fe | 7600m | 91 | 7/0/0 | 43 | 7/0/0 | 34 | 39, 1.0/21/-/27/25/20 | 43 | 39 | same |
 | HL7/uv-pocd | 8e377d42 | 7600m | 77 | 0/0/4 | 74 | 0/0/4 | 62 | 78, 1.2/28/24/63/58/29 | 71 | 71 | same |
 | hl7-eu/laboratory | 4571ab84 | 7600m | 168 | 5/11/62 | 130 | 5/11/62 | 91 | 136, 3.6/77/65/64/72/61 | 112 | 114 | pending: FINDING-1 being classified (master reruns queued) |
-| HL7/fhir-bfdr | 1f981246 | 7600m | 406 | 291/365/791 |  |  |  |  |  |  |  |
+| HL7/fhir-bfdr | 1f981246 | 7600m | 406 | 291/365/791 | 291 | 291/365/791 | 278 | 297, 7.1/208/185/246/265/212 | 290 | 287 | pending: FINDING-1 family (identifier system display SSN/NPI varies), master rerun queued |
 | HL7/davinci-pdex-plan-net | 8d9037d0 | 9g | 275 | 11/865/8 |  |  |  |  |  |  |  |
 | aehrc/smart-forms-ig | 95651ff7 | 9g | 309 | 146/294/119 |  |  |  |  |  |  |  |
 | nw-gmsa/nw-gmsa.github.com | 7ec7380b | 9g |  |  |  |  |  |  |  |  |  |
@@ -38,6 +38,12 @@ Status: in progress (Phase C)
 - I1, I2, F6 vs R1: same qa counts and messages (4). 143 files differ: timestamps inside binaries (xlsx, packages, packs, spec.internals), fragment-usage-analysis.csv timings, llms.txt page order, and the "used by" order in valueset-ref-list / valueset-ref-all-list (csv, json) and codesystem-ref-all-list.json (same entries, checked with an order-insensitive compare).
 - W2 vs F2, W6 vs F6, W6 vs I1: same qa and messages; the same classes of diffs (used-by order also varies between two int builds).
 - Watch: W1 page rebuild 1.2 s (en/guidance.html), W2 differential (47 of 103 files), W3 differential (70 of 103), W4/W5 complete builds add and remove Patient-QaNewW4; W6 removes all edits.
+
+### bfdr
+- qa counts (291/365/791, 7 broken links) and the 1441 messages same in every build and watch step.
+- FINDING-1 family: the display of identifier systems in narratives varies. F6 (int full build) renders every SSN and NPI identifier with the full name ("United States Social Security Number#...", 212x; "us-npi#United States National Provider Identifier#", 648x). W6 (int watch, after reverting all edits) renders 12 SSN identifiers as "SSN#" and 568 NPI as "us-npi#NPI#" and the rest with the full name. Affected: en/ narratives of Patient-patient-mother-jada-ann-quinn-w-edit, RelatedPerson-relatedperson-mother-jada-ann-quinn, Observation-observation-planned-to-deliver-at-home-babyg-quinn and the NPI pages, their json/xml/ttl/md and copies in full-ig.zip, packages and ai.zip. Same cause class as eu-lab (which NamingSystem the identifier system resolves to). R1 output was not kept (disk), so a master rerun is queued to see what master renders.
+- W6 vs F6 inner check over all 6875 differing text files and archive entries: 6713 same after masking UUIDs, build timestamps and the identifier display / THO version, 20 differ only in "used by" order (codesystem/valueset ref lists), 142 are us-core-comparisons/xx-* pages that embed the pre-existing exception "Found a slice at 'Observation.category' but there was no definition for the slicing", with stack frames that differ by call path.
+- Watch: W1 page rebuild 7.1 s (edit in en/usage.html; root is the language redirect, so the root check fails falsely), W2 differential (299 of 524 files), W3 differential (416 of 524), W4/W5 complete builds add and remove Basic-QaNewW4; W6 removes all edits.
 
 ### eu-lab
 - qa counts and messages (65) same in every build and watch step.
