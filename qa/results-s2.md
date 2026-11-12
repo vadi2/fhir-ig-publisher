@@ -12,3 +12,7 @@ Status: in progress (Phase A: reference builds with master.jar)
 | HL7/aitransparency-ig | 6d0a39f | 7600m | 119 | 0/0/0 | | | | | | |
 | FHIR/ig-guidance | e77c2fb | 7600m | 72 | 77/53/40 | | | | | | |
 | hl7-be/medication | 6b4450d | 7600m | 108 | 4/39/93 | | | | | | |
+| hl7au/au-fhir-ps | 85e161a | 7600m | 267 (invalid) | 5463/936/3771 | | | | | | R1 rerun pending: tx.fhir.org 502 during build |
+| sfaassn2025-source/CRA-IG | 7dc650f | | 25 (fail) | | | | | | | skip: SUSHI 3 errors at HEAD (Claim.supportingInfo category; CodeSystem url conflict with twss base dependency) |
+| sfaassn2025-source/VFS-IG | 4afd1fe | | 14 (fail) | | | | | | | skip: SUSHI 1 error at HEAD (twss-case-type CodeSystem url conflict with twss base dependency) |
+| KIP-infrastructure/implementation-guide | 5b5773c | 7600m | 236 | 40/2349/3539 | | | | | | |
