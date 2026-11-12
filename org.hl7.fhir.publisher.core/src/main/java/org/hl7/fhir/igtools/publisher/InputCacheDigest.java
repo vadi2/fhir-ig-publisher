@@ -110,8 +110,9 @@ public class InputCacheDigest {
    * since their iteration order can depend on identity hash codes. Shared and cyclic references are digested by their
    * position in the walk, so the same graph always gives the same digest. A field holding an empty collection or map
    * digests as one holding null, and so does one holding an empty element of the model. {@code userData} fields
-   * (the model's annotations) and model contexts are left out. Objects of other
-   * library classes (anything outside java.lang/java.util and org.hl7.fhir) are digested by class name only.
+   * (the model's annotations) and model contexts are left out. The library's value types (a locale, a file or path,
+   * a URI, a UUID, a charset, a pattern, a time) are digested by value; objects of other library classes (anything
+   * outside java.lang/java.util and org.hl7.fhir) by class name only.
    */
   public static String deep(Object o) {
     return deep(o, null);
@@ -255,9 +256,28 @@ public class InputCacheDigest {
             d.add("?");
           }
         }
+      } else if (o instanceof java.util.Optional) {
+        d.add("P");
+        walk(((java.util.Optional<?>) o).orElse(null));
+      } else if (o instanceof java.util.regex.Pattern) {
+        d.add("V").add(c.getName()).add(((java.util.regex.Pattern) o).pattern()).add(((java.util.regex.Pattern) o).flags());
+      } else if (o instanceof java.util.TimeZone) {
+        d.add("V").add(java.util.TimeZone.class.getName()).add(((java.util.TimeZone) o).getID());
+      } else if (o instanceof java.util.Calendar) {
+        java.util.Calendar cal = (java.util.Calendar) o;
+        d.add("V").add(java.util.Calendar.class.getName()).add(cal.getTimeInMillis()).add(cal.getTimeZone().getID());
+      } else if (byValue(o)) {
+        d.add("V").add(c.getName()).add(o.toString());
       } else {
         d.add("X").add(c.getName());
       }
+    }
+
+    /** the library's value types, which say what they are in their string form */
+    private static boolean byValue(Object o) {
+      return o instanceof java.util.Locale || o instanceof java.io.File || o instanceof java.nio.file.Path || o instanceof java.util.UUID
+        || o instanceof java.net.URI || o instanceof java.net.URL || o instanceof java.nio.charset.Charset || o instanceof java.util.Currency
+        || o instanceof java.time.temporal.TemporalAccessor || o instanceof java.time.temporal.TemporalAmount || o instanceof CharSequence;
     }
 
     /**

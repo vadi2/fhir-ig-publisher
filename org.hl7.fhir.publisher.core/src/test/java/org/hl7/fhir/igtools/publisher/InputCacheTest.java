@@ -382,6 +382,30 @@ class InputCacheTest {
   }
 
   @Test
+  void deepDigest_valuesOfOtherLibraryTypesAreDigestedByValue() throws Exception {
+    Object[][] pairs = {
+      {java.util.Locale.FRENCH, java.util.Locale.GERMAN},
+      {new File("/a"), new File("/b")},
+      {java.nio.file.Paths.get("/a"), java.nio.file.Paths.get("/b")},
+      {java.util.UUID.fromString("00000000-0000-0000-0000-000000000001"), java.util.UUID.fromString("00000000-0000-0000-0000-000000000002")},
+      {java.net.URI.create("http://a"), java.net.URI.create("http://b")},
+      {new java.net.URL("http://a"), new java.net.URL("http://b")},
+      {StandardCharsets.UTF_8, StandardCharsets.ISO_8859_1},
+      {java.util.regex.Pattern.compile("a"), java.util.regex.Pattern.compile("a", java.util.regex.Pattern.CASE_INSENSITIVE)},
+      {java.util.TimeZone.getTimeZone("UTC"), java.util.TimeZone.getTimeZone("Europe/Paris")},
+      {java.time.LocalDate.of(2026, 1, 1), java.time.LocalDate.of(2026, 1, 2)},
+      {java.time.Duration.ofSeconds(1), java.time.Duration.ofSeconds(2)},
+      {new StringBuilder("a"), new StringBuilder("b")},
+      {java.util.Optional.of("a"), java.util.Optional.of("b")},
+    };
+    for (Object[] p : pairs) {
+      assertNotEquals(InputCacheDigest.deep(p[0]), InputCacheDigest.deep(p[1]), p[0].getClass().getName());
+      assertEquals(InputCacheDigest.deep(p[0]), InputCacheDigest.deep(p[0]), p[0].getClass().getName());
+    }
+    assertEquals(InputCacheDigest.deep(java.util.Locale.forLanguageTag("fr")), InputCacheDigest.deep(new java.util.Locale("fr")));
+  }
+
+  @Test
   void deepDigest_walksFhirObjectsAndCycles() {
     ValidationMessage a = message("one");
     ValidationMessage b = message("one");

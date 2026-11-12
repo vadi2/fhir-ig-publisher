@@ -286,6 +286,16 @@ class InputCacheReadsTest {
   }
 
   @Test
+  void inputs_theForcedLanguageIsInTheShape() throws Exception {
+    PublisherFields pf = ig();
+    pf.forcedLanguage = java.util.Locale.forLanguageTag("fr");
+    String fr = InputCacheInputs.of(pf, DATE).evaluate(InputCacheInputs.SHAPE_PF);
+    pf.forcedLanguage = java.util.Locale.forLanguageTag("de");
+    String de = InputCacheInputs.of(pf, DATE).evaluate(InputCacheInputs.SHAPE_PF);
+    assertNotEquals(fr, de);
+  }
+
+  @Test
   void inputs_fieldsThatAreNotInputsAreLeftOutOfTheShape() throws Exception {
     PublisherFields pf = ig();
     InputCacheInputs before = InputCacheInputs.of(pf, DATE);
