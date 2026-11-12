@@ -1,13 +1,13 @@
 # QA results: shard s3
 
-Status: Phase C in progress (xshare done).
+Status: Phase C in progress (xshare, madfsh done).
 
 Reference jar: origin/master 32046bcdd9. Integration jar: `qa/integration-ready` 6c1abf463d. Heap 7600m unless noted. VM 15 GB / 4 CPU, 16 GB swap.
 
 | IG | commit | heap | R1 | R1 QA (e/w/h) | I1 | I2 | W0..W6 | F2 | F6 | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|
 | hl7-eu/xshare-ips-plus | adb1067250 | 7600m | 62 s | 0/5/5 | 30 s, 0/5/5 | 28 s, 0/5/5 | 29/1/14/13/15/15/21 s, all edits seen, QA 0/5/5 | 30 s | 29 s | REGRESSION: F1 (llms page order, I1/I2 only; looks intended). W2=F2, W6=F6, W6=I1 same |
-| FHIR/MADFSH | 0c4b725767 | 7600m | 151 s | 4/16/3 | | | | | | pending |
+| FHIR/MADFSH | 0c4b725767 | 7600m | 151 s | 4/16/3 | 37 s, 4/16/3 | 31 s, 4/16/3 | 35/2/21/-/22/22/23 s, all edits seen, QA 4/16/3 | 38 s | 36 s | REGRESSION: F1 only (I1/I2). W2=F2, W6=F6, W6=I1 same |
 | HL7/us-fhir-ps | c20fdb208c | 7600m | 94 s | 0/7/21 | | | | | | pending |
 | hl7-eu/phoenix-sact | f9246ccc86 | 7600m | 53 s | 0/2/77 | | | | | | pending |
 | savannahghi/healthy-route-ig | 7a1e3e908a | 7600m | 99 s | 4/217/861 | | | | | | pending |
