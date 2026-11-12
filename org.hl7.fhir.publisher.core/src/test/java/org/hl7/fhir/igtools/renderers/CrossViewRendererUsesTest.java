@@ -1,6 +1,7 @@
 package org.hl7.fhir.igtools.renderers;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -70,5 +71,52 @@ class CrossViewRendererUsesTest {
 
     assertEquals(List.of(cs), used);
     assertEquals(found, new ArrayList<>((Set<Resource>) cs.getUserData(UserDataNames.pub_xref_used)));
+  }
+
+  @Test
+  void whatUsesAValueSetIsListedInTheOrderItsFound() throws Exception {
+    SimpleWorkerContext context = r5();
+    ValueSet common = new ValueSet();
+    common.setId("common");
+    common.setUrl("http://example.org/ValueSet/common");
+    context.cacheResource(common);
+
+    List<FetchedFile> files = new ArrayList<>();
+    List<Resource> found = new ArrayList<>();
+    for (int i = 0; i < 20; i++) {
+      ValueSet vs = new ValueSet();
+      vs.setId("vs" + i);
+      vs.setUrl("http://example.org/ValueSet/vs" + i);
+      vs.getCompose().addInclude().addValueSet(common.getUrl());
+      FetchedResource r = mock(FetchedResource.class);
+      when(r.getResource()).thenReturn(vs);
+      FetchedFile f = new FetchedFile("ValueSet-vs" + i + ".json");
+      f.getResources().add(r);
+      files.add(f);
+      found.add(vs);
+    }
+    CrossViewRenderer cvr = new CrossViewRenderer("http://example.org", null, context, "http://hl7.org/fhir/R5/", rc(context));
+
+    List<ValueSet> used = cvr.buildUsedValueSetList(false, files);
+
+    assertTrue(used.contains(common));
+    assertEquals(found, new ArrayList<>((Set<Resource>) common.getUserData(UserDataNames.pub_xref_used)));
+  }
+
+  private static SimpleWorkerContext r5() throws Exception {
+    NpmPackage npm;
+    try {
+      npm = new FilesystemPackageCacheManager.Builder().build().loadPackage("hl7.fhir.r5.core", "5.0.0");
+    } catch (Exception e) {
+      npm = null;
+    }
+    assumeTrue(npm != null, "hl7.fhir.r5.core#5.0.0 can't be fetched");
+    return new SimpleWorkerContext.SimpleWorkerContextBuilder(ModelContext.fullCoreContext()).withAllowLoadingDuplicates(true).fromPackage(npm);
+  }
+
+  private static RenderingContext rc(SimpleWorkerContext context) {
+    return new RenderingContext(context, new RendererFactory(), new MarkDownProcessor(MarkDownProcessor.Dialect.COMMON_MARK),
+        ValidationOptions.defaults(), "http://hl7.org/fhir/R5/", "", null, RenderingContext.ResourceRendererMode.TECHNICAL,
+        RenderingContext.GenerationRules.IG_PUBLISHER);
   }
 }
