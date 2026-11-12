@@ -234,3 +234,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 19:40: #54 reviewed (no bugs) + simplifier no-op. Head 4c1e73ef. CI red expected until core has setAnchors.
 - 20:07 tick: s2 DONE (REGRESSION #48: resident Jekyll 5.5G RSS on uz-integ, swap peak 7.7G vs 2.5G master, JVM OOM with 4G swap; spec.internals ai.html; #45 fixed). s5 FINDING-2 (plan-net/nw-gmsa us-core links, eu-lab whitespace after differential) = #53 class, told s5. s1 US-Core + niis/DHP reruns. Asked Vadim re #48 Jekyll memory.
 - 20:20: Vadim: keep resident Jekyll as is (no fix). Attribution correction: e85860f2/26aaf1ac are in watch-page-rebuild = upstream HL7 #1461, not #48. Large IGs need RAM/swap headroom (uz-integ: ~5.5G ruby + 9G JVM).
+- 21:07 tick: s1 (US-Core builds; niis/DHP reruns + DHP same-dir master check queued) and s5 (#49 jar, nw-gmsa run) in progress; no new results in the last hour. No new regressions.
