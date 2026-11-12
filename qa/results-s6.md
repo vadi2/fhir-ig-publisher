@@ -9,6 +9,9 @@ non-ASCII image file names and fails without it, on both jars), `IG_GATE_OFF=1 M
 archives (zip, xlsx, pack, tgz, nested) compared entry by entry, package.db compared as sorted rows, the
 `temp/pages/.watch-output` staging path (qa.txt of a watch build), the Time and Size columns of
 fragment-usage-analysis.csv, key order of `*-ref-list.json`/`*-ref-all-list.json` ("used by" lists).
+Known by-design differences, normalized by the compare from ucum-test on (reported once under the IG that showed
+them first): the Pages list order in llms.txt / llms.md (HL7 #1461), and `*.ai.html` entries in the package's
+`other/spec.internals` targets (349fc12). "Used by" order is also masked in the `*-ref-*list.csv` files.
 F2/F6 are built from a pristine copy of the IG with the same edits applied (the watch session runs on).
 
 ## TU9IVy1UV0NvcmVJRw/VFcgQ29yZSBJRyBJVFJJ (tw.gov.mohw.twcore)
@@ -26,3 +29,17 @@ skip: source not reachable. The qas.json repo path is base64 (MOHW-TWCoreIG / "T
   (the order `File.listFiles()` returns), int sorts by name. Source: `AIProcessor` "in name order: the lists of
   pages and the zip don't depend on the order the file system lists them in", from HL7 #1461 watch-page-rebuild
   (e70bb8a, already in the base). Reproduce: full build of ig-ee-qre with each jar, `sed -n 5,8p output/llms.txt`.
+
+## hl7-be/ucum-test (hl7.fhir.be.ucum-test) @ af477f6
+- heap 7600m. QA 0 / 33 / 12 in every build.
+- times (s): R1 50, I1 48, I2 43; watch first 51, W1 2.2 (Page Rebuild), W2 21.6 (Differential, 14 of 34 to render),
+  W3 30.7, W4 28.6, W5 27.5, W6 29.1 (Complete Builds: "changed: ig", SUSHI's IG resource changes with an example's
+  title or the example list); F2 46, F6 48.
+- every edit reached output/ (the pages are under output/en/; W3 checked by the page's hash: changed at W3, back
+  to the original at W6). F2 = W2, F6 = W6, W6 = I1, I2 = I1.
+- verdict: **diff by design, not a bug**: I1, I2, W6 differ from R1 only in (a) llms.txt page order (as ee-qre) and
+  (b) `package/other/spec.internals` "targets" (in package.tgz, package.r4.tgz, package.r4b.tgz, definitions.*.zip,
+  validator*.pack, full-ig.zip): master lists the 23 `*.ai.html` pages, int doesn't. Master's list is wrong: the AI
+  step deletes those pages, they are not in master's output/ either. Source: 349fc12 "spec.internals doesn't list the
+  ai pages the AI step removes" (older #48 perf/watch-fsh-tail, in the base). Reproduce: full build with each jar,
+  `tar xzOf output/package.tgz package/other/spec.internals | grep -c ai.html`: master 23, int 0.
