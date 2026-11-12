@@ -26,7 +26,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 | replay-stamp (wave 2) | session_013FrhV8oUf4Hg2ZFmpfFFgD | perf3/replay-stamp | none | DROPPED: PR #39 (rapido-state) already trusts file stamps in canReplay (7.5 -> 0.3 s) |
 | early-publish | session_013FrhV8MAcq78uViFCFE1ve | perf3/early-publish | #42 | DONE. PR 22:29, 0 checks, clean. page in output: prof 270.2 -> 170.1, inst 262.8 -> 156.1, page 23.8 -> 2.7 s. Also moves System.gc() after early publish. |
 | archives-reuse | session_013FrhV89txD9eAkM8cnaV3n | perf3/archives-reuse | #41 | DONE. PR 22:14, 0 checks, clean. archive step 28.7 -> 4.2 s (prof), 28.9 -> 3.5 (inst); whole-rebuild delta 46-52 s has ~20-25 s unexplained (disturbed base runs). +2732 lines. Combined package NOT kept (core mutates resources). |
-| native-skip | session_013FrhV7287Tkr83evM7MsqW | perf3/native-skip | - | running |
+| native-skip | session_013FrhV7287Tkr83evM7MsqW | perf3/native-skip | #46 | DONE. PR 04:48, 0 checks, clean. native step 26.8 -> 9.6 s (prof), 27.4 -> 9.1 (inst); whole rebuild -19.0 / -15.7 s; output diffs all also in base watch |
 | summaries-reuse | session_013FrhV9QcWhADhYPtwEjkoZ | perf3/summaries-reuse | #44 | DONE. PR 02:38, 0 checks, clean. Generate Summaries 4.7 -> 2.5 s (prof/inst); whole rebuild within noise; 495/495 list sets reused |
 | rapido-state | session_013FrhV9krvJaocgAxaWRabs | perf3/rapido-state | #39 | DONE. PR open 19:54, 0 checks, mergeable clean. prof -14.8 s, inst -10.3 s, page 0 |
 | narrative-skip (wave 2, stacked: PR base perf3/native-skip) | session_013FrhV6FEdUbpxzt5WmGXJF | perf3/narrative-skip | none | DROPPED 22:04: saves ~2 s of 272 s, not provably equal to a fresh build (~65 USD) |
@@ -177,3 +177,8 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 - 04:18 tick: PR #45 (tail-restart, base perf3/early-publish) opened, no checks, clean. Its QA line says 4 errors on
   both jars "as in #42" but #42 says 0 -> sent follow-up to explain/fix (description edit or fix commit). Open: #39-#45.
   Remaining: native-skip only (+ #45 follow-up).
+- 04:51 FINAL: PR #46 (native-skip). #45 description corrected: the 4 QA errors are tx.fhir.org answering
+  ValueSet?url=http://loinc.org with a LOINC value set; present on the base jar's first build, not from the change.
+  All sessions done or dropped. Both scheduled tasks deleted (trig_0126..., trig_017g...). Watcher OFF.
+  RESULT: 8 PRs (#39-#46), 2 dropped (replay-stamp: duplicate of #39; narrative-skip: ~2 s, not provably equal).
+  #45 is stacked on #42 (base perf3/early-publish); all others target claude/ig-publisher-perf-41aejs.
