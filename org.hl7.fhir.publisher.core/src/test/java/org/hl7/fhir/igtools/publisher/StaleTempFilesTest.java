@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.File;
 import java.io.FileOutputStream;
@@ -19,6 +20,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -200,6 +202,33 @@ class StaleTempFilesTest {
     assertFalse(cyrillic.exists());
 
     assertNull(StaleTempFiles.path("a\0b.html"));
+  }
+
+  /**
+   * The template's onGenerate script writes a file whose name isn't in the file system encoding (any non-ASCII name
+   * under a POSIX locale; here, under any locale, a name that isn't UTF-8 either). The next build used to fail before
+   * the script ran again ("Malformed input or input contains unmappable characters")
+   */
+  @Test
+  void theTemplatesWritesAreFoundWhateverTheirNames() throws Exception {
+    assumeTrue(StaleTempFiles.isSupported(temp.toString()));
+    StaleTempFiles st = tracker();
+    st.markTemplate();
+    // a name java can't write: the shell's, from octal escapes
+    Files.createDirectories(temp.resolve("pages"));
+    assertEquals(0, new ProcessBuilder("sh", "-c", "printf s > \"$(printf 'pages/\\321\\201\\377.svg')\"")
+        .directory(temp.toFile()).start().waitFor());
+    st.saveTemplateWrites();
+    tick();
+
+    st = tracker();
+    st.mark();
+    List<Path> left = st.findTemplateLeftovers();
+    assertEquals(1, left.size());
+    st.delete(left);
+    try (Stream<Path> files = Files.list(temp.resolve("pages"))) {
+      assertEquals(0, files.count());
+    }
   }
 
   /**

@@ -1,6 +1,7 @@
 package org.hl7.fhir.igtools.publisher;
 
 import java.io.IOException;
+import java.net.URI;
 import java.nio.charset.Charset;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
@@ -177,7 +178,7 @@ public class StaleTempFiles {
       FileTime start = time(templateMarker);
       walk(file -> {
         if (time(file).compareTo(start) > 0) {
-          res.add(temp.relativize(file).toString());
+          res.add(templateWrite(file));
         }
       });
     }
@@ -197,12 +198,32 @@ public class StaleTempFiles {
     }
     FileTime start = time(marker);
     for (String s : Files.readAllLines(templateWrites, StandardCharsets.UTF_8)) {
-      Path p = temp.resolve(s).normalize();
-      if (!s.isEmpty() && p.startsWith(temp) && !skip.contains(p) && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) && time(p).compareTo(start) < 0) {
+      Path p = templateWrite(s);
+      if (p != null && p.startsWith(temp) && !skip.contains(p) && Files.isRegularFile(p, LinkOption.NOFOLLOW_LINKS) && time(p).compareTo(start) < 0) {
         res.add(p);
       }
     }
     return res;
+  }
+
+  /**
+   * How saveTemplateWrites() records a file: its path in the temp folder, or, where that doesn't name the file (a name
+   * that isn't in the file system encoding, e.g. any non-ASCII name under a POSIX locale), its file URI, which keeps
+   * the name's bytes
+   */
+  private String templateWrite(Path file) {
+    String res = temp.relativize(file).toString();
+    return file.equals(templateWrite(res)) ? res : file.toUri().toString();
+  }
+
+  /** The file a line saveTemplateWrites() wrote names; null if none */
+  private Path templateWrite(String s) {
+    try {
+      return s.isEmpty() ? null : s.startsWith("file:") ? Paths.get(URI.create(s)) : temp.resolve(s).normalize();
+    } catch (IllegalArgumentException e) {
+      // InvalidPathException is an IllegalArgumentException
+      return null;
+    }
   }
 
   private interface FileAction {
