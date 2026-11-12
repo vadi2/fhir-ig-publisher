@@ -32,7 +32,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 | narrative-skip (wave 2, stacked: PR base perf3/native-skip) | session_013FrhV6FEdUbpxzt5WmGXJF | perf3/narrative-skip | none | DROPPED 22:04: saves ~2 s of 272 s, not provably equal to a fresh build (~65 USD) |
 | translations-dirty (wave 2) | session_013FrhV5h5r3K9VwTsXxmcW2 | perf3/translations-dirty | #43 | DONE. PR 00:46, 0 checks, clean. translation step 4.96 -> 0.22 s; P/F -4 to -5 s on FSH edits; GC change left to #42 |
 | qa-prep-reuse (wave 2) | session_013FrhV6SxKUeigqo6vSYCQF | perf3/qa-prep-reuse | #40 | DONE. PR 22:02, 0 checks, clean. QA prep 7.6 -> 2.3 s (prof), 8.1 -> 2.2 (inst), 3.8 -> 1.0 (page); page rebuild 19.6 -> 16.2 s |
-| tail-restart (wave 2, stacked: PR base perf3/early-publish) | session_013FrhV6xnSEZUwAnAQoiLim | perf3/tail-restart | - | running (launched 19:18) |
+| tail-restart (wave 2, stacked: PR base perf3/early-publish) | session_013FrhV6xnSEZUwAnAQoiLim | perf3/tail-restart | #45 | PR 04:08, 0 checks, clean. 2nd save -> page: prof 284.6 -> 164.1, page 17.1 -> 1.5 s; single edits unchanged. Asked 04:18 to explain '4 errors' QA claim (others report 0) |
 
 ## Wave 2 (launched 18:19 from profile.md; 10 PRs max = 5 wave 1 + 5 wave 2)
 - replay-stamp = profile opp 2 (canReplay by size+mtime, ~11 s before Jekyll). Given to the profiler session by
@@ -174,3 +174,6 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   bench builds, ~13 h in. tail-restart expected ~03:40+. No nudges.
 - 03:47 tick: no new PRs (highest 44). tail-restart: bench and QA settled, output comparison running, PR next (03:44).
   native-skip: active 02:46, still benching.
+- 04:18 tick: PR #45 (tail-restart, base perf3/early-publish) opened, no checks, clean. Its QA line says 4 errors on
+  both jars "as in #42" but #42 says 0 -> sent follow-up to explain/fix (description edit or fix commit). Open: #39-#45.
+  Remaining: native-skip only (+ #45 follow-up).
