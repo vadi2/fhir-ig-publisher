@@ -231,3 +231,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 19:55: #53 simplifier done, head 3731dee9, 528 tests ok. Open: Vadim's call on core anchors setter vs reflection.
 - 19:08 tick: s1 (DHP review, US-Core rerun), s2 (PR #48-only watch run on uz-integ to attribute memory), s5 (bfdr classified; plan-net base-jar watch) progressing. Core anchors hook agent running (scratchpad/core-anchors/).
 - 19:30: core setter done: core local branch perf3/rc-anchor-set 03297b4a (7.0.5, NOT pushed), RenderingContext.setAnchors; patch core-patches/rc-anchor-set.patch (64304c48). Publisher PR #54 (perf3/differential-package-links-core-anchors 4c1e73ef, base #53) drops reflection; CI expected red until core has setter; pom 7.0.5-anchors-SNAPSHOT uncommitted. 528 tests, cqm 143/420 ok. Review running.
+- 19:40: #54 reviewed (no bugs) + simplifier no-op. Head 4c1e73ef. CI red expected until core has setAnchors.
