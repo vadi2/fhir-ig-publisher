@@ -1,6 +1,6 @@
 # QA results, shard s8
 
-Status: in progress (5/7 IGs)
+Status: in progress (7/7 IGs through phase C; follow-ups running)
 
 - master.jar: origin/master 32046bcdd9b0ec91d93db76f9897b745e406139b
 - int.jar: qa/integration-ready 6c1abf463d8ae87d30871898c6abdaa63c7df673
@@ -16,8 +16,8 @@ Status: in progress (5/7 IGs)
 | HL7/reg-workflow-pharma | 56924f9 | 7600m | 66 | 1/0/0 | 67 | 1/0/0 | 63 |  | 86 | 71 | R1 vs I1/I2: F1, F2 (see notes); pre-existing: Binary md array identity. W2=F2 same. Watch W4 to be rerun (my W4 example was invalid FSH) |
 | HL7/fhir-us-ndh | f56330f | 7600m | 137 | 0/11/13 | 160 | 0/11/13 | 130 | first:144 W1:24 W2:89 restart:107 W3:88 W4:127 W5:126 W6:84 | 144 | 135 | R1 vs I1: pre-existing only (P1 search parameter source, P2 THO version in links); I2 vs R1: P3 warm-cache identifier type text (master check pending). W2=F2, W6=F6, W6=I1 apart from P1/P2 |
 | hl7au/au-fhir-base | 634d673 | 7600m | 198 | 123/465/233 | 171 | 123/465/234 | 139 | first:167 W1:3 W2:150 restart:157 W3:125 W4:141 W5:136 W6:158 | 166 | 165 | R1/M2 vs I1/I2: F1 (287 ai.html targets), F2 (llms.txt order), ref-list order, stack trace line numbers in comparison-v6.0.0 pages (expected from code changes); P4 intermittent hint in I1/I2 only (not in M2, F2, F6, watch). W2=F2, W6=F6, W6=I1 apart from stack-trace call path (watch vs full) and ref-list order |
-| nricmig/Nricm_TWCMIG | 28d2f42 | 7600m | 267 | 6/2/490 |  |  |  |  |  |  |  |
-| hl7ch/ch-emr | 327d611 | 7600m | 157 | 288/130/818 |  |  |  |  |  |  |  |
+| nricmig/Nricm_TWCMIG | 28d2f42 | 7600m | 267 | 6/2/490 | 320 | 6/2/490 | 240 | first:319 W1:16 W2:213 restart:190 W3:199 W4:245 W5:251 W6:196 | 281 | 295 | QA equal in all steps. R1 vs I1/I2: F3 (package.tgz .index.db filled, see notes; bisect pending), F2 (llms.txt/ai.zip order), ref-list order. W2=F2, W6=F6=I1 apart from ref-list order and fragment-usage timing |
+| hl7ch/ch-emr | 327d611 | 7600m | 157 | 288/130/818 | 162 | 288/130/818 | 119 | first:139 W1:2 W2:96 restart:114 W3:88 W4:105 W5:91 W6:93 | 116 | 123 | QA equal in all steps. R1 vs I1/I2: F1 (126 ai.html targets), F2 (llms order), F3 (ch.fhir.ig.ch-emr.en.tgz .index.db filled), ref-list order. W2 vs F2: P2 only (THO version in NamingSystem-uri link, 44 Bundle/Composition files). W6=F6=I1 apart from ref-list order and fragment-usage timing |
 
 ## Notes
 
@@ -31,3 +31,5 @@ Status: in progress (5/7 IGs)
 - **P3 (fhir-us-ndh, I2 only)**: in the second build in the same folder, narratives render the NPI identifier type as "NPI" instead of "United States National Provider Identifier" (323 files). Same pattern as the warm tx cache narrative difference other shards reported as pre-existing; master check (two builds in one folder) pending.
 - **P4, intermittent, not a code change (au-fhir-base)**: I1 and I2 (two int builds back to back) have one extra information message on `input/examples/bodystructure-example1.xml` (BodyStructure.morphology, SNOMED 339008 "not in 'SNOMED CT Morphologic Abnormalities'"). Master R1 and M2, and the later int builds F2, F6 and all watch steps, don't have it. The message comes from the tx.fhir.org answer; the IG has no input-cache, so every build asks the server fresh.
 - au-fhir-base `comparison-v6.0.0/xx-21-Identifier-Identifier.html` and `xx-67-Address-Address.html` embed a Java stack trace (master too). Line numbers differ between master and int, and the call path differs between watch and full builds. Expected, not counted.
+- **F3, int fills package `.index.db` that master leaves empty (TWCMIG, ch-emr)**: master writes `package/.index.db` with the table but 0 rows in TWCMIG's `package.tgz` and ch-emr's `ch.fhir.ig.ch-emr.en.tgz`. Int writes all rows there (TWCMIG 112, ch-emr 27, each matching `.index.json`); int's watch builds do the same. The other packages are the same in both: r4/r4b/combined are filled, and `package.tgz` stays empty in ch-emr, au-fhir-base, ndh and rwp. The index sits in a temp file (`[tmp]/<uuid>`) until `NPMPackageGenerator.finish()`. Repro: full build with each jar, `tar xzf output/package.tgz package/.index.db && sqlite3 package/.index.db 'select count(*) from ResourceList'`. Looks like a fix, but it is an unexplained output change; master rerun and single-PR jars (#51 head f41ac1e, base a4d1e90) pending.
+- **P2 also in ch-emr**: the THO version in the `NamingSystem-uri` link (7.0.1 vs 7.1.0) differs between watch W2 and full F2 in 44 Bundle/Composition files.
