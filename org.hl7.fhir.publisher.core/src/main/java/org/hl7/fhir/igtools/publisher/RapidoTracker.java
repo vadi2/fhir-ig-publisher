@@ -122,6 +122,7 @@ public class RapidoTracker {
   private final Set<String> otherSkip = new HashSet<>();
   private String fileSetHash;
   private String uuid;
+  private final RapidoSteps steps = new RapidoSteps();
   private boolean complete;
   private String reason;
   private Recording recording;
@@ -197,6 +198,7 @@ public class RapidoTracker {
     if (complete) {
       return;
     }
+    steps.load(old.getJsonObject("steps"));
     oldFiles = old.getJsonObject("files");
     uuid = old.asString("uuid");
     for (FetchedFile f : pf.fileList) {
@@ -318,6 +320,11 @@ public class RapidoTracker {
 
   public boolean isCompleteBuild() {
     return complete;
+  }
+
+  /** the steps that make fragments for the IG as a whole, and what the last build's did (see RapidoSteps) */
+  public RapidoSteps getSteps() {
+    return steps;
   }
 
   public String getReason() {
@@ -1119,6 +1126,7 @@ public class RapidoTracker {
       files.set(key, nf);
     }
     state.add("files", files);
+    state.add("steps", steps.save());
     writeState(state, sf);
   }
 
