@@ -1,6 +1,6 @@
 # QA results, shard s8
 
-Status: in progress (Phase C: 4 of 7 IGs run)
+Status: in progress (5/7 IGs)
 
 - master.jar: origin/master 32046bcdd9b0ec91d93db76f9897b745e406139b
 - int.jar: qa/integration-ready 6c1abf463d8ae87d30871898c6abdaa63c7df673
@@ -15,7 +15,7 @@ Status: in progress (Phase C: 4 of 7 IGs run)
 | daviemukungi/IPTp-FHIR-implementationIG | a343cf2 | 7600m | 73 | 5/46/102 | 72 | 5/46/102 | 70 | first:69 W1:8 W2:40 restart:56 W3:43 W4:51 W5:52 W6:39 | 67 | 66 | same (QA messages equal; only *-ref-*list.{json,csv} row order, which varies between runs of the same jar, incl. W vs F and I1 vs W6) |
 | HL7/reg-workflow-pharma | 56924f9 | 7600m | 66 | 1/0/0 | 67 | 1/0/0 | 63 |  | 86 | 71 | R1 vs I1/I2: F1, F2 (see notes); pre-existing: Binary md array identity. W2=F2 same. Watch W4 to be rerun (my W4 example was invalid FSH) |
 | HL7/fhir-us-ndh | f56330f | 7600m | 137 | 0/11/13 | 160 | 0/11/13 | 130 | first:144 W1:24 W2:89 restart:107 W3:88 W4:127 W5:126 W6:84 | 144 | 135 | R1 vs I1: pre-existing only (P1 search parameter source, P2 THO version in links); I2 vs R1: P3 warm-cache identifier type text (master check pending). W2=F2, W6=F6, W6=I1 apart from P1/P2 |
-| hl7au/au-fhir-base | 634d673 | 7600m | 198 | 123/465/233 |  |  |  |  |  |  |  |
+| hl7au/au-fhir-base | 634d673 | 7600m | 198 | 123/465/233 | 171 | 123/465/234 | 139 | first:167 W1:3 W2:150 restart:157 W3:125 W4:141 W5:136 W6:158 | 166 | 165 | R1/M2 vs I1/I2: F1 (287 ai.html targets), F2 (llms.txt order), ref-list order, stack trace line numbers in comparison-v6.0.0 pages (expected from code changes); P4 intermittent hint in I1/I2 only (not in M2, F2, F6, watch). W2=F2, W6=F6, W6=I1 apart from stack-trace call path (watch vs full) and ref-list order |
 | nricmig/Nricm_TWCMIG | 28d2f42 | 7600m | 267 | 6/2/490 |  |  |  |  |  |  |  |
 | hl7ch/ch-emr | 327d611 | 7600m | 157 | 288/130/818 |  |  |  |  |  |  |  |
 
@@ -29,3 +29,5 @@ Status: in progress (Phase C: 4 of 7 IGs run)
 - **P1, pre-existing (fhir-us-ndh)**: the search parameter list on the NDH profile pages (`StructureDefinition-ndh-*.html/md`) resolves some parameters to davinci-pdex-plan-net SearchParameters in some builds and to core ones in others. Seen in both directions between master runs (R1 vs the earlier POSIX-locale master run) and between int runs (F2 vs W2).
 - **P2, pre-existing (fhir-us-ndh)**: the THO version in the `NamingSystem-npi` narrative link of `Organization-Social-Towson-Food` varies between builds (5.5.0 and 6.3.0 from master runs, 7.1.0 and 7.5.0 from int runs).
 - **P3 (fhir-us-ndh, I2 only)**: in the second build in the same folder, narratives render the NPI identifier type as "NPI" instead of "United States National Provider Identifier" (323 files). Same pattern as the warm tx cache narrative difference other shards reported as pre-existing; master check (two builds in one folder) pending.
+- **P4, intermittent, not a code change (au-fhir-base)**: I1 and I2 (two int builds back to back) have one extra information message on `input/examples/bodystructure-example1.xml` (BodyStructure.morphology, SNOMED 339008 "not in 'SNOMED CT Morphologic Abnormalities'"). Master R1 and M2, and the later int builds F2, F6 and all watch steps, don't have it. The message comes from the tx.fhir.org answer; the IG has no input-cache, so every build asks the server fresh.
+- au-fhir-base `comparison-v6.0.0/xx-21-Identifier-Identifier.html` and `xx-67-Address-Address.html` embed a Java stack trace (master too). Line numbers differ between master and int, and the call path differs between watch and full builds. Expected, not counted.
