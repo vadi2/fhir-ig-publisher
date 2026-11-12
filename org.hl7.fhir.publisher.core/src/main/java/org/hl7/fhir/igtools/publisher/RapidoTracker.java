@@ -1688,25 +1688,26 @@ public class RapidoTracker {
     if (added == null || taken == null) {
       return "no record of its anchors";
     }
-    for (String lang : added.getNames()) {
-      Set<String> set = sets.get(lang);
-      if (set == null) {
-        return "it has anchors for a language the build doesn't have: "+lang;
-      }
-      for (String a : added.getJsonArray(lang).asStrings()) {
-        if (set.contains(a)) {
-          return "an anchor it put in its pages is taken: "+a;
-        }
-      }
+    String problem = anchorMismatch(sets, added, false, "an anchor it put in its pages is taken: ");
+    if (problem == null) {
+      problem = anchorMismatch(sets, taken, true, "an anchor it found taken is free: ");
     }
-    for (String lang : taken.getNames()) {
+    return problem;
+  }
+
+  /**
+   * The first recorded anchor that's in the build's set for its language when it shouldn't be, or not when it should
+   * be, as the problem with it, or null
+   */
+  private static String anchorMismatch(Map<String, Set<String>> sets, JsonObject anchors, boolean shouldBeTaken, String problem) {
+    for (String lang : anchors.getNames()) {
       Set<String> set = sets.get(lang);
       if (set == null) {
         return "it has anchors for a language the build doesn't have: "+lang;
       }
-      for (String a : taken.getJsonArray(lang).asStrings()) {
-        if (!set.contains(a)) {
-          return "an anchor it found taken is free: "+a;
+      for (String a : anchors.getJsonArray(lang).asStrings()) {
+        if (set.contains(a) != shouldBeTaken) {
+          return problem+a;
         }
       }
     }
@@ -1809,12 +1810,8 @@ public class RapidoTracker {
     for (Map.Entry<String, Set<String>> e : anchorSets().entrySet()) {
       Set<String> before = rec.anchorsBefore.get(e.getKey());
       if (before != null && before.size() != e.getValue().size()) { // the sets only grow
-        Set<String> added = new TreeSet<>();
-        for (String s : e.getValue()) {
-          if (!before.contains(s)) {
-            added.add(s);
-          }
-        }
+        Set<String> added = new TreeSet<>(e.getValue());
+        added.removeAll(before);
         JsonArray a = an.forceArray(e.getKey());
         for (String s : added) {
           a.add(s);

@@ -364,22 +364,15 @@ class PublisherRapidoWatchTest {
   @Test
   void aReplayedFilePutsItsAnchorsInTheBuildsAnchorSet() throws Exception {
     context = r5();
-    Map<String, String> pages = new HashMap<>();
-    PublisherFields pf = build("a");
-    pf.rc = renderingContext(context);
-    rendering = f -> render(pf, f, pages);
-    finish(pf);
-    String complete = pages.get("Observation-o.json");
+    String complete = renderingBuild("a", Map.of("Patient-b.json", codeSystem("x"), "Observation-o.json", valueSet("x")))
+        .get("Observation-o.json");
     assertFalse(complete.contains("name=\"x\""), complete);
 
-    pages.clear();
-    PublisherFields pf2 = build("a2");
-    pf2.rc = renderingContext(context);
-    rendering = f -> render(pf2, f, pages);
-    finish(pf2);
+    String differential = renderingBuild("a2", Map.of("Patient-b.json", codeSystem("x"), "Observation-o.json", valueSet("x")))
+        .get("Observation-o.json");
 
     assertEquals(List.of("Patient-b.json"), replayed);
-    assertEquals(complete, pages.get("Observation-o.json"));
+    assertEquals(complete, differential);
   }
 
   /**
@@ -390,24 +383,14 @@ class PublisherRapidoWatchTest {
   @Test
   void aFileIsntReplayedWhenAnAnchorItFoundTakenIsFree() throws Exception {
     context = r5();
-    Map<String, String> pages = new HashMap<>();
-    PublisherFields pf = build("a");
-    pf.rc = renderingContext(context);
-    Map<String, DomainResource> first = Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x"));
-    rendering = f -> render(pf, f, pages, first);
-    finish(pf);
-    assertFalse(pages.get("Patient-b.json").contains("name=\"x\""), pages.get("Patient-b.json"));
+    String first = renderingBuild("a", Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x"))).get("Patient-b.json");
+    assertFalse(first.contains("name=\"x\""), first);
 
-    pages.clear();
-    PublisherFields pf2 = build("a2");
-    pf2.rc = renderingContext(context);
-    Map<String, DomainResource> second = Map.of("Patient-a.json", codeSystem("y"), "Patient-b.json", valueSet("x"));
-    rendering = f -> render(pf2, f, pages, second);
-    finish(pf2);
+    String second = renderingBuild("a2", Map.of("Patient-a.json", codeSystem("y"), "Patient-b.json", valueSet("x"))).get("Patient-b.json");
 
     assertEquals(List.of(), replayed);
-    assertTrue(pages.get("Patient-b.json").contains("name=\"x\""), pages.get("Patient-b.json"));
-    assertTrue(pages.get("Patient-b.json").contains("name=\"hcx\""), pages.get("Patient-b.json"));
+    assertTrue(second.contains("name=\"x\""), second);
+    assertTrue(second.contains("name=\"hcx\""), second);
   }
 
   /**
@@ -417,49 +400,34 @@ class PublisherRapidoWatchTest {
   @Test
   void aFileIsntReplayedWhenAnAnchorItAddedIsTaken() throws Exception {
     context = r5();
-    Map<String, String> pages = new HashMap<>();
-    PublisherFields pf = build("a");
-    pf.rc = renderingContext(context);
-    Map<String, DomainResource> first = Map.of("Patient-a.json", codeSystem("y"), "Patient-b.json", valueSet("x"));
-    rendering = f -> render(pf, f, pages, first);
-    finish(pf);
-    assertTrue(pages.get("Patient-b.json").contains("name=\"x\""), pages.get("Patient-b.json"));
+    String first = renderingBuild("a", Map.of("Patient-a.json", codeSystem("y"), "Patient-b.json", valueSet("x"))).get("Patient-b.json");
+    assertTrue(first.contains("name=\"x\""), first);
 
-    pages.clear();
-    PublisherFields pf2 = build("a2");
-    pf2.rc = renderingContext(context);
-    Map<String, DomainResource> second = Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x"));
-    rendering = f -> render(pf2, f, pages, second);
-    finish(pf2);
+    String second = renderingBuild("a2", Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x"))).get("Patient-b.json");
 
     assertEquals(List.of(), replayed);
-    assertFalse(pages.get("Patient-b.json").contains("name=\"x\""), pages.get("Patient-b.json"));
+    assertFalse(second.contains("name=\"x\""), second);
   }
 
   /** a file that found an anchor taken, and still does, is replayed */
   @Test
   void aFileThatFindsTheAnchorsAsTheyWereIsReplayed() throws Exception {
     context = r5();
-    Map<String, String> pages = new HashMap<>();
-    PublisherFields pf = build("a");
-    pf.rc = renderingContext(context);
-    Map<String, DomainResource> first = Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x"));
-    rendering = f -> render(pf, f, pages, first);
-    finish(pf);
+    renderingBuild("a", Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x")));
 
-    pages.clear();
-    PublisherFields pf2 = build("a2");
-    pf2.rc = renderingContext(context);
-    Map<String, DomainResource> second = Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x"));
-    rendering = f -> render(pf2, f, pages, second);
-    finish(pf2);
+    renderingBuild("a2", Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x")));
 
     assertEquals(List.of("Patient-b.json"), replayed);
   }
 
-  /** Patient/b's page has a code system, and Observation/o's a value set with the same id */
-  private static void render(PublisherFields pf, FetchedFile f, Map<String, String> pages) {
-    render(pf, f, pages, Map.of("Patient-b.json", codeSystem("x"), "Observation-o.json", valueSet("x")));
+  /** a build whose files render the resources given for them, and the pages those that weren't replayed rendered */
+  private Map<String, String> renderingBuild(String patientContent, Map<String, DomainResource> resources) throws Exception {
+    Map<String, String> pages = new HashMap<>();
+    PublisherFields pf = build(patientContent);
+    pf.rc = renderingContext(context);
+    rendering = f -> render(pf, f, pages, resources);
+    finish(pf);
+    return pages;
   }
 
   /** renders the resource given for the file, if any, as generateHtmlOutputsInner renders a file */
