@@ -1,6 +1,6 @@
 # QA results: shard s3
 
-Status: Phase C in progress (xshare, madfsh, usps, sact done).
+Status: Phase C in progress (xshare, madfsh, usps, sact, hroute done).
 
 Reference jar: origin/master 32046bcdd9. Integration jar: `qa/integration-ready` 6c1abf463d. Heap 7600m unless noted. VM 15 GB / 4 CPU, 16 GB swap.
 
@@ -10,7 +10,7 @@ Reference jar: origin/master 32046bcdd9. Integration jar: `qa/integration-ready`
 | FHIR/MADFSH | 0c4b725767 | 7600m | 151 s | 4/16/3 | 37 s, 4/16/3 | 31 s, 4/16/3 | 35/2/21/-/22/22/23 s, all edits seen, QA 4/16/3 | 38 s | 36 s | REGRESSION: F1 only (I1/I2). W2=F2, W6=F6, W6=I1 same |
 | HL7/us-fhir-ps | c20fdb208c | 7600m | 94 s (R1b 70 s) | 0/7/21 | 64 s, 0/7/21 | 56 s, 0/7/21 | 62/6/43/50/37/38/34 s, all edits seen, QA 0/7/21; rerun 64/6/42/34/38/35/32 s | 65 s | 67 s | REGRESSION: F1 only (I1/I2). pre-existing diffs: NamingSystem link/name chosen from a random THO package (masked); one W2 vs F2 diff of this kind (us-npi display) not reproduced on a rerun. W6=F6, W6=I1 same |
 | hl7-eu/phoenix-sact | f9246ccc86 | 7600m | 53 s | 0/2/77 | 62 s, 0/2/77 | 55 s, 0/2/77 | 64/1/27/34/36/38/26 s, all edits seen, QA 0/2/77 | 64 s | 64 s | REGRESSION: F1 only (I1/I2). W2=F2, W6=F6, W6=I1 same |
-| savannahghi/healthy-route-ig | 7a1e3e908a | 7600m | 99 s | 4/217/861 | | | | | | pending |
+| savannahghi/healthy-route-ig | 7a1e3e908a | 7600m | 99 s | 4/217/861 | 94 s, 4/217/861 | 76 s, 4/217/861 | 82/5/51/43/63/66/51 s, all edits seen, QA 4/217/861 | 88 s | 82 s | REGRESSION: F1 only (I1/I2). W2=F2, W6=F6, W6=I1 same |
 | TEHIK-EE/ig-ee-vris | c1741f186c | 7600m | 121 s (R1b) | 95/876/216 | | | | | | pending |
 | HL7/davinci-pct | 7d64232695 | 7600m | 274 s | 0/9/2 | | | | | | pending |
 | Interop-Sante/hl7.fhir.fr.core | 0e518baa85 | 7600m | 295 s | 165/337/6283 | | | | | | pending |
@@ -26,4 +26,4 @@ Reference jar: origin/master 32046bcdd9. Integration jar: `qa/integration-ready`
 - QA counts differ from build.fhir.org for sact, vris, fr.core: tx.fhir.org answers seen from here (code systems/SNOMED editions not held). Reference is our own R1, so this does not affect the comparisons.
 - vris: first R1 had 439 tx.fhir.org 502 Bad Gateway errors; rebuilt as R1b, which is the reference.
 - fr.core: template `https://github.com/Interop-Sante/ig-style` cannot be downloaded as a zip through this VM's proxy (403); ig.ini points at a local git clone of it (104d205) for every build, both jars.
-- Comparison masks, calibrated on two master builds of xshare (equal after masking): dates/times, UUIDs, run folder, xlsx/pack/zip/tgz compared per entry, package.db as sorted rows, key/line order of `*-ref-*-list.json/csv`, skipped qa*, fragment-usage-analysis.*, and archive entries `spec.internals`, `version.info`, `package/.index.db` (master is not deterministic here: `.index.db` ResourceList was empty in one master run and filled in the other).
+- Comparison masks, calibrated on two master builds of xshare (equal after masking): dates/times, UUIDs, run folder, xlsx/pack/zip/tgz compared per entry, package.db as sorted rows, key/line order of `*-ref-*-list.json/csv` and the order inside their "used by" lists, skipped qa*, fragment-usage-analysis.*, and archive entries `spec.internals`, `version.info`, `package/.index.db` (master is not deterministic here: `.index.db` ResourceList was empty in one master run and filled in the other).
