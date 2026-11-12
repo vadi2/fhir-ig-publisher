@@ -13,6 +13,7 @@ import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
@@ -194,6 +195,18 @@ public class OutputFolderSync {
    */
   public static Result publish(Path staged, Path target, Collection<Path> files, Predicate<String> leftOut,
       Map<String, String> offered) throws IOException {
+    return publish(staged, target, files, leftOut, offered, null, null);
+  }
+
+  /**
+   * As publish(staged, target, files, leftOut, offered), while the build goes on writing to the staging folder: only
+   * the files last changed between since and asOf (either null: no bound) are copied. One the build writes after asOf
+   * (or older than since, which it may be writing over: the package step writes its files over those of the last
+   * build, that a Jekyll kept running leaves in the staging folder) is left for the sync, and so is one that changes
+   * while it is copied, so that what is only partly written doesn't get into the target
+   */
+  public static Result publish(Path staged, Path target, Collection<Path> files, Predicate<String> leftOut,
+      Map<String, String> offered, FileTime since, FileTime asOf) throws IOException {
     Result result = new Result();
     // the files are named under the staging folder as it was given, which may be reached through a link
     Path given = staged.toAbsolutePath().normalize();
@@ -230,6 +243,11 @@ public class OutputFolderSync {
       Path from = staged.resolve(rel);
       Path to = target.resolve(rel);
       try {
+        BasicFileAttributes was = Files.readAttributes(from, BasicFileAttributes.class);
+        FileTime changed = was.lastModifiedTime();
+        if ((since != null && changed.compareTo(since) < 0) || (asOf != null && changed.compareTo(asOf) > 0)) {
+          continue;
+        }
         String digest = offered == null ? null : digest(from, ba);
         boolean there = Files.isRegularFile(to);
         if (there && digest != null && digest.equals(offered.get(rel))) {
@@ -242,12 +260,13 @@ public class OutputFolderSync {
         if (there && Files.size(to) == Files.size(from) && sameContent(from, to, ba, bb)) {
           // (not noted as offered: it may be what the build made of the file, put back in the staging folder)
           result.unchanged++;
-        } else {
-          copy(from, to);
+        } else if (copy(from, to, asOf == null && since == null ? null : () -> isAsItWas(from, was))) {
           result.written++;
           if (digest != null) {
             offered.put(rel, digest);
           }
+        } else if (offered != null) {
+          offered.remove(rel);
         }
       } catch (IOException ex) {
         if (offered != null) {
@@ -336,27 +355,50 @@ public class OutputFolderSync {
 
   /** replaces a file with a copy of another, in one rename: the copy is made next to it first */
   static void copy(Path from, Path to) throws IOException {
+    copy(from, to, null);
+  }
+
+  /**
+   * As copy(from, to), unless the copy, once made, doesn't pass the check (null: none): then it is dropped, and false
+   * returned
+   */
+  private static boolean copy(Path from, Path to, CopyCheck check) throws IOException {
     try {
-      copyOver(from, to);
+      return copyOver(from, to, check);
     } catch (AccessDeniedException e) {
       // a read-only file can't be replaced on Windows
       if (!makeWritable(to)) {
         throw e;
       }
-      copyOver(from, to);
+      return copyOver(from, to, check);
     }
   }
 
-  private static void copyOver(Path from, Path to) throws IOException {
+  private interface CopyCheck {
+    boolean passes() throws IOException;
+  }
+
+  private static boolean copyOver(Path from, Path to, CopyCheck check) throws IOException {
     // (a copy left by a sync that stopped is stale, and deleted by the next)
     Path copy = to.resolveSibling(".sync-" + to.getFileName());
     Files.copy(from, copy, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
     try {
+      if (check != null && !check.passes()) {
+        Files.delete(copy);
+        return false;
+      }
       Files.move(copy, to, StandardCopyOption.ATOMIC_MOVE);
+      return true;
     } catch (IOException ex) {
       Files.deleteIfExists(copy);
       throw ex;
     }
+  }
+
+  /** whether a file has not been written since it had these attributes */
+  private static boolean isAsItWas(Path file, BasicFileAttributes was) throws IOException {
+    BasicFileAttributes now = Files.readAttributes(file, BasicFileAttributes.class);
+    return now.lastModifiedTime().equals(was.lastModifiedTime()) && now.size() == was.size();
   }
 
   private static void rename(Path from, Path to) throws IOException {

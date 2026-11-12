@@ -103,15 +103,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 
 import static org.hl7.fhir.igtools.publisher.Publisher.*;
 
@@ -242,7 +243,6 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   private final Map<String, String> earlyPages = new HashMap<>();
   // watch mode: the copy of the pages into the output folder that is running (see publishPagesEarly()), or null
   private Future<?> earlyPublish;
-  private ExecutorService earlyPublisherThread;
   // watch mode: where the html-checked versions of the output files that Jekyll wrote again for the template's check
   // are kept meanwhile (null: none), and those files (relative to the output folder)
   private Path checkedStash;
@@ -4837,15 +4837,31 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     List<Path> toCopy = written;
     PublisherFields fields = pf;
     // the build goes on meanwhile: the copy waits on what the disk can do, not on the build
-    earlyPublish = earlyPublisher().submit(() -> publishPages(fields, staged, target, toCopy));
+    // what the build writes from now on is left for the sync; and if Jekyll didn't say what it wrote, so is what the
+    // last build left in the staging folder, which the package step writes again (a file being written over can look
+    // as it was, but empty, until its first write)
+    Instant now = Instant.now();
+    FileTime asOf = FileTime.from(now);
+    FileTime since = written == null && pf.stagedOutputKept
+        ? FileTime.from(now.minusNanos(System.nanoTime() - pf.watchBuildStarted).minusSeconds(1)) : null;
+    startEarlyPublish(() -> publishPages(fields, staged, target, toCopy, since, asOf));
   }
 
-  private void publishPages(PublisherFields fields, Path staged, Path target, List<Path> files) {
+  /** runs the copy of the pages on a thread of its own: see awaitEarlyPublish() */
+  void startEarlyPublish(Runnable copy) {
+    FutureTask<Void> task = new FutureTask<>(copy, null);
+    Thread t = new Thread(task, "ig-early-publish");
+    t.setDaemon(true);
+    t.start();
+    earlyPublish = task;
+  }
+
+  private void publishPages(PublisherFields fields, Path staged, Path target, List<Path> files, FileTime since, FileTime asOf) {
     long start = System.nanoTime();
     OutputFolderSync.Result r;
     try {
-      r = OutputFolderSync.publish(staged, target, files, AIProcessor::isRenderedForAiOnly, earlyPages);
-    } catch (IOException | RuntimeException e) {
+      r = OutputFolderSync.publish(staged, target, files, AIProcessor::isRenderedForAiOnly, earlyPages, since, asOf);
+    } catch (IOException e) {
       log("Unable to put the pages in " + target + " yet (it is updated when the build has finished): " + e);
       earlyPages.clear();
       return;
@@ -4861,17 +4877,6 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         + r.getWritten() + " written, " + r.getUnchanged() + " unchanged"
         + (r.getFailures().isEmpty() ? "" : ", " + r.getFailures().size() + " failed")
         + " (" + DurationUtil.presentDuration(now - start) + "). They are as Jekyll rendered them: the html checks, the packages and the qa pages follow");
-  }
-
-  private ExecutorService earlyPublisher() {
-    if (earlyPublisherThread == null) {
-      earlyPublisherThread = Executors.newSingleThreadExecutor(r -> {
-        Thread t = new Thread(r, "ig-early-publish");
-        t.setDaemon(true);
-        return t;
-      });
-    }
-    return earlyPublisherThread;
   }
 
   /**
@@ -4890,8 +4895,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     } catch (InterruptedException e) {
       Thread.currentThread().interrupt();
     } catch (ExecutionException e) {
-      log("Unable to put the pages in " + pf.watchOutputDir + " yet (it is updated when the build has finished): " + e.getCause());
+      // a bug, or an Error: it fails the build, as when the copy wasn't on a thread of its own
       earlyPages.clear();
+      Throwable cause = e.getCause();
+      if (cause instanceof Error) {
+        throw (Error) cause;
+      }
+      throw cause instanceof RuntimeException ? (RuntimeException) cause : new RuntimeException(cause);
     }
   }
 

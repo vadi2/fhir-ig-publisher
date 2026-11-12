@@ -1,6 +1,7 @@
 package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -246,6 +247,21 @@ class WatchCompleteBuildJekyllTest {
     assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
     write("temp/a.html", "a3");
     assertEquals(Arrays.asList("a.html"), g.changedSources(temp, out));
+  }
+
+  @Test
+  void whatFailsTheCopyOfThePagesFailsTheBuildWhenItWaitsForIt() {
+    PublisherGenerator g = generator(null);
+    g.startEarlyPublish(() -> {
+      throw new IllegalStateException("a bug in the copy");
+    });
+    assertThrows(IllegalStateException.class, g::awaitEarlyPublish);
+    g.startEarlyPublish(() -> {
+      throw new OutOfMemoryError("out of memory in the copy");
+    });
+    assertThrows(OutOfMemoryError.class, g::awaitEarlyPublish);
+    // and it is only thrown once
+    g.awaitEarlyPublish();
   }
 
   /** puts the pages in the output folder, and waits until they are there (the copy runs while the build goes on) */
