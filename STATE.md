@@ -168,3 +168,4 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   session (01:29). native-skip: comparing b2/n2/fresh while n3 runs (01:08). tail-restart: reruns after disk-full
   failures, ~2.5 h background wait from 01:11 (so ~03:40). All idle-with-background-work, recently active: no nudges.
   Expect native-skip and summaries-reuse PRs ~02:30-03:00, tail-restart ~04:00+.
+- 02:17 tick (cheap): no new PRs (highest 43), no head moved. All 3 were active 01:08-01:29 with background runs.
