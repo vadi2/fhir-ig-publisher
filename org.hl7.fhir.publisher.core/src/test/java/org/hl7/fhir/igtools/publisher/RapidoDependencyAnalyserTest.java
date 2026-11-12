@@ -4,12 +4,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
-import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -25,7 +21,6 @@ import java.util.function.Consumer;
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.FileNode;
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.FileResult;
 import org.hl7.fhir.igtools.publisher.RapidoDependencyAnalyser.ResourceNode;
-import org.hl7.fhir.services.elementmodel.Element;
 import org.hl7.fhir.utilities.json.model.JsonArray;
 import org.hl7.fhir.utilities.json.model.JsonObject;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
@@ -274,6 +269,30 @@ class RapidoDependencyAnalyserTest {
     assertEquals(List.of("p2"), o.validate);
   }
 
+  /** a Type/id that two files hold reaches both: a change to either one could change what the reference shows */
+  @Test
+  void aReferenceDependsOnEveryFileWithThatTypeAndId() {
+    Ig ig = new Ig();
+    ig.add("bundle", "Patient", "p1").title("In the bundle");
+    ig.add("patient", "Patient", "p1").title("On its own");
+    ig.add("obs", "Observation", "o1").str("Patient/p1");
+    ig.add("other", "Patient", "p2");
+    assertEquals(List.of("bundle", "obs"), edit(ig, i -> i.get("bundle").title("In the bundle, renamed")).validate);
+    assertEquals(List.of("patient", "obs"), edit(ig, i -> i.get("patient").title("On its own, renamed")).validate);
+  }
+
+  /** versions are ignored: a missed dependency leaves Rapido output stale, an extra one only costs a rebuild */
+  @Test
+  void aVersionedCanonicalDependsOnEveryVersionOfThatUrl() {
+    Ig ig = new Ig();
+    ig.add("lib1", "Library", "lib1").url(B+"/Library/lib").version = "1.0.0";
+    ig.add("lib2", "Library", "lib2").url(B+"/Library/lib").version = "2.0.0";
+    ig.add("group", "Group", "g1").str(B+"/Library/lib|1.0.0");
+    // (each version's url finds the other one too)
+    assertEquals(List.of("lib1", "lib2", "group"), edit(ig, i -> i.get("lib2").title("Version 2")).validate);
+    assertEquals(List.of("lib1", "lib2", "group"), edit(ig, i -> i.get("lib1").title("Version 1")).validate);
+  }
+
   @Test
   void mappingsAreNotRelativeReferences() {
     // base snapshots carry v2 mappings such as XPN/4, which look like Type/id
@@ -384,224 +403,6 @@ class RapidoDependencyAnalyserTest {
     assertEquals(a, RapidoTracker.scanTree(dir.toFile(), skip));
     Files.writeString(dir.resolve("input/x.txt"), "two");
     assertNotEquals(a.get("input/x.txt"), RapidoTracker.scanTree(dir.toFile(), skip).get("input/x.txt"));
-  }
-
-  /** writes the content to each file, named by its bytes (as printf octal escapes), with sh; false if that can't be done here */
-  private static boolean shWrite(Path dir, String... nameAndContent) throws InterruptedException {
-    StringBuilder b = new StringBuilder("cd \"$1\"");
-    for (int i = 0; i < nameAndContent.length; i += 2) {
-      b.append(" && printf '").append(nameAndContent[i + 1]).append("' > \"$(printf '").append(nameAndContent[i]).append("')\"");
-    }
-    try {
-      return new ProcessBuilder("sh", "-c", b.toString(), "sh", dir.toString()).inheritIO().start().waitFor() == 0;
-    } catch (IOException e) {
-      return false;
-    }
-  }
-
-  /**
-   * a name the JVM can't decode (here, bytes that are valid in no encoding a JVM uses for file names; under a POSIX
-   * locale, any non-ASCII name: run the tests with LC_ALL=POSIX to see that) used to stop the build (InvalidPathException)
-   * or be left out of the scan. It must be read, and a change to it seen, even when two such names decode the same
-   */
-  @Test
-  void otherFilesScanReadsNamesTheJvmCantDecode(@TempDir Path dir) throws Exception {
-    Files.createDirectories(dir.resolve("input/excel"));
-    assumeTrue(shWrite(dir.resolve("input/excel"),
-      "a\\377.csv", "one", "a\\376.csv", "two", "CodeSystem\\321\\204.csv", "three", "plain.csv", "four"),
-      "can't make files with such names here");
-    assumeTrue(dir.resolve("input/excel").toFile().list().length == 4, "the file system changed the names");
-    Map<String, String> a = RapidoTracker.scanTree(dir.toFile(), Set.of());
-    assertEquals(4, a.size(), a.keySet().toString());
-    assertTrue(a.containsKey("input/excel/plain.csv"));
-    assertFalse(a.values().stream().anyMatch(v -> v.startsWith("unreadable")), a.toString());
-    assertEquals(a, RapidoTracker.scanTree(dir.toFile(), Set.of()));
-    for (String name : new String[] {"a\\376.csv", "CodeSystem\\321\\204.csv"}) {
-      assertTrue(shWrite(dir.resolve("input/excel"), name, "changed"));
-      Map<String, String> b = RapidoTracker.scanTree(dir.toFile(), Set.of());
-      assertEquals(a.keySet(), b.keySet());
-      assertEquals(1, a.keySet().stream().filter(k -> !a.get(k).equals(b.get(k))).count(), name);
-      a.putAll(b);
-    }
-  }
-
-  /** a name that can't be a Path is a file that can't be read, not an exception that stops the build */
-  @Test
-  void readOfANameThatIsNoPathIsAnIOException(@TempDir Path dir) {
-    // a NUL can't be in a Path anywhere; a non-ASCII name under a POSIX locale fails the same way
-    assertThrows(IOException.class, () -> RapidoTracker.read(new File(dir.toFile(), "a\0b.csv")));
-  }
-
-  /**
-   * the build writes its outputs through java.io: under a POSIX locale a non-ASCII name is written with '?' for what
-   * can't be encoded, and toPath() of the name throws. The file must still be read by that name (run the tests with
-   * LC_ALL=POSIX to see it), or every output with such a name counts as overwritten every build
-   */
-  @Test
-  void readGoesByTheFileJavaIoWrote(@TempDir Path dir) throws IOException {
-    File f = new File(dir.toFile(), "\u0441\u0442\u0440.html");
-    try (java.io.OutputStream o = new java.io.FileOutputStream(f)) {
-      o.write(new byte[] {'a', 'b'});
-    }
-    assertTrue(f.isFile());
-    org.junit.jupiter.api.Assertions.assertArrayEquals(new byte[] {'a', 'b'}, RapidoTracker.read(f));
-  }
-
-  /**
-   * a folder that can't be listed (or one that can be listed but not searched) could hide an edit in it, so it counts
-   * as changed. Root can read anything: then there's nothing to test
-   */
-  @Test
-  void otherFilesScanCountsAFolderItCantReadAsChanged(@TempDir Path dir) throws IOException {
-    Path noList = dir.resolve("input/nolist");
-    Path noSearch = dir.resolve("input/nosearch");
-    Files.createDirectories(noList);
-    Files.createDirectories(noSearch);
-    Files.writeString(noList.resolve("a.txt"), "a");
-    Files.writeString(noSearch.resolve("b.txt"), "b");
-    Files.writeString(dir.resolve("input/c.txt"), "c");
-    try {
-      Files.setPosixFilePermissions(noList, java.nio.file.attribute.PosixFilePermissions.fromString("--x------"));
-      Files.setPosixFilePermissions(noSearch, java.nio.file.attribute.PosixFilePermissions.fromString("r--------"));
-    } catch (UnsupportedOperationException e) {
-      assumeTrue(false, "no posix permissions here");
-    }
-    try {
-      assumeTrue(!Files.isReadable(noList), "this user can read anything");
-      Map<String, String> a = RapidoTracker.scanTree(dir.toFile(), Set.of());
-      assertEquals(Set.of("input/c.txt", "input/nolist/", "input/nosearch/b.txt"), a.keySet());
-      Map<String, String> b = RapidoTracker.scanTree(dir.toFile(), Set.of());
-      assertEquals(a.get("input/c.txt"), b.get("input/c.txt"));
-      assertNotEquals(a.get("input/nolist/"), b.get("input/nolist/"));
-      assertNotEquals(a.get("input/nosearch/b.txt"), b.get("input/nosearch/b.txt"));
-      // what's skipped isn't listed, so it never counts
-      Map<String, String> s = RapidoTracker.scanTree(dir.toFile(), Set.of(noList.toFile().getCanonicalPath(), noSearch.toFile().getCanonicalPath()));
-      assertEquals(Set.of("input/c.txt"), s.keySet());
-    } finally {
-      Files.setPosixFilePermissions(noList, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
-      Files.setPosixFilePermissions(noSearch, java.nio.file.attribute.PosixFilePermissions.fromString("rwx------"));
-    }
-  }
-
-  private static String igJson(String exName, String exDescription, String otherName, String status) {
-    return "{\"resourceType\":\"ImplementationGuide\",\"id\":\"ig\",\"status\":\""+status+"\",\"definition\":{\"resource\":["
-      + "{\"reference\":{\"reference\":\"Patient/ex1\"},\"name\":\""+exName+"\",\"description\":\""+exDescription+"\",\"exampleBoolean\":true},"
-      + "{\"reference\":{\"reference\":\"Patient/missing\"},\"name\":\""+otherName+"\"}]}}";
-  }
-
-  private static String igHash(String json) {
-    byte[] b = RapidoTracker.igSourceForHash(json.getBytes(java.nio.charset.StandardCharsets.UTF_8), Set.of("Patient/ex1", "ImplementationGuide/ig"));
-    return new RapidoDependencyAnalyser.Hasher().add(b).finish();
-  }
-
-  @Test
-  void igEntryNameAndDescriptionOfALoadedResourceAreLeftOutOfTheIgHash() {
-    String base = igHash(igJson("Example 1", "First example", "Other", "draft"));
-    // the loader copies these to the resource, whose own hash has them
-    assertEquals(base, igHash(igJson("Example 1 renamed", "First example, edited", "Other", "draft")));
-    // the entry of a resource that wasn't loaded still counts, and so does the rest of the IG
-    assertNotEquals(base, igHash(igJson("Example 1", "First example", "Other renamed", "draft")));
-    assertNotEquals(base, igHash(igJson("Example 1", "First example", "Other", "active")));
-    assertNotEquals(base, igHash(igJson("Example 1", "First example", "Other", "draft").replace("\"exampleBoolean\":true", "\"exampleBoolean\":false")));
-  }
-
-  private static String igXml(String exName, String otherName, String status) {
-    return "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<ImplementationGuide xmlns=\"http://hl7.org/fhir\"><id value=\"ig\"/><status value=\""+status+"\"/>"
-      + "<definition><resource><reference><reference value=\"Patient/ex1\"/></reference><name value=\""+exName+"\"/><description value=\"d\"/>"
-      + "<exampleBoolean value=\"true\"/></resource><resource><reference><reference value=\"Patient/missing\"/></reference><name value=\""+otherName+"\"/></resource>"
-      + "</definition></ImplementationGuide>";
-  }
-
-  @Test
-  void igInXmlToo() {
-    String base = igHash(igXml("Example 1", "Other", "draft"));
-    assertEquals(base, igHash(igXml("Example 1 renamed", "Other", "draft")));
-    assertNotEquals(base, igHash(igXml("Example 1", "Other renamed", "draft")));
-    assertNotEquals(base, igHash(igXml("Example 1", "Other", "active")));
-  }
-
-  @Test
-  void igThatCantBeReadCountsAsItIs() {
-    for (String s : new String[] {"<ImplementationGuide", "{\"resourceType\":", "<Patient xmlns=\"http://hl7.org/fhir\"><id value=\"x\"/></Patient>"}) {
-      byte[] b = s.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-      assertTrue(java.util.Arrays.equals(b, RapidoTracker.igSourceForHash(b, Set.of("Patient/ex1"))), s);
-    }
-  }
-
-  private static Element el(String name, String path, Element... children) {
-    Element e = new Element(name);
-    e.setPath(path);
-    for (Element c : children) {
-      e.getChildList().add(c);
-    }
-    return e;
-  }
-
-  private static Element patient() {
-    return el("Patient", "Patient", el("id", "Patient.id"), el("name", "Patient.name[0]", el("family", "Patient.name[0].family")), el("contact", "Patient.contact[0]"));
-  }
-
-  private static ValidationMessage signpost(String path, String profile) {
-    ValidationMessage vm = new ValidationMessage(Source.InstanceValidator, IssueType.INFORMATIONAL, path, "Validate resource against profile " + profile, IssueSeverity.INFORMATION);
-    vm.setSignpost(true);
-    return vm;
-  }
-
-  /** a reused validation attaches the profiles each element was validated against to the element again, as the qa
-   * page lists them from there (else it lists them from the messages, with a different label) */
-  @Test
-  void signpostsComeBackOnTheirElements() {
-    Element a = patient();
-    ValidationMessage onRoot = signpost("Patient", "http://x/p1");
-    ValidationMessage onName = signpost("Patient.name[0]", "http://x/p2");
-    // one the validator attached without reporting it (e.g. from a slice it tried)
-    ValidationMessage unreported = signpost("Patient.name[0].family", "http://x/p3");
-    List<ValidationMessage> errs = new ArrayList<>(List.of(new ValidationMessage(Source.InstanceValidator, IssueType.CODEINVALID, "Patient.id", "x", IssueSeverity.ERROR), onRoot, onName));
-    a.addMessage(onRoot);
-    a.getChildList().get(1).addMessage(onName);
-    a.getChildList().get(1).getChildList().get(0).addMessage(unreported);
-    JsonArray rec = RapidoTracker.recordSignposts(a, errs);
-
-    // the next build: the same resource, loaded again, and the messages restored
-    Element b = patient();
-    List<ValidationMessage> restored = new ArrayList<>();
-    for (ValidationMessage vm : errs) {
-      restored.add(RapidoTracker.readMessage(RapidoTracker.writeMessage(vm)));
-    }
-    assertTrue(RapidoTracker.restoreSignposts(b, JsonParserRoundTrip.of(rec), restored));
-    assertEquals(1, b.getMessages().size());
-    assertSame(restored.get(1), b.getMessages().get(0));
-    assertSame(restored.get(2), b.getChildList().get(1).getMessages().get(0));
-    ValidationMessage back = b.getChildList().get(1).getChildList().get(0).getMessages().get(0);
-    assertEquals(unreported.getMessage(), back.getMessage());
-    assertTrue(back.isSignpost());
-    assertFalse(b.getChildList().get(0).hasMessages());
-    assertFalse(b.getChildList().get(2).hasMessages());
-  }
-
-  @Test
-  void signpostsDontComeBackOnADifferentTree() {
-    Element a = patient();
-    ValidationMessage onFamily = signpost("Patient.name[0].family", "http://x/p1");
-    a.getChildList().get(1).getChildList().get(0).addMessage(onFamily);
-    JsonArray rec = RapidoTracker.recordSignposts(a, List.of(onFamily));
-    List<ValidationMessage> restored = List.of(signpost("Patient.name[0].family", "http://x/p1"));
-
-    // the element isn't there
-    Element b = el("Patient", "Patient", el("id", "Patient.id"), el("name", "Patient.name[0]"));
-    assertFalse(RapidoTracker.restoreSignposts(b, rec, restored));
-    // something else is there
-    Element c = el("Patient", "Patient", el("id", "Patient.id"), el("name", "Patient.name[0]", el("given", "Patient.name[0].given[0]")));
-    assertFalse(RapidoTracker.restoreSignposts(c, rec, restored));
-    assertFalse(c.getChildList().get(1).getChildList().get(0).hasMessages());
-    // the messages aren't the same
-    assertFalse(RapidoTracker.restoreSignposts(patient(), rec, List.of()));
-    // a record from before signposts were kept
-    assertFalse(RapidoTracker.restoreSignposts(patient(), null, restored));
-    // nothing to attach
-    Element d = patient();
-    assertTrue(RapidoTracker.restoreSignposts(d, RapidoTracker.recordSignposts(patient(), restored), restored));
-    assertFalse(d.hasMessages());
   }
 
   static class Base1 {

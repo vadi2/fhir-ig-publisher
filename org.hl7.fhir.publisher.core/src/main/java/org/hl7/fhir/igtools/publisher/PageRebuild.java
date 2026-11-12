@@ -2,6 +2,7 @@ package org.hl7.fhir.igtools.publisher;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
@@ -19,6 +20,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.IdentityHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -27,6 +29,7 @@ import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.stream.Stream;
 
+import org.hl7.fhir.utilities.Utilities;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 
 /**
@@ -56,7 +59,7 @@ public class PageRebuild {
    * pages are checked against, or depend on, the resources, so a change to one is not a page-only change
    */
   private static final String[] CUSTOM_CONTENT_MARKERS = {"{% sql", "{% fragment", "{% json", "{% class-diagram", "{% uml",
-      "{% multi-map", "{% lang-fragment", "{% dataset", "{%!", "[[[", "validationRule"};
+      "{% multi-map", "{% dataset", "{%!", "[[[", "validationRule"};
 
   private static class Stamp {
     private final long size;
@@ -80,6 +83,8 @@ public class PageRebuild {
   private static boolean shutdownHookAdded;
 
   private PublisherFields pf;
+  /** see unloadContextWhenDiscarded() */
+  private boolean unloadContext;
   private String notReusable;
 
   private final List<ValidationMessage> errors = new ArrayList<>();
@@ -101,11 +106,19 @@ public class PageRebuild {
   private Map<Path, Stamp> outputAfterJekyll;
   private Path stashFolder;
   private final List<Path> stashed = new ArrayList<>();
+  // the package step's files kept as the last html check left them while Jekyll runs (see
+  // keepCheckedPackageOutputs()), and where
+  private final List<Path> checkedKept = new ArrayList<>();
+  private Path checkedFolder;
   private boolean captured;
   private boolean complete;
   // what the html checks found, and what the AI step worked out, in the last build or rebuild (for the next rebuild)
   private HtmlCheckRecords htmlRecords;
   private final AIProcessor.Cache aiCache = new AIProcessor.Cache();
+  /** the languages that the pages are also written in, from their translations if they have one */
+  private List<String> pageLanguages = Collections.emptyList();
+  /** the folders in the input folder that the template reads before Jekyll, and how */
+  private Map<String, String> folderBlockers = Collections.emptyMap();
 
   /** The fields of the build that this keeps the state of */
   public void setPf(PublisherFields pf) {
@@ -128,11 +141,32 @@ public class PageRebuild {
     return aiCache;
   }
 
+  /**
+   * The languages, other than the default one, that the build writes each page in (from the page's translation in the
+   * translation sources for the language, if there is one): an edit to a translation is then a change to the page
+   */
+  public void setPageLanguages(List<String> pageLanguages) {
+    this.pageLanguages = new ArrayList<>(pageLanguages);
+  }
+
+  /**
+   * The folders in the input folder that the template's scripts read before Jekyll (see
+   * Template.pageFolderBlockers()): a change to a file in one of them isn't a page-only change
+   */
+  public void setFolderBlockers(Map<String, String> folderBlockers) {
+    this.folderBlockers = new HashMap<>(folderBlockers);
+  }
+
   /** Why the build's state can't be reused for a page-only rebuild, if it can't */
   public void notReusable(String reason) {
     if (notReusable == null) {
       notReusable = reason;
     }
+  }
+
+  /** False if the build has already found why its state can't be reused */
+  public boolean mayBeReusable() {
+    return notReusable == null;
   }
 
   public String getNotReusable() {
@@ -229,7 +263,7 @@ public class PageRebuild {
   /** Called just before Jekyll runs */
   public void beforeJekyll() throws IOException {
     tempFolders = new HashSet<>();
-    tempFiles = list(Paths.get(pf.tempDir), tempFolders);
+    tempFiles = listTemp(tempFolders);
   }
 
   /** Called when Jekyll has run, before the package step writes its files to the output folder */
@@ -303,12 +337,45 @@ public class PageRebuild {
     List<FetchedFile> res = new ArrayList<>();
     for (Path p : changes.getModified()) {
       String path = new File(p.toString()).getCanonicalPath();
+      if (isResourceTranslation(path)) {
+        reason.add(p + " is read as a translation of the resources" + (!translatedPages(path).isEmpty() ? ", and of a page" : ""));
+        return null;
+      }
       FetchedFile f = pf.altMap.get("page/" + path);
       if (f == null) {
         f = pf.altMap.get("pre-page/" + path);
       }
+      if (f != null && inPageTranslations(path)) {
+        // the build writes another page from it too
+        reason.add(p + " is both a page and in the translations of the pages");
+        return null;
+      }
+      if (f == null) {
+        List<FetchedFile> pages = translatedPages(path);
+        if (pages.size() > 1) {
+          reason.add(p + " is the translation of " + pages.size() + " pages");
+          return null;
+        }
+        // (the build doesn't translate the template's pages)
+        f = pages.isEmpty() || isTemplatePage(pages.get(0)) ? null : pages.get(0);
+        if (f == null && inPageTranslations(path)) {
+          reason.add(p + " is not the translation of a page");
+          return null;
+        }
+      }
       if (f == null || f.isFolder() || !pf.fileList.contains(f)) {
         reason.add(p + " is not a page");
+        return null;
+      }
+      String blocker = folderBlocker(path);
+      if (blocker != null) {
+        reason.add(p + " is in a folder that " + blocker);
+        return null;
+      }
+      // for an edit to a translation, the page's own source too
+      blocker = folderBlocker(new File(f.getPath()).getCanonicalPath());
+      if (blocker != null) {
+        reason.add(p + " is the translation of a page in a folder that " + blocker);
         return null;
       }
       for (FetchedFile.Output o : f.getOutputs()) {
@@ -335,6 +402,83 @@ public class PageRebuild {
       }
     }
     return res;
+  }
+
+  /**
+   * Whether the file is directly in a translation source: the build reads those as translations of the resources (see
+   * PublisherIGLoader.findTranslations() and loadTranslationSupplements())
+   */
+  private boolean isResourceTranslation(String path) throws IOException {
+    String parent = new File(path).getParent();
+    for (String ts : pf.translationSources) {
+      if (new File(Utilities.path(pf.rootDir, ts)).getCanonicalPath().equals(parent)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /** Whether the file is in a translation source that the pages are translated from */
+  private boolean inPageTranslations(String path) throws IOException {
+    for (String l : pageLanguages) {
+      for (String ts : pf.translationSourcesFor(l)) {
+        if (isInFolder(path, Collections.singletonList(Utilities.path(pf.rootDir, ts)))) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  /**
+   * The pages that the file is the translation of, if it is one: the build writes each page in each language from where
+   * it is in the language's translation sources, if it is there (see PublisherGenerator.loadTranslationSource())
+   */
+  private List<FetchedFile> translatedPages(String path) throws IOException {
+    String name = new File(path).getName();
+    Set<FetchedFile> res = new LinkedHashSet<>();
+    for (String l : pageLanguages) {
+      for (String ts : pf.translationSourcesFor(l)) {
+        for (FetchedFile f : pf.fileList) {
+          if (f.getLoadPath() != null && name.equals(new File(f.getLoadPath()).getName()) && isPage(f)
+              && new File(Utilities.path(pf.rootDir, ts, f.getLoadPath())).getCanonicalPath().equals(path)) {
+            // (pages from outside the input folder are found by their name alone: more than one may have it)
+            res.add(f);
+          }
+        }
+      }
+    }
+    return new ArrayList<>(res);
+  }
+
+  private static boolean isTemplatePage(FetchedFile f) {
+    return f.getStatedPath() != null && f.getStatedPath().contains(File.separator + "template" + File.separator);
+  }
+
+  private boolean isPage(FetchedFile f) {
+    return pf.altMap.get("page/" + f.getPath()) == f || pf.altMap.get("pre-page/" + f.getPath()) == f;
+  }
+
+  /**
+   * How the template reads a folder that the file is in, if it does: any folder on its path from the IG's folder that
+   * has the name of one the template reads (so the same folder in a translation source too, e.g.
+   * input/translations/ru/includes)
+   */
+  private String folderBlocker(String path) throws IOException {
+    if (folderBlockers.isEmpty()) {
+      return null;
+    }
+    String root = new File(pf.rootDir).getCanonicalPath() + File.separator;
+    String rest = path.startsWith(root) ? path.substring(root.length()) : path;
+    String[] parts = rest.split(java.util.regex.Pattern.quote(File.separator));
+    // the folders the file is in, and the file itself (a script can name a file in the input folder)
+    for (int i = 0; i < parts.length; i++) {
+      String blocker = folderBlockers.get(parts[i]);
+      if (blocker != null) {
+        return blocker;
+      }
+    }
+    return null;
   }
 
   private static boolean isInFolder(String path, Collection<String> folders) throws IOException {
@@ -406,7 +550,7 @@ public class PageRebuild {
       tempFiles.put(rel, st);
     }
     Set<Path> folders = new HashSet<>();
-    Map<Path, Stamp> now = list(temp, folders);
+    Map<Path, Stamp> now = listTemp(folders);
     for (Map.Entry<Path, Stamp> e : tempFiles.entrySet()) {
       if (!e.getValue().sameAs(now.get(e.getKey()))) {
         throw new IOException("The temp file " + e.getKey() + " was changed or removed since the last build");
@@ -440,6 +584,86 @@ public class PageRebuild {
     }
   }
 
+  /**
+   * Before Jekyll runs in a rebuild: moves aside the package step's files that are as the last html check left them
+   * (Jekyll deletes them, and restorePackageOutputs() puts back copies of what the package step wrote), so that they
+   * can be put back instead (see putBackCheckedPackageOutputs()), and what the check found in them reused (a move
+   * keeps the modified time, which the check's records go by)
+   */
+  public void keepCheckedPackageOutputs() throws IOException {
+    dropCheckedPackageOutputs();
+    if (htmlRecords == null) {
+      return;
+    }
+    Path out = Paths.get(pf.outputDir);
+    for (Path p : stashed) {
+      Path f = out.resolve(p).toAbsolutePath();
+      HtmlCheckRecords.FileRecord r = htmlRecords.files.get(f.toString());
+      if (r != null && r.sameStamp() && Files.isRegularFile(f)) {
+        if (checkedFolder == null) {
+          // next to the output folder, so that the files are moved, not copied
+          checkedFolder = Files.createTempDirectory(out.toAbsolutePath().getParent(), ".package-checked-");
+        }
+        Path to = checkedFolder.resolve(p);
+        Files.createDirectories(to.getParent());
+        Files.move(f, to);
+        checkedKept.add(p);
+      }
+    }
+  }
+
+  /**
+   * After restorePackageOutputs(), when the html check is to go by what it found last time: puts the files that
+   * keepCheckedPackageOutputs() moved aside back over the copies. Returns them (as getPackageOutputs() does)
+   */
+  public List<String> putBackCheckedPackageOutputs() throws IOException {
+    List<String> res = new ArrayList<>();
+    Path out = Paths.get(pf.outputDir);
+    for (Path p : new ArrayList<>(checkedKept)) {
+      Files.move(checkedFolder.resolve(p), out.resolve(p), StandardCopyOption.REPLACE_EXISTING);
+      checkedKept.remove(p);
+      res.add(out.resolve(p).toAbsolutePath().toString());
+    }
+    return res;
+  }
+
+  /**
+   * Deletes what keepCheckedPackageOutputs() moved aside and wasn't put back: where the copies of what the package
+   * step wrote are, they stay; where nothing is (the rebuild stopped before they were put back), the files go back as
+   * they were. Never throws: it runs in a finally, and must not hide why that ran
+   */
+  public void dropCheckedPackageOutputs() {
+    if (checkedFolder == null) {
+      return;
+    }
+    Path out = Paths.get(pf.outputDir);
+    for (Path p : checkedKept) {
+      try {
+        if (!Files.exists(out.resolve(p))) {
+          Files.createDirectories(out.resolve(p).getParent());
+          Files.move(checkedFolder.resolve(p), out.resolve(p));
+        }
+      } catch (IOException e) {
+        log("Unable to put back " + out.resolve(p) + ": " + e.getMessage());
+      }
+    }
+    checkedKept.clear();
+    delete(checkedFolder);
+    if (Files.exists(checkedFolder)) {
+      // (it's next to the output folder, not in the system temp folder)
+      log("Unable to delete " + checkedFolder);
+    }
+    checkedFolder = null;
+  }
+
+  private void log(String msg) {
+    if (pf.logger != null) {
+      pf.logger.logMessage(msg);
+    } else {
+      System.out.println(msg);
+    }
+  }
+
   /** The files in the output folder that restorePackageOutputs() puts back */
   public List<String> getPackageOutputs() {
     List<String> res = new ArrayList<>();
@@ -464,11 +688,26 @@ public class PageRebuild {
     return true;
   }
 
-  /** Deletes the copies of the package files */
+  /**
+   * The build left its context loaded for the html checks of a page rebuild (a complete build unloads it once its
+   * checks are done): discard() unloads it
+   */
+  public void unloadContextWhenDiscarded() {
+    unloadContext = true;
+  }
+
+  /** Deletes the copies of the package files, and unloads the context if the build left it loaded for a page rebuild */
   public void discard() {
+    if (unloadContext) {
+      unloadContext = false;
+      if (pf != null && pf.context != null) {
+        pf.context.unload();
+      }
+    }
     if (stashFolder != null) {
-      delete(stashFolder);
-      STASHES.remove(stashFolder);
+      if (delete(stashFolder)) {
+        STASHES.remove(stashFolder);
+      }
       stashFolder = null;
     }
   }
@@ -481,12 +720,18 @@ public class PageRebuild {
     }
   }
 
-  private static void delete(Path folder) {
+  /** True if the folder is gone. It's in the system temp folder: if it can't be deleted, that's only reported */
+  private static boolean delete(Path folder) {
     try (Stream<Path> s = Files.walk(folder)) {
       s.sorted(Comparator.reverseOrder()).forEach(p -> p.toFile().delete());
-    } catch (IOException e) {
-      // nothing: it's in the system temp folder
+    } catch (IOException | UncheckedIOException e) {
+      // reported below
     }
+    if (Files.exists(folder)) {
+      System.out.println("Unable to delete the temporary folder " + folder);
+      return false;
+    }
+    return true;
   }
 
   // --- utilities -----------------------------------------------------------------------------------------------------
@@ -499,10 +744,36 @@ public class PageRebuild {
     return new Stamp(a.size(), a.lastModifiedTime());
   }
 
+  /**
+   * The files in the temp folder that Jekyll reads (see list()): not Rapido's state (see RapidoTracker), which each build
+   * saves after Jekyll has run, a page rebuild too, nor, in watch mode, the staging folder the build writes its output
+   * to (see PublisherIGLoader.setUpWatchOutput()), which the sync empties of what it moves into the output folder
+   */
+  private Map<Path, Stamp> listTemp(Set<Path> folders) throws IOException {
+    Path temp = Paths.get(pf.tempDir);
+    Set<Path> skip = new HashSet<>();
+    skip.add(temp.resolve(RAPIDO_STATE).toAbsolutePath().normalize());
+    skip.add(Paths.get(pf.outputDir).toAbsolutePath().normalize());
+    // Jekyll's cache (the temp folder is its source): Jekyll checks what it finds there itself, and writes it all again
+    // when its configuration changed since the last run (e.g. a build without -watch, which writes to another folder),
+    // so it is neither what Jekyll saw nor something to remove
+    skip.add(temp.resolve(JEKYLL_CACHE).toAbsolutePath().normalize());
+    return list(temp, folders, skip);
+  }
+
+  private static final String JEKYLL_CACHE = ".jekyll-cache";
+
   private static final String RAPIDO_STATE = "_rapido";
 
-  /** The files under root (relative to it) with their size and modified time; and the folders, if folders isn't null */
   private static Map<Path, Stamp> list(Path root, Set<Path> folders) throws IOException {
+    return list(root, folders, Collections.emptySet());
+  }
+
+  /**
+   * The files under root (relative to it) with their size and modified time; and the folders, if folders isn't null.
+   * The folders in skip (absolute and normalized) are left out
+   */
+  private static Map<Path, Stamp> list(Path root, Set<Path> folders, Set<Path> skip) throws IOException {
     Map<Path, Stamp> res = new HashMap<>();
     if (!Files.isDirectory(root)) {
       return res;
@@ -510,9 +781,7 @@ public class PageRebuild {
     Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
       @Override
       public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-        if (dir.equals(root.resolve(RAPIDO_STATE))) {
-          // Rapido's state (see RapidoTracker, StaleTempFiles), which Jekyll doesn't read: each build saves it after
-          // Jekyll has run, a page rebuild too
+        if (!skip.isEmpty() && skip.contains(dir.toAbsolutePath().normalize())) {
           return FileVisitResult.SKIP_SUBTREE;
         }
         if (folders != null && !dir.equals(root)) {

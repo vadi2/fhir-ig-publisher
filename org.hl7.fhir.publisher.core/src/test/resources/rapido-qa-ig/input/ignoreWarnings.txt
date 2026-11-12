@@ -1,7 +1,0 @@
-== Suppressed Messages ==
-
-# terminology resources without an OID
-%should have an OID assigned%
-
-# the profile binds to the experimental value set
-%experimental, but this structure is not labeled as experimental%

@@ -2,6 +2,7 @@ package org.hl7.fhir.igtools.spreadsheets;
 
 import static org.junit.jupiter.api.Assertions.assertArrayEquals;
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -15,6 +16,8 @@ import static org.mockito.Mockito.when;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.lang.reflect.Field;
+import java.lang.reflect.Modifier;
 import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -45,8 +48,10 @@ import org.hl7.fhir.model.core.StructureDefinition;
 import org.hl7.fhir.model.core.StructureDefinition.StructureDefinitionKind;
 import org.hl7.fhir.model.core.StructureDefinition.TypeDerivationRule;
 import org.hl7.fhir.services.context.IWorkerContext;
+import org.hl7.fhir.services.renderers.DataRenderer;
 import org.hl7.fhir.services.renderers.RendererFactory;
 import org.hl7.fhir.services.renderers.spreadsheets.StructureDefinitionSpreadsheetGenerator;
+import org.hl7.fhir.services.renderers.utils.RenderingContext;
 import org.hl7.fhir.services.terminology.ValidationResult;
 import org.hl7.fhir.utilities.validation.ValidationOptions;
 import org.junit.jupiter.api.BeforeEach;
@@ -269,6 +274,45 @@ class ProfileSpreadsheetGeneratorTest {
   }
 
   @Test
+  void concurrentWorkbooksMatchCore() throws Exception {
+    // as in a build with -threads: workers build detached profile workbooks while this thread builds the
+    // all-profiles workbook, all sharing one width cache
+    List<StructureDefinition> profiles = new ArrayList<>();
+    List<byte[]> expected = new ArrayList<>();
+    StructureDefinitionSpreadsheetGenerator c = new StructureDefinitionSpreadsheetGenerator(worker, true, false, rf);
+    for (int p = 0; p < 12; p++) {
+      StructureDefinition sd = profile("c" + p, 20 + p, 30 + 5 * p, p % 3);
+      profiles.add(sd);
+      expected.add(core(sd, true));
+      c.renderStructureDefinition(sd, true);
+    }
+    c.configure();
+    ByteArrayOutputStream bc = new ByteArrayOutputStream();
+    c.finish(bc);
+
+    ColumnWidthCache widths = new ColumnWidthCache();
+    ProfileSpreadsheetGenerator all = new ProfileSpreadsheetGenerator(worker, true, false, rf, widths);
+    try (ProfileSpreadsheetPrefetcher<StructureDefinition> p = new ProfileSpreadsheetPrefetcher<>(profiles, 4, sd -> {
+      ProfileSpreadsheetGenerator g = new ProfileSpreadsheetGenerator(worker, true, true, rf, widths);
+      StructureDefinition copy = sd.copy(Base.COPY_ALL);
+      g.detachFromContext(copy);
+      return ProfileSpreadsheetPrefetcher.job(g, copy);
+    })) {
+      for (int i = 0; i < profiles.size(); i++) {
+        all.renderStructureDefinition(profiles.get(i), true);
+        byte[] actual = p.take(profiles.get(i));
+        assertTrue(actual != null, "built ahead: " + p.getFirstFailure());
+        assertSameWorkbook(expected.get(i), actual);
+      }
+      assertEquals(0, p.getFallbacks());
+    }
+    all.configure();
+    ByteArrayOutputStream bo = new ByteArrayOutputStream();
+    all.finish(bo);
+    assertSameWorkbook(bc.toByteArray(), bo.toByteArray());
+  }
+
+  @Test
   void titleCountMatchesCore() throws Exception {
     // the header row of a profile without mappings has exactly one cell per title
     try (XSSFWorkbook wb = new XSSFWorkbook(new ByteArrayInputStream(core(profile("t", 1, 3, 0), false)))) {
@@ -284,7 +328,7 @@ class ProfileSpreadsheetGeneratorTest {
 
     ProfileSpreadsheetGenerator g = new ProfileSpreadsheetGenerator(worker, true, true, rf, new ColumnWidthCache());
     StructureDefinition copy = sd.copy(Base.COPY_ALL);
-    g.precomputeDisplays(copy);
+    g.detachFromContext(copy);
     clearInvocations(worker);
     byte[] actual = ProfileSpreadsheetPrefetcher.job(g, copy).render();
     verifyNoInteractions(worker);
@@ -294,10 +338,38 @@ class ProfileSpreadsheetGeneratorTest {
   }
 
   @Test
+  void detachedGeneratorHoldsNoContext() throws Exception {
+    ProfileSpreadsheetGenerator g = new ProfileSpreadsheetGenerator(worker, true, true, rf, new ColumnWidthCache());
+    assertTrue(referencesContext(g), "guards the check itself");
+    g.detachFromContext(profile("d", 7, 5, 0).copy(Base.COPY_ALL));
+    assertFalse(referencesContext(g));
+  }
+
+  /** whether g, or its data renderer, has a field that holds the worker context, the renderer factory or a rendering context */
+  private boolean referencesContext(Object g) throws IllegalAccessException {
+    for (Class<?> c = g.getClass(); c != null && c != Object.class; c = c.getSuperclass()) {
+      for (Field f : c.getDeclaredFields()) {
+        if (Modifier.isStatic(f.getModifiers())) {
+          continue;
+        }
+        f.setAccessible(true);
+        Object v = f.get(g);
+        if (v == worker || v == rf || v instanceof RenderingContext) {
+          return true;
+        }
+        if (v instanceof DataRenderer && referencesContext(v)) {
+          return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  @Test
   void precomputedDisplaysRefuseOtherObjects() throws Exception {
     StructureDefinition sd = profile("d", 6, 5, 0);
     ProfileSpreadsheetGenerator g = new ProfileSpreadsheetGenerator(worker, true, true, rf, new ColumnWidthCache());
-    g.precomputeDisplays(sd.copy(Base.COPY_ALL));
+    g.detachFromContext(sd.copy(Base.COPY_ALL));
     // the original's identifiers are other objects than the copy's, so rendering the original must not silently work
     assertThrows(IllegalStateException.class, () -> g.renderStructureDefinition(sd, false));
   }

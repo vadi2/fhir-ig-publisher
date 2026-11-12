@@ -61,6 +61,9 @@ public class FullIgZip {
   private static final int LOCHDR = 30;
   // a file whose inode change time is this close to now may change again without a change of that time
   private static final long RACY_MILLIS = 2000;
+  // the most bytes of files being read and compressed, or compressed and waiting to be written, at a time; a bigger
+  // file goes on its own. A file takes about three times its size while it is compressed
+  private static final long MAX_IN_FLIGHT = 64L << 20;
 
   /** What the zip holds for one file, and where its compressed data is in the zip */
   private static final class Entry {
@@ -86,6 +89,8 @@ public class FullIgZip {
 
   private final LongSupplier clock;
   private final int threads;
+  private final long maxInFlight;
+  private long peakInFlight;
   private Map<String, Entry> last = new HashMap<>();
   private Path lastZip;
   private int reused;
@@ -95,8 +100,13 @@ public class FullIgZip {
   }
 
   FullIgZip(LongSupplier clock, int threads) {
+    this(clock, threads, MAX_IN_FLIGHT);
+  }
+
+  FullIgZip(LongSupplier clock, int threads, long maxInFlight) {
     this.clock = clock;
     this.threads = threads;
+    this.maxInFlight = maxInFlight;
   }
 
   /** How many files the last write() took from the zip before */
@@ -128,15 +138,28 @@ public class FullIgZip {
          FileChannel channel = FileChannel.open(out, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE)) {
       Writer w = new Writer(channel, previous);
       Deque<Future<Entry>> pending = new ArrayDeque<>();
+      Deque<Long> pendingSizes = new ArrayDeque<>();
+      long inFlight = 0;
+      peakInFlight = 0;
       int next = 0;
       int window = threads * 8;
       while (next < files.size() || !pending.isEmpty()) {
         while (next < files.size() && pending.size() < window) {
-          String[] f = files.get(next++);
+          String[] f = files.get(next);
+          File file = new File(f[1]);
+          long size = file.length();
+          if (!pending.isEmpty() && inFlight + size > maxInFlight) {
+            break;
+          }
+          next++;
           Entry old = previous == null ? null : last.get(f[0]);
-          pending.add(pool.submit(() -> prepare(f[0], new File(f[1]), old)));
+          pending.add(pool.submit(() -> prepare(f[0], file, old)));
+          pendingSizes.add(size);
+          inFlight += size;
+          peakInFlight = Math.max(peakInFlight, inFlight);
         }
         Entry e = get(pending.removeFirst());
+        inFlight -= pendingSizes.removeFirst();
         if (now.containsKey(e.name)) {
           throw new ZipException("duplicate entry: " + e.name);
         }
@@ -180,7 +203,13 @@ public class FullIgZip {
       lastZip = Files.createTempFile("ig-full-zip-", ".zip");
       lastZip.toFile().deleteOnExit();
     }
-    Files.copy(zip, lastZip, StandardCopyOption.REPLACE_EXISTING);
+    try {
+      Files.copy(zip, lastZip, StandardCopyOption.REPLACE_EXISTING);
+    } catch (IOException | RuntimeException e) {
+      // a part copy must not be read again
+      forget();
+      throw e;
+    }
     last = entries;
   }
 
@@ -345,7 +374,11 @@ public class FullIgZip {
         long pos = e.dataOffset;
         long end = pos + e.csize;
         while (pos < end) {
-          pos += previous.transferTo(pos, end - pos, channel);
+          long n = previous.transferTo(pos, end - pos, channel);
+          if (n <= 0) {
+            throw new IOException("The last zip is shorter than expected");
+          }
+          pos += n;
         }
         written += e.csize;
         reused++;
@@ -433,6 +466,11 @@ public class FullIgZip {
     }
     return (year << 25 | d.getMonthValue() << 21 | d.getDayOfMonth() << 16 | d.getHour() << 11 | d.getMinute() << 5
         | d.getSecond() >> 1);
+  }
+
+  /** for tests: the most bytes of files in flight at a time in the last write() */
+  long peakInFlight() {
+    return peakInFlight;
   }
 
   /** for tests: the names of the entries of the last zip written */

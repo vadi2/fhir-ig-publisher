@@ -14,10 +14,12 @@ import java.util.AbstractList;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.TreeSet;
 
 import org.hl7.fhir.igtools.publisher.HTMLInspector.ExternalReferenceType;
 import org.hl7.fhir.igtools.publisher.HTMLInspector.LoadedFile;
@@ -85,8 +87,8 @@ class HtmlCheckRecords {
     List<ExternalRef> externalRefs;
     // the files whose existence the check asked about, and the answer
     Map<String, Boolean> exists;
-    // the files the check looked up in what was loaded, and what was found (null: nothing)
-    Map<String, LoadedFile> lookups;
+    // the files the check looked up in what was loaded, and what it used of what was found
+    Map<String, LookupUse> lookups;
     // the file's size and time when the check had finished
     long size = -1;
     long modifiedTime;
@@ -146,13 +148,17 @@ class HtmlCheckRecords {
       exists.put(path, result);
     }
 
-    void addLookup(String path, LoadedFile result) {
+    /** Records that the check looked up path and found result (null: nothing); what it then used of it goes in the result */
+    LookupUse addLookup(String path, LoadedFile result) {
       if (lookups == null) {
         lookups = new HashMap<>();
       }
-      if (!lookups.containsKey(path)) {
-        lookups.put(path, result);
+      LookupUse res = lookups.get(path);
+      if (res == null) {
+        res = new LookupUse(result);
+        lookups.put(path, res);
       }
+      return res;
     }
 
     void stamp() {
@@ -164,6 +170,69 @@ class HtmlCheckRecords {
     boolean sameStamp() {
       File f = new File(loaded.getFilename());
       return size >= 0 && f.isFile() && f.length() == size && f.lastModified() == modifiedTime;
+    }
+  }
+
+  /**
+   * What the link checks of a file used of a file they looked up: whether it's there, and, for a link to an anchor in it,
+   * whether it's a language redirect, and whether it has the anchor; if it doesn't, the message lists its anchors, so all
+   * of them. The rest (e.g. the anchors that a page that links to the file without an anchor doesn't use) can change
+   * without changing what the check finds
+   */
+  static final class LookupUse {
+    final LoadedFile found;
+    // whether the check asked if it's a language redirect, and the answer (null: it didn't)
+    Boolean langRedirect;
+    // the anchors the check found in it (null: none)
+    Set<String> anchorsFound;
+    // whether the check used all its anchors, in order (it looked for one that isn't there)
+    boolean allAnchors;
+
+    LookupUse(LoadedFile found) {
+      this.found = found;
+    }
+
+    /** Records that the check asked whether the file found is a language redirect */
+    void usedLangRedirect() {
+      if (langRedirect == null) {
+        langRedirect = found.isLangRedirect();
+      }
+    }
+
+    /** Records that the check looked for the anchor in the file found, and whether it's there */
+    void usedAnchor(String name, boolean there) {
+      if (!there) {
+        allAnchors = true;
+      } else {
+        if (anchorsFound == null) {
+          anchorsFound = new HashSet<>();
+        }
+        anchorsFound.add(name);
+      }
+    }
+
+    /**
+     * How what a lookup finds now (now) is different from what the check used, for the log; null if it would find the
+     * same
+     */
+    String difference(LoadedFile now) {
+      if (found == null || now == null) {
+        return found == now ? null : lookupDifference(found, now);
+      }
+      if (langRedirect != null && langRedirect != now.isLangRedirect()) {
+        return lookupDifference(found, now);
+      }
+      if (allAnchors && !sameLookup(found, now)) {
+        return lookupDifference(found, now);
+      }
+      if (anchorsFound != null) {
+        for (String a : new TreeSet<>(anchorsFound)) {
+          if (!now.getTargets().contains(a)) {
+            return "no longer has the anchor " + a;
+          }
+        }
+      }
+      return null;
     }
   }
 
@@ -220,6 +289,8 @@ class HtmlCheckRecords {
   }
 
   private final String signature;
+  // what the signature is made of, by name (for the log)
+  private final Map<String, String> signatureParts;
   private String notUsable;
   final Map<String, FileRecord> files = new HashMap<>();
   // the files and folders in the output when the files were checked, and whether there were links among them
@@ -228,10 +299,36 @@ class HtmlCheckRecords {
 
   HtmlCheckRecords(String signature) {
     this.signature = signature;
+    this.signatureParts = null;
+  }
+
+  HtmlCheckRecords(Map<String, String> signatureParts) {
+    this.signature = signatureParts.toString();
+    this.signatureParts = signatureParts;
   }
 
   String getSignature() {
     return signature;
+  }
+
+  Map<String, String> getSignatureParts() {
+    return signatureParts;
+  }
+
+  /** The names of the parts of two signatures that are different (for the log) */
+  static String differences(Map<String, String> a, Map<String, String> b) {
+    if (a == null || b == null) {
+      return "not recorded";
+    }
+    List<String> res = new ArrayList<>();
+    Set<String> names = new LinkedHashSet<>(a.keySet());
+    names.addAll(b.keySet());
+    for (String n : names) {
+      if (!Objects.equals(a.get(n), b.get(n))) {
+        res.add(n);
+      }
+    }
+    return res.isEmpty() ? "nothing differs" : String.join(", ", res);
   }
 
   void notUsable(String reason) {
@@ -281,6 +378,33 @@ class HtmlCheckRecords {
       }
     });
     return res;
+  }
+
+  /** How what the lookup finds is different from what the check found (see sameLookup()), for the log */
+  static String lookupDifference(LoadedFile a, LoadedFile b) {
+    if (a == null) {
+      return "is there now";
+    }
+    if (b == null) {
+      return "is no longer there";
+    }
+    if (a.isLangRedirect() != b.isLangRedirect()) {
+      return b.isLangRedirect() ? "is a language redirect now" : "is no longer a language redirect";
+    }
+    Set<String> added = new TreeSet<>(b.getTargets());
+    added.removeAll(a.getTargets());
+    Set<String> gone = new TreeSet<>(a.getTargets());
+    gone.removeAll(b.getTargets());
+    if (added.isEmpty() && gone.isEmpty()) {
+      return "has the same " + a.getTargets().size() + " anchors in a different order";
+    }
+    return "has " + (added.isEmpty() ? "" : anchors(added.size(), "more") + " (e.g. " + added.iterator().next() + ")")
+        + (added.isEmpty() || gone.isEmpty() ? "" : " and ")
+        + (gone.isEmpty() ? "" : anchors(gone.size(), "fewer") + " (e.g. " + gone.iterator().next() + ")");
+  }
+
+  private static String anchors(int n, String how) {
+    return n + " " + how + (n == 1 ? " anchor" : " anchors");
   }
 
   /**

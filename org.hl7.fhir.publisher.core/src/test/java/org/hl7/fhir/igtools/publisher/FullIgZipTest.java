@@ -79,6 +79,29 @@ class FullIgZipTest {
   }
 
   @Test
+  void theFilesInFlightStayWithinTheBudget() throws IOException {
+    FullIgZip small = new FullIgZip(() -> System.currentTimeMillis() + 60_000, 3, 100_000);
+    Path site = dir.resolve("site");
+    Files.createDirectories(site);
+    Random r = new Random(7);
+    for (int i = 0; i < 10; i++) {
+      byte[] b = new byte[60_000];
+      r.nextBytes(b);
+      Files.write(site.resolve("part" + i + ".bin"), b);
+    }
+    byte[] big = new byte[300_000];
+    r.nextBytes(big);
+    Files.write(site.resolve("big.bin"), big);
+    Path z = dir.resolve("z.zip");
+    assertTrue(small.write(z.toString(), site.toString(), "site/", "index.html", REDIRECT.getBytes(StandardCharsets.UTF_8)));
+    // two parts would be over the budget, so they go one at a time; the big file goes on its own
+    assertEquals(300_000, small.peakInFlight());
+    Path ref = dir.resolve("ref.zip");
+    stock(site, ref);
+    assertArrayEquals(withoutTimes(Files.readAllBytes(ref)), withoutTimes(Files.readAllBytes(z)));
+  }
+
+  @Test
   void duplicateNameFails() throws IOException {
     Path site = dir.resolve("site");
     Files.createDirectories(site);

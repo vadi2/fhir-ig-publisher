@@ -25,8 +25,9 @@ import org.hl7.fhir.igtools.templates.Template;
  *   <li>the source files as the last SUSHI run saw them, so SUSHI is not run again when only page content changed</li>
  * </ul>
  *
- * A rebuild is a complete build, except when only the content of plain pages changed: then the pages are rendered again
- * on top of what the last build left (see PageRebuild).
+ * What a rebuild reuses is decided by -rapido, as for any build: the validation and generated outputs of the files
+ * that neither changed nor depend on (or are used by) one that did. When only the content of plain pages changed, the
+ * pages are rendered again on top of what the last build left instead (see PageRebuild).
  */
 public class WatchSession {
 
@@ -42,11 +43,15 @@ public class WatchSession {
   private final List<Path> watched;
   /** the local template folders watched, which SUSHI doesn't read */
   private final List<Path> templateFolders = new ArrayList<>();
+  /** what isn't read in the template folders: the template is loaded without them (see TemplateManager) */
+  private final Set<Path> excluded = new HashSet<>();
   /** folders watched since the file monitor was made */
   private final List<Path> notMonitored = new ArrayList<>();
 
   private SourceSnapshot buildStart;
   private SourceSnapshot previousBuildStart;
+  /** the watched files when the last build failed (null if it didn't) */
+  private SourceSnapshot afterFailure;
   private SourceSnapshot sushiInputs;
   /** while the template writes to its folder, the folder as it was before */
   private OutputWindow output;
@@ -96,10 +101,15 @@ public class WatchSession {
     }
   }
 
+  private SourceSnapshot take(Collection<Path> roots, SourceSnapshot previous) throws IOException {
+    return SourceSnapshot.take(roots, previous, excluded);
+  }
+
   /** Records the content of the watched files as the build that is starting will see them */
   public void startBuild() throws IOException {
     previousBuildStart = buildStart;
-    buildStart = SourceSnapshot.take(watched, buildStart);
+    afterFailure = null;
+    buildStart = take(watched, buildStart);
     countWhatStartedThisBuild(previousBuildStart);
   }
 
@@ -153,9 +163,11 @@ public class WatchSession {
       }
       watched.add(p);
       templateFolders.add(p);
+      excluded.add(p.resolve(".git"));
+      excluded.add(p.resolve("output"));
       notMonitored.add(p);
       if (buildStart != null) {
-        buildStart = buildStart.withTree(p, SourceSnapshot.take(Collections.singletonList(p), null));
+        buildStart = buildStart.withTree(p, take(Collections.singletonList(p), null));
       }
     }
   }
@@ -195,7 +207,7 @@ public class WatchSession {
     Path p = folder.toAbsolutePath().normalize();
     output = null;
     if (buildStart != null && isWatched(p)) {
-      output = new OutputWindow(p, window, managed, SourceSnapshot.take(Collections.singletonList(p), buildStart));
+      output = new OutputWindow(p, window, managed, take(Collections.singletonList(p), buildStart));
     }
   }
 
@@ -214,7 +226,7 @@ public class WatchSession {
     if (w == null || buildStart == null) {
       return;
     }
-    SourceSnapshot after = SourceSnapshot.take(Collections.singletonList(w.folder), w.before);
+    SourceSnapshot after = take(Collections.singletonList(w.folder), w.before);
     Set<Path> changed = after.changesSince(w.before).all();
     Set<Path> always = alwaysWritten.computeIfAbsent(w.name, k -> new HashSet<>());
     Map<Path, Integer> started = startedBuilds.getOrDefault(w.name, Collections.emptyMap());
@@ -275,9 +287,32 @@ public class WatchSession {
     return res;
   }
 
+  /**
+   * The build wrote these files (e.g. a module's pre-processing, in input): as they are now, they are part of the
+   * build's sources, not a change that needs another build
+   */
+  public void buildWrote(Collection<Path> files) throws IOException {
+    if (buildStart != null && !files.isEmpty()) {
+      buildStart = buildStart.withFiles(files, take(files, buildStart));
+    }
+  }
+
+  /**
+   * The build failed. It may have failed for a reason outside the sources (a server that couldn't be reached, a
+   * timeout), so saving a file, even without changing it, builds again: see savedSinceFailure()
+   */
+  public void buildFailed() throws IOException {
+    afterFailure = take(watched, buildStart);
+  }
+
+  /** Whether a watched file was saved since the last build failed (false if it didn't fail) */
+  public boolean savedSinceFailure() throws IOException {
+    return afterFailure != null && take(watched, afterFailure).savedSince(afterFailure);
+  }
+
   /** What changed in the watched files since the current (or last) build started */
   public SourceSnapshot.Changes changesSinceBuildStart() throws IOException {
-    SourceSnapshot now = SourceSnapshot.take(watched, buildStart);
+    SourceSnapshot now = take(watched, buildStart);
     return now.changesSince(buildStart);
   }
 
@@ -353,7 +388,7 @@ public class WatchSession {
   }
 
   private void takeSushiOutput() throws IOException {
-    SourceSnapshot generated = SourceSnapshot.take(Collections.singletonList(fshGenerated), buildStart);
+    SourceSnapshot generated = take(Collections.singletonList(fshGenerated), buildStart);
     buildStart = buildStart.withTree(fshGenerated, generated);
   }
 }

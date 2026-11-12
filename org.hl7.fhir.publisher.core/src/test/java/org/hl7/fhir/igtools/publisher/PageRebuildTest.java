@@ -5,6 +5,11 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -20,6 +25,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+import org.apache.commons.io.FileUtils;
+import org.hl7.fhir.standalone.context.SimpleWorkerContext;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueType;
@@ -65,9 +72,10 @@ class PageRebuildTest {
     write("temp/_includes/x.xml", "<x/>");
     write("output/index.html", "<html/>");
     pf = new PublisherFields();
+    pf.rootDir = dir.toString();
     pf.tempDir = dir.resolve("temp").toString();
     pf.outputDir = dir.resolve("output").toString();
-    page = new FetchedFile("input/pagecontent/index.md");
+    page = new FetchedFile("input/pagecontent/index.md", "pagecontent/index.md");
     page.setPath(dir.resolve("input/pagecontent/index.md").toFile().getCanonicalPath());
     page.setRelativePath("index.md");
     page.setProcessMode(FetchedFile.PROCESS_NONE);
@@ -200,7 +208,7 @@ class PageRebuildTest {
     page.setProcessMode(FetchedFile.PROCESS_XSLT);
     assertNull(state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# 1")), new ArrayList<>()));
     page.setProcessMode(FetchedFile.PROCESS_NONE);
-    page.addOutput("_includes/index.md", FetchedFile.PROCESS_XSLT, null);
+    page.addOutput("_includes" + java.io.File.separator + "index.md", FetchedFile.PROCESS_XSLT, null);
     assertNull(state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# 2")), new ArrayList<>()));
 
     state.discard();
@@ -217,13 +225,16 @@ class PageRebuildTest {
     state.beforeJekyll();
     // what Jekyll and the rest of the build leave in the temp folder
     write("temp/full-ig.zip", "zip");
+    write("temp/_site-extra/a/b", "extra");
     write("temp/.jekyll-cache/a/b", "cache");
     // the changed page, written again
     write("temp/index.md", "# Home, edited");
     Files.setLastModifiedTime(dir.resolve("temp/index.md"), FileTime.fromMillis(System.currentTimeMillis() + 5000));
     state.prepareTemp(Collections.singletonList(dir.resolve("temp/index.md").toString()));
     assertFalse(Files.exists(dir.resolve("temp/full-ig.zip")));
-    assertFalse(Files.exists(dir.resolve("temp/.jekyll-cache")));
+    assertFalse(Files.exists(dir.resolve("temp/_site-extra")));
+    // Jekyll's cache is Jekyll's to check
+    assertEquals("cache", read("temp/.jekyll-cache/a/b"));
     assertEquals("# Home, edited", read("temp/index.md"));
     assertEquals("<x/>", read("temp/_includes/x.xml"));
   }
@@ -254,6 +265,33 @@ class PageRebuildTest {
   }
 
   @Test
+  void prepareTempLeavesJekyllsCacheAlone() throws IOException {
+    // left by the last run of Jekyll: it writes it again when its configuration changed since, and adds to it
+    write("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Cache/b7/config", "old");
+    state.beforeJekyll();
+    write("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Cache/b7/config", "new config");
+    Files.setLastModifiedTime(dir.resolve("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Cache/b7/config"), FileTime.fromMillis(System.currentTimeMillis() + 5000));
+    write("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Converters--Markdown/1a/page", "<p>x</p>");
+    state.prepareTemp(Collections.emptyList());
+    assertEquals("new config", read("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Cache/b7/config"));
+    assertEquals("<p>x</p>", read("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Converters--Markdown/1a/page"));
+  }
+
+  @Test
+  void prepareTempLeavesTheWatchStagingFolderAlone() throws IOException {
+    // in watch mode the build writes its output in the temp folder, and the sync moves files out of it
+    pf.outputDir = dir.resolve("temp/.watch-output").toString();
+    write("temp/.watch-output/package-combined.tgz", "pkg");
+    write("temp/.watch-output/en/index.html", "<html/>");
+    state.beforeJekyll();
+    Files.delete(dir.resolve("temp/.watch-output/package-combined.tgz"));
+    write("temp/.watch-output/en/other.html", "<html/>");
+    state.prepareTemp(Collections.emptyList());
+    assertEquals("<html/>", read("temp/.watch-output/en/other.html"));
+    assertEquals("# Home", read("temp/index.md"));
+  }
+
+  @Test
   void prepareTempFailsForAPageThatWasntThereBefore() throws IOException {
     state.beforeJekyll();
     write("temp/other.md", "other");
@@ -281,6 +319,128 @@ class PageRebuildTest {
     assertTrue(Files.isDirectory(stash));
     state.discard();
     assertFalse(Files.exists(stash));
+  }
+
+  private String abs(String path) {
+    return dir.resolve(path).toAbsolutePath().toString();
+  }
+
+  /** what the html check records of a file it checked, as it finishes */
+  private HtmlCheckRecords.FileRecord checked(String path) throws IOException {
+    HTMLInspector inspector = new HTMLInspector(null, "root", new ArrayList<>(), new ArrayList<>(), null, "http://example.org/ig",
+        "example.ig", "0.1.0", null, new ArrayList<>(), null, false, null, new ArrayList<>(), false, new ArrayList<>(), null);
+    HtmlCheckRecords.FileRecord res = new HtmlCheckRecords.FileRecord(inspector.new LoadedFile(abs(path), path, 0, 0, null, false, true),
+        new ArrayList<>(), new ArrayList<>());
+    res.stamp();
+    return res;
+  }
+
+  /** a build in which the package step wrote two pages, which the html check then changed, and a package */
+  private HtmlCheckRecords builtAndChecked() throws IOException {
+    state.finished();
+    state.afterJekyll();
+    write("output/cmp/a.html", "<p>a</p>");
+    write("output/cmp/b.html", "<p>b</p>");
+    write("output/package.tgz", "tgz");
+    state.afterPackage();
+    write("output/cmp/a.html", "<p id=\"l1\">a</p>");
+    write("output/cmp/b.html", "<p id=\"l1\">b</p>");
+    HtmlCheckRecords records = new HtmlCheckRecords("signature");
+    records.files.put(abs("output/cmp/a.html"), checked("output/cmp/a.html"));
+    records.files.put(abs("output/cmp/b.html"), checked("output/cmp/b.html"));
+    state.setHtmlRecords(records);
+    return records;
+  }
+
+  private void jekyllRuns() throws IOException {
+    for (String f : Arrays.asList("output/cmp/a.html", "output/cmp/b.html", "output/package.tgz")) {
+      Files.deleteIfExists(dir.resolve(f));
+    }
+  }
+
+  private List<String> leftOver() throws IOException {
+    List<String> res = new ArrayList<>();
+    try (java.util.stream.Stream<Path> s = Files.list(dir)) {
+      s.filter(p -> p.getFileName().toString().startsWith(".package-checked-")).forEach(p -> res.add(p.toString()));
+    }
+    return res;
+  }
+
+  /**
+   * the package step's files that are as the last html check left them go back as it left them, not as the package step
+   * wrote them, so that what the check found in them can be reused; the others go back as the package step wrote them
+   */
+  @Test
+  void thePackageOutputsGoBackAsTheHtmlCheckLeftThem() throws IOException {
+    HtmlCheckRecords records = builtAndChecked();
+    // changed since the check
+    write("output/cmp/b.html", "<p id=\"l2\">bb</p>");
+
+    state.keepCheckedPackageOutputs();
+    jekyllRuns();
+    state.restorePackageOutputs();
+    assertEquals(Collections.singletonList(abs("output/cmp/a.html")), state.putBackCheckedPackageOutputs());
+    assertEquals("<p id=\"l1\">a</p>", read("output/cmp/a.html"));
+    assertTrue(records.files.get(abs("output/cmp/a.html")).sameStamp());
+    assertEquals("<p>b</p>", read("output/cmp/b.html"));
+    assertEquals("tgz", read("output/package.tgz"));
+    state.dropCheckedPackageOutputs();
+    assertEquals("<p id=\"l1\">a</p>", read("output/cmp/a.html"));
+    assertEquals(Collections.emptyList(), leftOver());
+  }
+
+  /**
+   * if the rebuild stops before they're put back, the files the html check left are where they were; if it put back
+   * the copies of what the package step wrote instead, those stay
+   */
+  @Test
+  void thePackageOutputsKeptAsideArentLost() throws IOException {
+    builtAndChecked();
+    state.keepCheckedPackageOutputs();
+    jekyllRuns();
+    state.dropCheckedPackageOutputs();
+    assertEquals("<p id=\"l1\">a</p>", read("output/cmp/a.html"));
+    assertEquals("<p id=\"l1\">b</p>", read("output/cmp/b.html"));
+    assertEquals(Collections.emptyList(), leftOver());
+
+    state.keepCheckedPackageOutputs();
+    jekyllRuns();
+    state.restorePackageOutputs();
+    state.dropCheckedPackageOutputs();
+    assertEquals("<p>a</p>", read("output/cmp/a.html"));
+    assertEquals("<p>b</p>", read("output/cmp/b.html"));
+    assertEquals(Collections.emptyList(), leftOver());
+  }
+
+  @Test
+  void theContextIsUnloadedWhenTheStateIsDiscarded() {
+    pf.context = mock(SimpleWorkerContext.class);
+    state.discard();
+    verify(pf.context, never()).unload();
+    // what the build does when a page rebuild can follow it
+    state.unloadContextWhenDiscarded();
+    verify(pf.context, never()).unload();
+    state.discard();
+    state.discard();
+    verify(pf.context, times(1)).unload();
+  }
+
+  @Test
+  void aStashThatCantBeDeletedIsOnlyReported() throws IOException {
+    state.finished();
+    state.afterJekyll();
+    write("output/package.tgz", "tgz");
+    state.afterPackage();
+    Path locked = state.getStashFolder().resolve("locked");
+    Files.createDirectories(locked.resolve("sub"));
+    assumeTrue(locked.toFile().setReadable(false) && !Files.isReadable(locked), "needs a folder that can't be read");
+    try {
+      state.discard();
+      assertNull(state.getStashFolder());
+    } finally {
+      locked.toFile().setReadable(true);
+      FileUtils.deleteDirectory(locked.getParent().toFile());
+    }
   }
 
   @Test
@@ -403,6 +563,218 @@ class PageRebuildTest {
     state.restore();
     assertEquals(Collections.singletonList(ig), pf.errors);
     assertEquals(1, pf.suppressedMessages.list("test").get(0).getUseCount());
+  }
+
+  /** a translated IG: its pages are written in ru from input/translations/ru, if they are there */
+  private void translated() throws IOException {
+    pf.defaultTranslationLang = "en";
+    pf.translationLangs.add("ru");
+    pf.translationSources.add("input/translations/ru");
+    state.setPageLanguages(Collections.singletonList("ru"));
+    write("input/translations/ru/pagecontent/index.md", "# Главная");
+    write("input/translations/ru/StructureDefinition-a.po", "msgid \"\"");
+  }
+
+  /** a page that comes from a folder that the template pre-processes into _includes, as -intro and -notes do */
+  private FetchedFile prePage(String loadPath, String content) throws IOException {
+    write("input/" + loadPath, content);
+    FetchedFile f = new FetchedFile("input/" + loadPath, loadPath);
+    f.setPath(dir.resolve("input/" + loadPath).toFile().getCanonicalPath());
+    f.setRelativePath("_includes" + java.io.File.separator + new java.io.File(loadPath).getName());
+    f.setProcessMode(FetchedFile.PROCESS_NONE);
+    pf.altMap.put("pre-page/" + f.getPath(), f);
+    pf.fileList.add(f);
+    return f;
+  }
+
+  @Test
+  void anEditToATranslationIsAChangeToItsPage() throws IOException {
+    translated();
+    built();
+    List<String> reason = new ArrayList<>();
+    assertEquals(Collections.singletonList(page),
+        state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная страница")), reason), reason.toString());
+    // and with the page
+    assertEquals(Collections.singletonList(page), state.pagesFor(changes(() -> {
+      write("input/pagecontent/index.md", "# Home, edited");
+      write("input/translations/ru/pagecontent/index.md", "# Главная, edited");
+    }), reason), reason.toString());
+  }
+
+  @Test
+  void anEditToAnIntroOrItsTranslationIsAChangeToIt() throws IOException {
+    translated();
+    FetchedFile intro = prePage("pagecontent/StructureDefinition-a-intro.md", "Intro");
+    write("input/translations/ru/pagecontent/StructureDefinition-a-intro.md", "Введение");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertEquals(Collections.singletonList(intro),
+        state.pagesFor(changes(() -> write("input/pagecontent/StructureDefinition-a-intro.md", "Intro, edited")), reason), reason.toString());
+    assertEquals(Collections.singletonList(intro),
+        state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/StructureDefinition-a-intro.md", "Введение, edited")), reason),
+        reason.toString());
+  }
+
+  @Test
+  void anEditToAPageWithoutATranslationIsAChangeToIt() throws IOException {
+    translated();
+    FetchedFile other = prePage("pagecontent/other.md", "Other");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertEquals(Collections.singletonList(other),
+        state.pagesFor(changes(() -> write("input/pagecontent/other.md", "Other, edited")), reason), reason.toString());
+  }
+
+  @Test
+  void notForTheTranslationsOfTheResources() throws IOException {
+    translated();
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/StructureDefinition-a.po", "msgid \"a\"")), reason));
+    assertTrue(reason.get(0).endsWith("StructureDefinition-a.po is read as a translation of the resources"), reason.get(0));
+  }
+
+  @Test
+  void notForATranslationThatIsNotOfAPage() throws IOException {
+    translated();
+    write("input/translations/ru/pagecontent/gone.md", "# Удалено");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/gone.md", "# Удалено, edited")), reason));
+    assertTrue(reason.get(0).endsWith("gone.md is not the translation of a page"), reason.get(0));
+  }
+
+  /** another page that reads its translation from where the index page does */
+  private FetchedFile anotherIndex(String statedPath) throws IOException {
+    write(statedPath, "# Other");
+    FetchedFile f = new FetchedFile(statedPath, "pagecontent/index.md");
+    f.setPath(dir.resolve(statedPath).toFile().getCanonicalPath());
+    f.setRelativePath("other-index.md");
+    f.setProcessMode(FetchedFile.PROCESS_NONE);
+    pf.altMap.put("page/" + f.getPath(), f);
+    pf.fileList.add(f);
+    return f;
+  }
+
+  @Test
+  void notForATranslationOfMoreThanOnePage() throws IOException {
+    translated();
+    anotherIndex("pages/pagecontent/index.md");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная страница")), reason));
+    assertTrue(reason.get(0).endsWith("index.md is the translation of 2 pages"), reason.get(0));
+  }
+
+  @Test
+  void notForATranslationOfATemplatePage() throws IOException {
+    // the build doesn't translate the template's pages
+    translated();
+    pf.fileList.remove(page);
+    pf.altMap.remove("page/" + page.getPath());
+    anotherIndex(dir.resolve("template/pagecontent/index.md").toString());
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная страница")), reason));
+    assertTrue(reason.get(0).endsWith("index.md is not the translation of a page"), reason.get(0));
+  }
+
+  @Test
+  void notForATranslationThatTheBuildDoesntRead() throws IOException {
+    // translations, but the template doesn't write the pages in each language
+    translated();
+    state.setPageLanguages(Collections.emptyList());
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная страница")), reason));
+    assertTrue(reason.get(0).endsWith("index.md is not a page"), reason.get(0));
+  }
+
+  @Test
+  void notWhenATranslationIsAddedOrRemoved() throws IOException {
+    // which pages are translated is in the page data (pages.json)
+    translated();
+    prePage("pagecontent/other.md", "Other");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/other.md", "Другое")), reason));
+    assertEquals("files were added or removed", reason.get(0));
+    assertNull(state.pagesFor(changes(() -> Files.delete(dir.resolve("input/translations/ru/pagecontent/index.md"))), reason));
+  }
+
+  @Test
+  void notForATranslationThatUsesTheResources() throws IOException {
+    translated();
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "{% sql SELECT 1 %}")), reason));
+    assertTrue(reason.get(0).endsWith("has content that depends on the resources"), reason.get(0));
+  }
+
+  @Test
+  void notForAPageInAFolderTheTemplateReads() throws IOException {
+    prePage("includes/menu.xml", "<ul/>");
+    Map<String, String> blockers = new HashMap<>();
+    blockers.put("includes", "the template's script ant.xml reads (${dir.input}/includes)");
+    state.setFolderBlockers(blockers);
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/includes/menu.xml", "<ul><li/></ul>")), reason));
+    assertTrue(reason.get(0).endsWith("menu.xml is in a folder that the template's script ant.xml reads (${dir.input}/includes)"), reason.get(0));
+    // the template doesn't read the other page folders
+    assertEquals(Collections.singletonList(page), state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# Home, edited")), reason));
+  }
+
+  @Test
+  void notForATranslationInAFolderTheTemplateReads() throws IOException {
+    translated();
+    prePage("includes/menu.xml", "<ul/>");
+    write("input/translations/ru/includes/menu.xml", "<ul><li>Меню</li></ul>");
+    Map<String, String> blockers = new HashMap<>();
+    blockers.put("includes", "the template's script ant.xml reads (${dir.input}/includes)");
+    blockers.put("intro-notes", "the template's script ant.xml names");
+    state.setFolderBlockers(blockers);
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/includes/menu.xml", "<ul><li>Меню 2</li></ul>")), reason));
+    assertTrue(reason.get(0).endsWith("menu.xml is in a folder that the template's script ant.xml reads (${dir.input}/includes)"), reason.get(0));
+    // a page folder that the template names
+    prePage("intro-notes/StructureDefinition-a-intro.md", "Intro");
+    write("input/translations/ru/intro-notes/StructureDefinition-a-intro.md", "Введение");
+    built();
+    reason.clear();
+    assertNull(state.pagesFor(changes(() -> write("input/translations/ru/intro-notes/StructureDefinition-a-intro.md", "Введение 2")), reason));
+    assertTrue(reason.get(0).endsWith("is in a folder that the template's script ant.xml names"), reason.get(0));
+    // and not the others
+    assertEquals(Collections.singletonList(page), state.pagesFor(changes(() -> write("input/translations/ru/pagecontent/index.md", "# Главная 2")), reason));
+  }
+
+  @Test
+  void notForAFileInTheInputFolderThatTheTemplateReads() throws IOException {
+    prePage("toc.md", "# Contents");
+    state.setFolderBlockers(Collections.singletonMap("toc.md", "the template's script ant.xml reads (${dir.input}/toc.md)"));
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/toc.md", "# Contents 2")), reason));
+    assertTrue(reason.get(0).endsWith("the template's script ant.xml reads (${dir.input}/toc.md)"), reason.get(0));
+  }
+
+  @Test
+  void notForAPageThatIsAlsoATranslation() throws IOException {
+    // a page in a translation source: the build writes the page from it, and the translation of the page with that name
+    translated();
+    pf.translationSources.set(0, "input/ru");
+    prePage("ru/pagecontent/index.md", "# Главная");
+    built();
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/ru/pagecontent/index.md", "# Главная страница")), reason));
+    assertTrue(reason.get(0).endsWith("is both a page and in the translations of the pages"), reason.get(0));
+  }
+
+  @Test
+  void aLangFragmentIsPlainContent() {
+    // it's an include of the fragment in the page's language, which is in the temp folder already
+    assertTrue(PageRebuild.isPlainContent("{% lang-fragment ip-statements.xhtml %}"));
   }
 
   @Test
