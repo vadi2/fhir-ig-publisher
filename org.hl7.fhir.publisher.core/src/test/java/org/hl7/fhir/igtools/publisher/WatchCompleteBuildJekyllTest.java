@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Set;
 
 import org.hl7.fhir.igtools.templates.Template;
 import org.hl7.fhir.utilities.logging.ILoggingService;
@@ -247,18 +248,10 @@ class WatchCompleteBuildJekyllTest {
     assertEquals(Arrays.asList("a.html"), g.changedSources(temp, out));
   }
 
-  @Test
-  void memoryIsReclaimedAfterJekyllOnlyIfTheJekyllThatIsKeptRunningRendersTheSite() throws Exception {
-    PublisherGenerator g = generator(null);
-    // the build starts Jekyll: the memory is freed for it first
-    assertFalse(g.reclaimsMemoryAfterJekyll());
-    assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
-    assertTrue(g.reclaimsMemoryAfterJekyll());
-    driver.stop();
-    assertFalse(g.reclaimsMemoryAfterJekyll());
-    // not watch mode
-    g.setWatchTools(null, null);
-    assertFalse(g.reclaimsMemoryAfterJekyll());
+  /** puts the pages in the output folder, and waits until they are there (the copy runs while the build goes on) */
+  private static void publishEarly(PublisherGenerator g, Set<String> files) {
+    g.publishPagesEarly(files);
+    g.awaitEarlyPublish();
   }
 
   private String output(String rel) throws IOException {
@@ -275,7 +268,7 @@ class WatchCompleteBuildJekyllTest {
     write("output/qa.json", "{}");
     pf.watchBuildStarted = System.nanoTime();
 
-    generator(null).publishPagesEarly(Collections.singleton(Paths.get(out, "en", "a.html").toString()));
+    publishEarly(generator(null), Collections.singleton(Paths.get(out, "en", "a.html").toString()));
 
     assertEquals("a, rendered again", output("en/a.html"));
     assertEquals("b", output("en/b.html"));
@@ -295,7 +288,7 @@ class WatchCompleteBuildJekyllTest {
     write("temp/.watch-output/en/a.ai.html", "what the AI step makes a.md from, and deletes");
     write("output/gone.html", "a page the build no longer makes");
 
-    generator(null).publishPagesEarly(null);
+    publishEarly(generator(null), null);
 
     assertEquals("home", output("index.html"));
     assertEquals("a", output("en/a.html"));
@@ -310,7 +303,7 @@ class WatchCompleteBuildJekyllTest {
     write("temp/.watch-output/a.html", "a");
     write("output/a.html", "a");
 
-    generator(null).publishPagesEarly(Collections.singleton(Paths.get(out, "a.html").toString()));
+    publishEarly(generator(null), Collections.singleton(Paths.get(out, "a.html").toString()));
 
     // so a failure after this still says that the pages are those of the last build that succeeded
     assertFalse(pf.watchPagesPublished);
@@ -322,15 +315,15 @@ class WatchCompleteBuildJekyllTest {
     write("output/a.html", "a");
 
     settings.setGenerationOff(true);
-    generator(null).publishPagesEarly(null);
+    publishEarly(generator(null), null);
     settings.setGenerationOff(false);
     settings.setSimplifierMode(true);
-    generator(null).publishPagesEarly(null);
+    publishEarly(generator(null), null);
     settings.setSimplifierMode(false);
     // not watch mode: the build writes to the output folder itself
     String output = pf.watchOutputDir;
     pf.watchOutputDir = null;
-    generator(null).publishPagesEarly(null);
+    publishEarly(generator(null), null);
     pf.watchOutputDir = output;
 
     assertEquals("a", output("a.html"));
@@ -344,7 +337,7 @@ class WatchCompleteBuildJekyllTest {
     PublisherGenerator g = generator(null);
     g.jekyllReturnedAnError();
 
-    g.publishPagesEarly(null);
+    publishEarly(g, null);
 
     assertEquals("a", output("a.html"));
     assertFalse(pf.watchPagesPublished);
@@ -354,13 +347,13 @@ class WatchCompleteBuildJekyllTest {
   void aPageJekyllWroteAgainAsItWasStaysAsTheLastBuildsHtmlChecksLeftIt() throws Exception {
     write("temp/.watch-output/a.html", "a, as Jekyll wrote it");
     PublisherGenerator g = generator(null);
-    g.publishPagesEarly(null);
+    publishEarly(g, null);
     // the rest of that build, and its sync
     write("output/a.html", "a, html checked");
     pf.watchPagesPublished = false;
 
     // the next build: Jekyll renders the whole site again
-    g.publishPagesEarly(null);
+    publishEarly(g, null);
 
     assertEquals("a, html checked", output("a.html"));
     assertFalse(pf.watchPagesPublished);
@@ -372,7 +365,7 @@ class WatchCompleteBuildJekyllTest {
     write("blocked", "a file where the output folder's parent would be");
     pf.watchOutputDir = dir.resolve("blocked").resolve("output").toString();
 
-    generator(null).publishPagesEarly(null);
+    publishEarly(generator(null), null);
 
     assertFalse(pf.watchPagesPublished);
     verify(pf.logger).logMessage(startsWith("Unable to put the pages in " + pf.watchOutputDir + " yet"));
@@ -385,7 +378,7 @@ class WatchCompleteBuildJekyllTest {
     write("output/a", "a file");
     write("output/b.html", "b");
 
-    generator(null).publishPagesEarly(null);
+    publishEarly(generator(null), null);
 
     assertEquals("b2", output("b.html"));
     verify(pf.logger).logMessage(startsWith("  Unable to update a"));
