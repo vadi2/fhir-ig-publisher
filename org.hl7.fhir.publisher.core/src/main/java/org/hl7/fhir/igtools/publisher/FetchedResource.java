@@ -102,6 +102,11 @@ public class FetchedResource {
     return resource;
   }
 
+  /** the resource, without reporting a read (to tell which of the IG's resources an object is) */
+  Resource getResourceQuietly() {
+    return resource;
+  }
+
   public void setResource(Resource resource) {
     this.resource = resource;
   }

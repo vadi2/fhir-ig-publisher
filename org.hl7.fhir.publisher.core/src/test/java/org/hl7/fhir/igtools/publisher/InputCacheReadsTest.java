@@ -91,6 +91,19 @@ class InputCacheReadsTest {
   }
 
   @Test
+  void profileUsage_findingTheProfilesResource_readsThatResourceOnly() {
+    PublisherFields pf = ig();
+    StructureDefinition b = (StructureDefinition) pf.fileList.get(1).getResources().get(0).getResource();
+    Recorder rec = new Recorder();
+    FetchedReads.setListener(rec);
+    assertSame(pf.fileList.get(1).getResources().get(0), Publisher.sourceOf(pf.fileList, b));
+    assertEquals(Arrays.asList("b CONTENT"), rec.reads);
+    rec.reads.clear();
+    assertNull(Publisher.sourceOf(pf.fileList, new StructureDefinition()));
+    assertTrue(rec.reads.isEmpty(), rec.reads.toString());
+  }
+
+  @Test
   void memoMap_reportsHitsWithWhatTheyCameFrom_andAnyOtherUse() {
     MemoRecorder rec = new MemoRecorder();
     Map<String, String> real = new HashMap<>();
