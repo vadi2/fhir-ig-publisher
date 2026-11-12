@@ -319,11 +319,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       logMessage("Generate HTML Outputs");
       // the resources don't change while the html is generated, so what they use only needs to be worked out once
       pf.sdUsageCache = new IdentityHashMap<>();
+      int htmlReplayed = 0;
       try {
         for (FetchedFile f : pf.changeList) {
           f.start("generate2");
           try {
             if (pf.rapido != null && !settings.isGenerationOff() && pf.rapido.canReplay(f, RapidoTracker.PHASE_HTML)) {
+              htmlReplayed++;
               replayGeneration(f, RapidoTracker.PHASE_HTML);
               convertForRendering(f);
               redoRenderingChanges(f);
@@ -342,6 +344,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
       } finally {
         pf.sdUsageCache = null;
+      }
+      if (pf.rapido != null && !pf.rapido.isCompleteBuild()) {
+        log("Rapido Mode: reused the html of "+htmlReplayed+" of "+pf.changeList.size()+" files");
       }
 
       logMessage("Generate Spreadsheets");
