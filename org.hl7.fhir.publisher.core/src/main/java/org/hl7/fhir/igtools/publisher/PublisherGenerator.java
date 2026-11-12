@@ -4825,18 +4825,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       earlyPages.clear();
       return;
     }
-    List<Path> written = null;
+    List<Path> written = files == null ? null : new ArrayList<>();
     if (files != null) {
-      written = new ArrayList<>();
       for (String f : files) {
         written.add(Paths.get(f));
       }
     }
     Path staged = Paths.get(pf.outputDir);
     Path target = Paths.get(pf.watchOutputDir);
-    List<Path> toCopy = written;
     PublisherFields fields = pf;
-    // the build goes on meanwhile: the copy waits on what the disk can do, not on the build
     // what the build writes from now on is left for the sync; and if Jekyll didn't say what it wrote, so is what the
     // last build left in the staging folder, which the package step writes again (a file being written over can look
     // as it was, but empty, until its first write)
@@ -4844,7 +4841,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     FileTime asOf = FileTime.from(now);
     FileTime since = written == null && pf.stagedOutputKept
         ? FileTime.from(now.minusNanos(System.nanoTime() - pf.watchBuildStarted).minusSeconds(1)) : null;
-    startEarlyPublish(() -> publishPages(fields, staged, target, toCopy, since, asOf));
+    startEarlyPublish(() -> publishPages(fields, staged, target, written, since, asOf));
   }
 
   /** runs the copy of the pages on a thread of its own: see awaitEarlyPublish() */
@@ -4898,10 +4895,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       // a bug, or an Error: it fails the build, as when the copy wasn't on a thread of its own
       earlyPages.clear();
       Throwable cause = e.getCause();
-      if (cause instanceof Error) {
-        throw (Error) cause;
+      if (cause instanceof Error err) {
+        throw err;
       }
-      throw cause instanceof RuntimeException ? (RuntimeException) cause : new RuntimeException(cause);
+      throw cause instanceof RuntimeException re ? re : new RuntimeException(cause);
     }
   }
 

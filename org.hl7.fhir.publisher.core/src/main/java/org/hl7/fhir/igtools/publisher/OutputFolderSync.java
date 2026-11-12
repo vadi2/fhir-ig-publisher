@@ -260,7 +260,7 @@ public class OutputFolderSync {
         if (there && Files.size(to) == Files.size(from) && sameContent(from, to, ba, bb)) {
           // (not noted as offered: it may be what the build made of the file, put back in the staging folder)
           result.unchanged++;
-        } else if (copy(from, to, asOf == null && since == null ? null : () -> isAsItWas(from, was))) {
+        } else if (copy(from, to, since == null && asOf == null ? null : was)) {
           result.written++;
           if (digest != null) {
             offered.put(rel, digest);
@@ -359,31 +359,27 @@ public class OutputFolderSync {
   }
 
   /**
-   * As copy(from, to), unless the copy, once made, doesn't pass the check (null: none): then it is dropped, and false
-   * returned
+   * As copy(from, to), unless from no longer has the attributes was (null: no check) once the copy is made: then the
+   * copy is dropped, and false returned
    */
-  private static boolean copy(Path from, Path to, CopyCheck check) throws IOException {
+  private static boolean copy(Path from, Path to, BasicFileAttributes was) throws IOException {
     try {
-      return copyOver(from, to, check);
+      return copyOver(from, to, was);
     } catch (AccessDeniedException e) {
       // a read-only file can't be replaced on Windows
       if (!makeWritable(to)) {
         throw e;
       }
-      return copyOver(from, to, check);
+      return copyOver(from, to, was);
     }
   }
 
-  private interface CopyCheck {
-    boolean passes() throws IOException;
-  }
-
-  private static boolean copyOver(Path from, Path to, CopyCheck check) throws IOException {
+  private static boolean copyOver(Path from, Path to, BasicFileAttributes was) throws IOException {
     // (a copy left by a sync that stopped is stale, and deleted by the next)
     Path copy = to.resolveSibling(".sync-" + to.getFileName());
     Files.copy(from, copy, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
     try {
-      if (check != null && !check.passes()) {
+      if (was != null && !isAsItWas(from, was)) {
         Files.delete(copy);
         return false;
       }
