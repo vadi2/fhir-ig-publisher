@@ -17,7 +17,7 @@ Status: in progress (Phase C)
 | RIVO-Noord/zorgviewer-ig | aab62e4 | 7600m | 139 | 669/137/128 | 126 | 669/137/128 | 92 | 669/137/128 | 131 / 6 / 90 / 72 / 72 / 69 / 71 | 669/137/128 | 669/137/128 | 115 | 669/137/128 | REGRESSION: llms.txt page order (HL7 #1461) only; pre-existing diffs: watch QA paths under temp/pages/.watch-output, "used by" csv order |
 | HL7/davinci-ra | f003bae | 7600m | 188 | 0/0/0 | 96 | 0/0/0 | 86 | 0/0/0 | 93 / 10 / 60 / 50 / 67 / 68 / 61 | 0/0/0 | 0/0/0 | 98 | 0/0/0 | REGRESSION: spec.internals drops .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version and identifier display in narratives |
 | HL7/imaging-service-request-ig | def90dc | 7600m | 111 | 195/225/244 | 83 | 195/225/244 | 79 | 195/225/244 | 96 / 2 / 48 / 38 / 68 / 69 / 41 | 195/225/244 | 195/225/244 | 83 | 195/225/244 | REGRESSION: spec.internals drops .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version and identifier display in narratives |
-| hl7au/au-fhir-core | 3de0d01 | 7600m | 171 | 62/220/47 |  |  |  |  |  |  |  |  |  |  |
+| hl7au/au-fhir-core | 3de0d01 | 7600m | 171 | 62/220/47 | 135 | 62/220/47 | 112 | 62/220/47 | 138 / 3 / 102 / 98 / 99 / 100 / 114 | 62/220/47 | 62/220/47 | 148 | 62/220/47 | REGRESSION: spec.internals drops .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version in narratives, watch QA paths |
 | sfaassn2025-source/base | e11fe94 | 7600m | 354 | 0/3/2 |  |  |  |  |  |  |  |  |  |  |
 
 ## Details
@@ -62,3 +62,14 @@ Status: in progress (Phase C)
 - pre-existing: package.db nondeterministic content, as for the other IGs.
 - masked: "used by" order in valueset-ref-all-list.csv, codesystem-ref-all-list.csv, csvs.zip.
 - QA identical everywhere (195/225/244, 669 messages). No 502s.
+
+### hl7au/au-fhir-core
+
+- **REGRESSION (intended), #48**: spec.internals in definitions.{json,ttl,xml}.zip, package.tgz, package.r4.tgz, package.r4b.tgz, hl7.fhir.au.core.en.tgz, validator-hl7.fhir.au.core.pack, full-ig.zip no longer lists the `*.ai.html` targets, as for readi.
+- **REGRESSION (order only), HL7 #1461**: llms.txt, en/llms.txt, en/ai.zip page order.
+- pre-existing: Composition-aups-minimal and DocumentReference-aups-basicsummary-data (json/ttl/xml, en/*, .ai.md, examples.*.zip, packages) differ only in the NamingSystem-uri narrative link, `terminology.hl7.org/6.2.0|7.1.0|7.5.0`. Same mechanism as davinci-ra, where master varies the same way. With THO versions normalised: R1 vs I1 16 files, W2 vs F2 6, W6 vs I1 6, all items in this list.
+- pre-existing: watch QA reports the duplicate-anchor warning of StructureDefinition-au-core-bloodpressure-definitions.html under temp/pages/.watch-output/ instead of output/ (as zorgviewer; master watch the same). Counts and messages otherwise identical.
+- pre-existing: W2..W6 are Complete Builds ("terminology server calls failed in the last build (64)"): AU terminology is not resolvable via tx.fhir.org here, which also gives the environmental 62/220/47 QA (CI 2/1/3). I1 reproduces R1 exactly (329 messages).
+- noise: comparison-v2.0.0/xx-3-Identifier-Identifier.html, xx-5-Address-Address.html show a Java stack trace (master too); the line numbers differ with the code.
+- pre-existing: package.db nondeterministic content. masked: "used by" order in valueset-/codesystem-ref-all-list.csv, csvs.zip.
+- No 502s.
