@@ -80,7 +80,7 @@ public class StaleTempFiles {
 
   /**
    * Whether the file system has status-change times; if not (Windows), a differential build can't tell what's stale,
-   * so watch mode has to make each build a complete one (see time())
+   * so watch mode doesn't use this (see time())
    */
   public static boolean isSupported(String folder) throws IOException {
     Path p = Paths.get(folder);
@@ -129,11 +129,6 @@ public class StaleTempFiles {
   public void save(Collection<String> claimed) throws IOException {
     Files.createDirectories(claims.getParent());
     Files.write(claims, new TreeSet<>(keys(claimed)), StandardCharsets.UTF_8);
-  }
-
-  /** Whether the last build saved what it claimed */
-  public boolean hasClaims() {
-    return Files.exists(claims);
   }
 
   /** Forgets what the last build claimed (when what it left in the temp folder is gone) */
@@ -256,7 +251,7 @@ public class StaleTempFiles {
    * When the file was last written: its status-change time, which a program can't set (it can set the modification
    * time back, as a copy that keeps the source's time does). Where the file system has no status-change times (Windows:
    * there's no 'unix' view), the modification time, so that a build can still run the template and record what it
-   * claims: isSupported() is false there, so each build is a complete one, and nothing is deleted by what this finds
+   * claims: isSupported() is false there, so watch mode doesn't use what this finds, and nothing is deleted
    */
   private FileTime time(Path p) throws IOException {
     if (statusChangeTimes) {
