@@ -156,3 +156,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   only what was written, html check memory) only shorten save->Finished, not save->page (early-publish already took
   the tail off the page path), they overlap tail-restart/#42, and sessions cost 30-100 USD each. Told Vadim; launch
   only if he asks.
+- 00:18 tick: no new PRs (highest 42), no branch moved. summaries-reuse: base watch session for compare, then PR.
+  translations-dirty: base-jar watch ~40 min, PR draft ready. tail-restart: A/B bench ~2 h left (from 23:10), 108 USD.
+  native-skip: idle since 22:40 with "n3 build running" (98 min) -> nudged (check n3, carry on; drop if the 1,205 output
+  diffs are not the base's own). If still silent at 01:17, read its last assistant events.
