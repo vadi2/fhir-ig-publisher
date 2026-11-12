@@ -1492,7 +1492,9 @@ public class RapidoTracker {
    * first look up of a profile in it updates the urls in the markdown of that profile's snapshot elements, in place
    * (relative links become absolute); after that, everything that uses the profile from the context sees them so,
    * the combined package included. A file whose html is replayed doesn't render its profiles, so the look ups its
-   * rendering made are recorded, and done again when it's replayed
+   * rendering made are recorded, and done again when it's replayed. Only the look ups that found the profile are
+   * recorded (the ones already in the cache, and the ones that put it there): a profile that isn't found isn't
+   * cached, and the renderer may expect that (a logical model's root element has no base type)
    */
   public static class ElementMapCache extends HashMap<String, Map<String, ElementDefinition>> {
     private static final long serialVersionUID = 1L;
@@ -1504,10 +1506,19 @@ public class RapidoTracker {
 
     @Override
     public Map<String, ElementDefinition> get(Object key) {
-      if (listener != null && key instanceof String) {
+      Map<String, ElementDefinition> res = super.get(key);
+      if (res != null && listener != null && key instanceof String) {
         listener.accept((String) key);
       }
-      return super.get(key);
+      return res;
+    }
+
+    @Override
+    public Map<String, ElementDefinition> put(String key, Map<String, ElementDefinition> value) {
+      if (listener != null) {
+        listener.accept(key);
+      }
+      return super.put(key, value);
     }
   }
 

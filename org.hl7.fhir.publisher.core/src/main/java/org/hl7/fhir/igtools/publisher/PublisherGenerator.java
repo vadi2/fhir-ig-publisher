@@ -2175,7 +2175,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   /**
    * Rapido: the first look up of a profile in the shared element map cache updates the urls in the markdown of that
    * profile's snapshot elements (see RapidoTracker.ElementMapCache). Do the look ups the file's rendering did, so that
-   * the profiles it used come out as they do from a complete build: the combined package has them
+   * the profiles it used come out as they do from a complete build: the combined package has them. Only look ups
+   * that found the profile are recorded, so one that fails now didn't fail when the file was rendered: it's reported
+   * against the file, as rendering it would report it
    */
   private void redoElementMaps(FetchedFile f, List<String> urls) {
     StructureDefinition src = null;
@@ -2193,8 +2195,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
         try {
           sdr.getElementById(url, "", src);
-        } catch (FHIRException e) {
-          // not found when the file was rendered either
+        } catch (Exception e) {
+          log("Exception looking up the profile "+url+" for "+f.getName()+": "+e.getMessage());
+          f.getErrors().add(new ValidationMessage(ValidationMessage.Source.Publisher, ValidationMessage.IssueType.EXCEPTION, "StructureDefinition", "Error Rendering Resource: looking up the profile "+url+": "+e.getMessage(), ValidationMessage.IssueSeverity.ERROR));
         }
       }
     }

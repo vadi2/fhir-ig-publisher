@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertSame;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -24,6 +25,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Consumer;
 
+import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.igtools.templates.Template;
 import org.hl7.fhir.model.ModelContext;
 import org.hl7.fhir.model.core.ElementDefinition;
@@ -249,6 +251,107 @@ class PublisherRapidoWatchTest {
     generator.replayGeneration(b, RapidoTracker.PHASE_HTML);
 
     assertEquals(complete, comment(base));
+  }
+
+  /**
+   * A file that finds a profile already in the cache records the look up too: the file that put it there may be
+   * rendered again and not use it, and then only the replayed file's look up updates it
+   */
+  @Test
+  void aLookUpThatFindsTheProfileInTheCacheIsRecorded() throws Exception {
+    context = r5();
+    PublisherFields pf = build("a");
+    StructureDefinition base = base(context, pf);
+    rendering = f -> {
+      if (f.getLoadPath().startsWith("Patient-")) {
+        lookUp(pf, BASE); // Patient/a puts it in the cache, Patient/b finds it there
+      }
+    };
+    finish(pf);
+    String complete = comment(base);
+
+    PublisherFields pf2 = build("a2"); // Patient/a changed, and its rendering doesn't use the profile now
+    base = base(context, pf2);
+    FetchedFile b = file(pf2, "Patient-b.json");
+    assertTrue(pf2.rapido.canReplay(b, RapidoTracker.PHASE_HTML));
+    assertEquals(List.of(BASE), pf2.rapido.replay(b, RapidoTracker.PHASE_HTML).elementMaps);
+    generator(pf2).replayGeneration(b, RapidoTracker.PHASE_HTML);
+
+    assertEquals(complete, comment(base));
+  }
+
+  /** a look up that doesn't find the profile changes nothing, and the renderer may expect it to fail: it's not recorded */
+  @Test
+  void aLookUpThatDoesNotFindTheProfileIsNotRecorded() throws Exception {
+    context = r5();
+    PublisherFields pf = build("a");
+    base(context, pf);
+    rendering = f -> {
+      if (f.getLoadPath().equals("Patient-b.json")) {
+        lookUp(pf, BASE);
+        // as the renderer looks up the root element of a logical model's elements
+        assertThrows(FHIRException.class, () -> lookUp(pf, "http://example.org/dep/StructureDefinition/missing"));
+      }
+    };
+    finish(pf);
+
+    PublisherFields pf2 = build("a2");
+    assertEquals(List.of(BASE), pf2.rapido.replay(file(pf2, "Patient-b.json"), RapidoTracker.PHASE_HTML).elementMaps);
+  }
+
+  /** the look ups a replayed file redoes found their profiles when it was rendered: if they fail now, it's reported */
+  @Test
+  void aLookUpThatFailsWhenItsRedoneIsReported() throws Exception {
+    context = r5();
+    PublisherFields pf = build("a");
+    base(context, pf);
+    rendering = f -> {
+      if (f.getLoadPath().equals("Patient-b.json")) {
+        lookUp(pf, BASE);
+      }
+    };
+    finish(pf);
+
+    PublisherFields pf2 = build("a2");
+    context.dropResource(base(context, pf2)); // not there this time
+    FetchedFile b = file(pf2, "Patient-b.json");
+    generator(pf2).replayGeneration(b, RapidoTracker.PHASE_HTML);
+
+    assertEquals(1, b.getErrors().size());
+    ValidationMessage vm = b.getErrors().get(0);
+    assertEquals(IssueType.EXCEPTION, vm.getType());
+    assertEquals(IssueSeverity.ERROR, vm.getLevel());
+    assertTrue(vm.getMessage().contains(BASE), vm.getMessage());
+  }
+
+  /** any exception, not just a profile that isn't found: it's reported against the file, as rendering it reports it */
+  @Test
+  void anExceptionInALookUpThatsRedoneIsReported() throws Exception {
+    context = r5();
+    PublisherFields pf = build("a");
+    base(context, pf);
+    rendering = f -> {
+      if (f.getLoadPath().equals("Patient-b.json")) {
+        lookUp(pf, BASE);
+      }
+    };
+    finish(pf);
+
+    PublisherFields pf2 = build("a2");
+    StructureDefinition base = base(context, pf2);
+    base.getSnapshot().getElementFirstRep().addType().setCode("Patient").addProfileElement(); // a profile with no value
+    FetchedFile b = file(pf2, "Patient-b.json");
+    generator(pf2).replayGeneration(b, RapidoTracker.PHASE_HTML);
+
+    assertEquals(1, b.getErrors().size());
+    assertEquals(IssueType.EXCEPTION, b.getErrors().get(0).getType());
+    assertTrue(b.getErrors().get(0).getMessage().contains(BASE), b.getErrors().get(0).getMessage());
+  }
+
+  private static PublisherGenerator generator(PublisherFields pf) {
+    PublisherGenerator generator = new PublisherGenerator(new PublisherSettings());
+    generator.setPf(pf);
+    return generator;
   }
 
   private static SimpleWorkerContext r5;
