@@ -207,3 +207,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 09:22 code-simplifier dispatched on #22/#25 round 2 (local agent, notes in scratchpad stale-22-25/SIMPLIFY.md). #38 decision re-asked.
 - 09:35 simplifier done: #22 8d040a57, #25 0afd39ac (merged ws6). Suites: only GitUtilitiesTests[4]. #22/#25 ready pending Vadim unstacking #22.
 - 09:45 #22 unstacked by Vadim, base now watch-page-rebuild (clean). #25 based on #22 (clean). #38 decision still open.
+- 09:55 core fork cloned read-only at /home/user/vadi2/org.hl7.fhir.core (Vadim asked). perf2/ws7-read-hook = 1 commit 13744e48 on v7.0.2; publisher uses 7.0.5. Can't push to core (read-only). #38 full fix dispatched to local agent (scratchpad stale-38/PROGRESS.md).
