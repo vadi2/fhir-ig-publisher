@@ -115,6 +115,11 @@ public class FetchedResource {
     FetchedReads.read(this, ResourcePart.CONTENT);
     return element;
   }
+
+  /** the element, without reporting a read */
+  Element getElementQuietly() {
+    return element;
+  }
   
   public FetchedResource setElement(Element element) {
     this.element = element;

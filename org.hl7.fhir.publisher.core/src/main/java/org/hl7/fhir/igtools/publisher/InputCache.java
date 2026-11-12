@@ -754,6 +754,8 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     private int pfErrorsBefore;
     private int fErrorsBefore;
     private int[] rErrorsBefore;
+    /** the number of messages each element of the file's resources has, where it has any (by resource and position) */
+    private Map<String, Integer> elementMessagesBefore;
     private Set<String> outputNamesBefore;
     private Map<String, long[]> statBefore;
     private Set<String> otherFilesBefore;
@@ -989,6 +991,14 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     for (int i = 0; i < s.rErrorsBefore.length; i++) {
       s.rErrorsBefore[i] = s.file.getResources().get(i).getErrors().size();
     }
+    if ("val".equals(s.kind)) {
+      s.elementMessagesBefore = new HashMap<>();
+      forEachElement(s.file, (k, e) -> {
+        if (e.hasMessages()) {
+          s.elementMessagesBefore.put(k, e.getMessages().size());
+        }
+      });
+    }
     if ("html".equals(s.kind)) {
       s.outputNamesBefore = new HashSet<>(s.file.getOutputNames());
       s.statBefore = new HashMap<>();
@@ -1044,9 +1054,25 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       Journal j = s.hitJournal();
       replayCommon(s, j);
       errs.addAll(j.list("errs"));
+      Map<String, List<ValidationMessage>> elementMessages = new HashMap<>();
       for (Journal.Rec r : j.recs) {
         if ("valctx".equals(r.tag)) {
           fValidationContext.set(pf.validator, r.b == null ? null : new String(r.b, StandardCharsets.UTF_8));
+        } else if ("list".equals(r.tag) && r.a.startsWith(ELEMENT_MESSAGES)) {
+          elementMessages.put(r.a.substring(ELEMENT_MESSAGES.length()), j.list(r.a));
+        }
+      }
+      if (!elementMessages.isEmpty()) {
+        forEachElement(s.file, (k, e) -> {
+          List<ValidationMessage> l = elementMessages.remove(k);
+          if (l != null) {
+            for (ValidationMessage vm : l) {
+              e.addMessage(vm);
+            }
+          }
+        });
+        if (!elementMessages.isEmpty()) {
+          throw new IllegalStateException("no element " + elementMessages.keySet().iterator().next());
         }
       }
       hits++;
@@ -1155,6 +1181,31 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     s.file.getErrors().addAll(j.list("ferr"));
     for (int i = 0; i < s.file.getResources().size(); i++) {
       s.file.getResources().get(i).getErrors().addAll(j.list("rerr" + i));
+    }
+  }
+
+  private static final String ELEMENT_MESSAGES = "emsg";
+
+  /**
+   * each element of the file's resources, with its key: the resource's index and the element's position in the tree
+   * (the same in every build of the same content). The elements aren't reported as read: the step reads them anyway
+   */
+  private static void forEachElement(FetchedFile f, java.util.function.BiConsumer<String, Element> action) {
+    List<FetchedResource> list = f.getResources();
+    for (int i = 0; i < list.size(); i++) {
+      Element e = list.get(i).getElementQuietly();
+      if (e != null) {
+        forEachElement(i + ".", e, new int[] {0}, action);
+      }
+    }
+  }
+
+  private static void forEachElement(String prefix, Element e, int[] n, java.util.function.BiConsumer<String, Element> action) {
+    action.accept(prefix + (n[0]++), e);
+    if (e.hasChildren()) {
+      for (Element c : e.getChildList()) {
+        forEachElement(prefix, c, n, action);
+      }
     }
   }
 
@@ -1356,6 +1407,21 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     if ("val".equals(s.kind)) {
       String v = (String) fValidationContext.get(pf.validator);
       j.add("valctx", null, v == null ? null : bytes(v));
+      // the messages the validator gave the elements as well (the signposts the QA page lists by element)
+      List<Object[]> added = new ArrayList<>();
+      forEachElement(s.file, (k, e) -> {
+        int before = s.elementMessagesBefore.getOrDefault(k, 0);
+        if (e.hasMessages() && e.getMessages().size() > before) {
+          added.add(new Object[] {k, e.getMessages().subList(before, e.getMessages().size())});
+        } else if (before > 0 && (!e.hasMessages() || e.getMessages().size() < before)) {
+          s.uncacheable("element messages removed");
+        }
+      });
+      for (Object[] a : added) {
+        @SuppressWarnings("unchecked")
+        List<ValidationMessage> l = (List<ValidationMessage>) a[1];
+        j.messages(s, ELEMENT_MESSAGES + a[0], l, ids);
+      }
     }
     if ("html".equals(s.kind)) {
       Set<String> files = new TreeSet<>(s.registered);

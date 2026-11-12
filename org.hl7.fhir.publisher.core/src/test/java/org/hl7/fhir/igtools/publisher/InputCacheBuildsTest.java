@@ -115,12 +115,36 @@ class InputCacheBuildsTest {
       return open(null);
     }
 
-    /** the step's own work: a message that says what the family name is */
+    /**
+     * the step's own work: a message that says what the family name is, and a signpost on the name, which the
+     * validator gives the element as well (the QA page shows an element's signposts)
+     */
     List<ValidationMessage> validate() {
       List<ValidationMessage> errs = new ArrayList<>();
       String family = res.getElement().getNamedChild("name").getNamedChildValue("family");
       errs.add(new ValidationMessage(Source.InstanceValidator, IssueType.INFORMATIONAL, 1, 1, "Patient", "family is " + family, IssueSeverity.INFORMATION));
+      ValidationMessage sp = new ValidationMessage(Source.InstanceValidator, IssueType.INFORMATIONAL, 1, 1, "Patient.name[0]", "Validated against HumanName", IssueSeverity.INFORMATION).setSignpost(true);
+      errs.add(sp);
+      res.getElement().getNamedChild("name").addMessage(sp);
       return errs;
+    }
+
+    /** the messages the elements of the resource have, by path */
+    String elementMessages() {
+      List<String> res = new ArrayList<>();
+      elementMessages(this.res.getElement(), res);
+      return res.toString();
+    }
+
+    private void elementMessages(org.hl7.fhir.services.elementmodel.Element e, List<String> res) {
+      if (e.hasMessages()) {
+        res.add(e.getPath() + ": " + text(e.getMessages()));
+      }
+      if (e.hasChildren()) {
+        for (org.hl7.fhir.services.elementmodel.Element c : e.getChildList()) {
+          elementMessages(c, res);
+        }
+      }
     }
 
     /** runs the validation step as the processor does: replayed or run; the messages it ends with */
@@ -173,10 +197,13 @@ class InputCacheBuildsTest {
     b2.finish();
     assertEquals(text(first), text(second));
     assertTrue(String.join("\n", b2.log).contains("1 hits"), b2.log.toString());
+    // the element has the signpost, as it does when the validation runs (the QA page lists it by element)
+    assertEquals(b1.elementMessages(), b2.elementMessages());
+    assertEquals("[Patient.name[0]: [INFORMATION Patient.name[0] Validated against HumanName]]", b2.elementMessages());
 
     Build b3 = new Build("Jones");
     b3.open();
-    assertEquals("[INFORMATION Patient family is Jones]", text(b3.validationStep(false)));
+    assertEquals("[INFORMATION Patient family is Jones, INFORMATION Patient.name[0] Validated against HumanName]", text(b3.validationStep(false)));
     b3.finish();
     assertTrue(String.join("\n", b3.log).contains("1 misses"), b3.log.toString());
   }
