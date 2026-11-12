@@ -133,12 +133,12 @@ public class RapidoTracker {
   private static final int STATE_VERSION = 5;
 
   /**
-   * The state this process saved last, and the expansions it has parsed. The next build of the same IG in this process
+   * The state this process saved last, and the expansions it has read (as JSON, checked against their hashes). The next build of the same IG in this process
    * (watch mode) starts from it instead of reading the file, as long as the file is still the one that was written: it
    * has the size and times it had then, and starts with the id that was written into it. So a state saved by another
    * process since, or a file that was replaced or removed, is read (or missed) as in a new process.
    */
-  private record Kept(String file, String id, String stamp, JsonObject state, Map<String, ValueSet> expansions) {
+  private record Kept(String file, String id, String stamp, JsonObject state, Map<String, String> expansions) {
   }
 
   private static Kept kept;
@@ -166,10 +166,10 @@ public class RapidoTracker {
   private final String stateFile;
   /** the journaled expansions, each in a file named by the hash of its content */
   private final String expansionDir;
-  /** the parsed expansions of the last build, by hash, if this process has them */
-  private Map<String, ValueSet> oldExpansions = new HashMap<>();
-  /** the expansions this build replays, by hash */
-  private final Map<String, ValueSet> expansions = new HashMap<>();
+  /** the expansions of the last build (JSON), by hash, if this process has read them */
+  private Map<String, String> oldExpansions = new HashMap<>();
+  /** the expansions this build replays (JSON), by hash */
+  private final Map<String, String> expansions = new HashMap<>();
   /** the file system's time when this build first looked at the files of the last one (see {@link FileStamp}) */
   private FileStamp buildClock;
   private boolean buildClockRead;
@@ -193,6 +193,8 @@ public class RapidoTracker {
   private boolean complete;
   private String reason;
   private Recording recording;
+  /** the archives of the package step that can be kept from the last build */
+  private RapidoArchives archives;
   /** the validator's statusWarnings before the resource being validated now, or null if they can't be read */
   private Set<String> statusBefore;
   /** how many of the IG's profiles the resource being validated was known to conform to before it was validated */
@@ -224,6 +226,12 @@ public class RapidoTracker {
     this.expansionDir = Utilities.path(pf.tempDir, "_rapido", "expansions");
     this.buildDate = new DateTimeType(pf.getExecTime()).asStringValue();
     this.weakReferences = pf.version != null && VersionUtilities.isR4Plus(pf.version);
+    this.archives = new RapidoArchives(pf.outputDir, archivesAside(), null);
+  }
+
+  /** where the archives of the last build are while Jekyll runs (see RapidoArchives): not a folder that Jekyll reads */
+  private String archivesAside() throws IOException {
+    return Utilities.path(pf.tempDir, "_rapido", "archives");
   }
 
   // ---- analysis ------------------------------------------------------------------------------------------------------
@@ -274,6 +282,7 @@ public class RapidoTracker {
       reason = "what the last build wrote in the temp folder isn't all there";
     }
     complete = reason != null;
+    archives = new RapidoArchives(pf.outputDir, archivesAside(), complete ? null : old.getJsonObject("archives"));
     if (complete) {
       return;
     }
@@ -408,6 +417,11 @@ public class RapidoTracker {
 
   public String getReason() {
     return reason;
+  }
+
+  /** the archives of the package step: which of them can be kept from the last build, and what this build records of them */
+  public RapidoArchives getArchives() {
+    return archives;
   }
 
   /** the table generator uuid to reuse, so that replayed outputs and new outputs agree */
@@ -1461,6 +1475,7 @@ public class RapidoTracker {
       files.set(key, nf);
     }
     state.add("files", files);
+    state.add("archives", archives.getRecords());
     // until the file is written and its stamp read, there is nothing this process can start its next build from
     keep(null);
     writeState(state, sf);
@@ -1499,11 +1514,12 @@ public class RapidoTracker {
   }
 
   /**
-   * The journaled expansion with that hash, parsed: the one this process parsed before, or read from its file. null if
-   * it can't be read, or isn't what was written (then the file is removed, so that it's written again)
+   * The journaled expansion with that hash, as JSON (see readExpansion()): the one this process read before, or read
+   * from its file. null if it can't be read, or isn't what was written (then the file is removed, so that it's written
+   * again). Not parsed here: only if the expansion files are written again (see SavedExpansions)
    */
-  private ValueSet loadExpansion(String hash) {
-    ValueSet vs = expansions.get(hash);
+  private String loadExpansion(String hash) {
+    String vs = expansions.get(hash);
     if (vs == null) {
       vs = oldExpansions.get(hash);
     }
@@ -1516,13 +1532,13 @@ public class RapidoTracker {
     return vs;
   }
 
-  private ValueSet readExpansionFile(String hash) {
+  private String readExpansionFile(String hash) {
     File f = expansionFile(hash);
-    ValueSet vs = null;
+    String vs = null;
     try {
       String json = new String(read(f), StandardCharsets.UTF_8);
       if (hash.equals(new Hasher().add(json).finish())) {
-        vs = readExpansion(new JsonParser(pf.context.getModelContext()), json);
+        vs = json;
       }
     } catch (Exception e) {
       // as for a file that doesn't hold what was written
@@ -2250,7 +2266,9 @@ public class RapidoTracker {
     /** the resources (by index) the phase found a UML diagram for, as _data/structuredefinitions.json says */
     public final Set<Integer> umlGenerated = new TreeSet<>();
     public final List<NpmEntry> npm = new ArrayList<>();
-    public final List<ValueSet> expansions = new ArrayList<>();
+    /** the expansions as JSON (see readExpansion()), and the hash the journal has of them */
+    public final List<String> expansions = new ArrayList<>();
+    public String expansionsHash;
     public final List<String[]> tracked = new ArrayList<>();
     public final List<long[]> fragUseNumbers = new ArrayList<>();
     public final List<String> fragUseKeys = new ArrayList<>();
@@ -2377,14 +2395,21 @@ public class RapidoTracker {
       }
     }
     JsonArray exp = j.forceArray("expansions");
-    for (ValueSet vs : pf.expansions.subList(rec.expansionsBefore, pf.expansions.size())) {
+    List<String> stable = new ArrayList<>();
+    for (ValueSet vs : pf.expansions.since(rec.expansionsBefore)) {
       try {
-        exp.add(storeExpansion(saveExpansion(new JsonParser(pf.context.getModelContext()), vs)));
+        String json = saveExpansion(new JsonParser(pf.context.getModelContext()), vs);
+        exp.add(storeExpansion(json));
+        stable.add(SavedExpansions.withoutRunDetails(json));
       } catch (Exception e) {
         return;
       }
     }
+    // what stands for them in the key of the expansion files (see SavedExpansions.key())
+    String eh = SavedExpansions.hash(stable);
+    j.set("expansionsHash", eh);
     newFile(f).set(rec.phase, j);
+    pf.expansions.journaled(rec.expansionsBefore, eh);
   }
 
   private static boolean threw(List<ValidationMessage> list) {
@@ -2468,13 +2493,14 @@ public class RapidoTracker {
       res.npm.add(new NpmEntry(e.asString("category"), e.asString("folder"), e.asString("name"), Base64.getDecoder().decode(e.asString("content"))));
     }
     for (String h : j.forceArray("expansions").asStrings()) {
-      // canReplay() has read it
-      ValueSet vs = loadExpansion(h);
+      // canReplay() has read it; not parsed here: only if the expansion files are written again (see SavedExpansions)
+      String vs = loadExpansion(h);
       if (vs == null) {
         throw new Error("Unable to read an expansion saved by the last Rapido build: "+h);
       }
       res.expansions.add(vs);
     }
+    res.expansionsHash = j.asString("expansionsHash");
     for (JsonElement e : j.forceArray("tracked").getItems()) {
       List<String> a = ((JsonArray) e).asStrings();
       res.tracked.add(new String[] {a.get(0), a.get(1)});

@@ -693,8 +693,8 @@ class PublisherRapidoWatchTest {
   }
 
   /**
-   * In watch mode the next build starts from the state this process saved, without reading it: what it parsed for the
-   * last build (an expansion) is what the next build replays
+   * In watch mode the next build starts from the state this process saved, without reading it: what it read for the
+   * last build (an expansion, as JSON) is what the next build replays
    */
   @Test
   void theNextBuildOfTheProcessStartsFromTheStateItSaved() throws Exception {
@@ -703,8 +703,8 @@ class PublisherRapidoWatchTest {
 
     finish(build("a2"));
     assertEquals(List.of("Patient-b.json"), replayed);
-    ValueSet parsed = replayedExpansions.get(0);
-    assertEquals("http://example.org/vs", parsed.getUrl());
+    String parsed = replayedExpansions.get(0);
+    assertEquals("http://example.org/vs", parse(parsed).getUrl());
 
     finish(build("a3"));
     assertEquals(List.of("Patient-b.json"), replayed);
@@ -717,7 +717,11 @@ class PublisherRapidoWatchTest {
     finish(pf);
     assertEquals(List.of("Patient-b.json"), replayed);
     assertNotSame(parsed, replayedExpansions.get(0));
-    assertEquals("c", replayedExpansions.get(0).getExpansion().getContainsFirstRep().getCode());
+    assertEquals("c", parse(replayedExpansions.get(0)).getExpansion().getContainsFirstRep().getCode());
+  }
+
+  private static ValueSet parse(String json) throws Exception {
+    return RapidoTracker.readExpansion(new org.hl7.fhir.model.core.formats.JsonParser(ModelContext.fullCoreContext()), json);
   }
 
   /** a state file that isn't the one this process wrote (another publisher ran since) is read, not taken as known */
@@ -1109,7 +1113,7 @@ class PublisherRapidoWatchTest {
   /** the files whose html the last finish reused */
   private final List<String> replayed = new ArrayList<>();
   /** the expansions that the html of the files the last finish reused had made */
-  private final List<ValueSet> replayedExpansions = new ArrayList<>();
+  private final List<String> replayedExpansions = new ArrayList<>();
   /** the expansion that rendering a file (by name) makes */
   private final Map<String, ValueSet> expansions = new HashMap<>();
 

@@ -199,7 +199,7 @@ public class PublisherFields {
     String configFileRootPath;
     MarkDownProcessor markdownEngine;
     boolean savingExpansions = true;
-    List<ValueSet> expansions = new ArrayList<ValueSet>();
+    SavedExpansions expansions = new SavedExpansions();
     boolean generatingDatabase = true;
     String npmName;
     NPMPackageGenerator npm;
