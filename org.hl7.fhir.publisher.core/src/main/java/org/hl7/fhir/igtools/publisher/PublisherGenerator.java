@@ -5904,14 +5904,6 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   /**
-   * The archives of the package step that a build can keep (see RapidoArchives), or null if it keeps none. Only a
-   * -rapido -watch build that writes to a staging folder can have the output of the last build to go on from, and
-   * the same build time, without which most of the archives are different every time. Any other build starts with an
-   * empty output folder. So does this one, unless the Jekyll that is kept running goes on from the staging folder
-   * (see PublisherIGLoader.clearOutputUnlessKept()): where the folder was emptied, the archives are found missing,
-   * and are written
-   */
-  /**
    * As PublisherBase.givesWayBefore(), and when the build stops, the archives of the last build that were moved aside
    * for Jekyll and not taken up by a package step that finished go back where the last build left them (nothing of
    * them is recorded, so the next build writes them again)
@@ -5927,6 +5919,14 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     return true;
   }
 
+  /**
+   * The archives of the package step that a build can keep (see RapidoArchives), or null if it keeps none. Only a
+   * -rapido -watch build that writes to a staging folder can have the output of the last build to go on from, and
+   * the same build time, without which most of the archives are different every time. Any other build starts with an
+   * empty output folder. So does this one, unless the Jekyll that is kept running goes on from the staging folder
+   * (see PublisherIGLoader.clearOutputUnlessKept()): where the folder was emptied, the archives are found missing,
+   * and are written
+   */
   private RapidoArchives archives() {
     return pf.rapido == null || pf.watchOutputDir == null ? null : pf.rapido.getArchives();
   }
