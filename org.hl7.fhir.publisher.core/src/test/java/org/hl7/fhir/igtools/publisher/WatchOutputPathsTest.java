@@ -151,6 +151,31 @@ class WatchOutputPathsTest {
   }
 
   @Test
+  void aFailedBuildSaysWhoseThePagesInTheOutputFolderAre() {
+    assertEquals("The build failed, so the pages in out are still those of the last build that succeeded",
+        Publisher.watchFailureNote("out", false, false));
+    String note = Publisher.watchFailureNote("out", true, false);
+    assertTrue(note.startsWith("The build failed after pages were put in out as Jekyll rendered them (not html checked)"), note);
+    assertTrue(note.contains("is from the last build that succeeded"), note);
+    // with -destination nothing is recorded in the output folder, but pages that were put there are still told
+    assertEquals(null, Publisher.watchFailureNote("out", false, true));
+    assertEquals(note, Publisher.watchFailureNote("out", true, true));
+  }
+
+  @Test
+  void pagesPutInTheOutputFolderByABuildThatFailedAreRememberedUntilABuildSyncs() {
+    assertFalse(Publisher.pagesAheadOfSync(null));
+    PublisherFields last = new PublisherFields();
+    assertFalse(Publisher.pagesAheadOfSync(last));
+    // it failed after Jekyll: the build after it, which may fail before Jekyll, is told
+    last.watchPagesPublished = true;
+    assertTrue(Publisher.pagesAheadOfSync(last));
+    // it finished: the output folder is all its own
+    last.watchOutputSynced = true;
+    assertFalse(Publisher.pagesAheadOfSync(last));
+  }
+
+  @Test
   void aFailedBuildWithoutAQaJsonRemovesTheLastOne() throws Exception {
     Path staging = Files.createDirectories(dir.resolve("staging"));
     Path output = Files.createDirectories(dir.resolve("output"));

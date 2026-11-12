@@ -9,6 +9,7 @@ import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -261,5 +262,150 @@ class WatchCompleteBuildJekyllTest {
     assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
     write("temp/a.html", "a3");
     assertEquals(Arrays.asList("a.html"), g.changedSources(temp, out));
+  }
+
+  @Test
+  void memoryIsReclaimedAfterJekyllOnlyIfTheJekyllThatIsKeptRunningRendersTheSite() throws Exception {
+    PublisherGenerator g = generator(null);
+    // the build starts Jekyll: the memory is freed for it first
+    assertFalse(g.reclaimsMemoryAfterJekyll());
+    assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
+    assertTrue(g.reclaimsMemoryAfterJekyll());
+    driver.stop();
+    assertFalse(g.reclaimsMemoryAfterJekyll());
+    // not watch mode
+    g.setWatchTools(null, null);
+    assertFalse(g.reclaimsMemoryAfterJekyll());
+  }
+
+  private String output(String rel) throws IOException {
+    return new String(Files.readAllBytes(Paths.get(pf.watchOutputDir, rel)), StandardCharsets.UTF_8);
+  }
+
+  @Test
+  void thePagesJekyllWroteAreInTheOutputFolderBeforeTheBuildHasFinished() throws Exception {
+    write("temp/.watch-output/en/a.html", "a, rendered again");
+    write("temp/.watch-output/en/b.html", "b, as the last html check left it");
+    write("output/en/a.html", "a");
+    write("output/en/b.html", "b");
+    write("output/package.tgz", "the last build's");
+    write("output/qa.json", "{}");
+    pf.watchBuildStarted = System.nanoTime();
+
+    generator(null).publishPagesEarly(Collections.singleton(Paths.get(out, "en", "a.html").toString()));
+
+    assertEquals("a, rendered again", output("en/a.html"));
+    assertEquals("b", output("en/b.html"));
+    assertEquals("the last build's", output("package.tgz"));
+    assertEquals("{}", output("qa.json"));
+    assertTrue(pf.watchPagesPublished);
+    assertFalse(pf.watchOutputSynced);
+    // the staging folder still has the page, for the html checks and the sync at the end
+    assertTrue(new File(out, "en/a.html").exists());
+    verify(pf.logger).logMessage(startsWith("The pages are up in " + pf.watchOutputDir + ", "));
+  }
+
+  @Test
+  void whenJekyllWroteTheWholeSiteAllOfItIsPutInTheOutputFolder() throws Exception {
+    write("temp/.watch-output/index.html", "home");
+    write("temp/.watch-output/en/a.html", "a");
+    write("temp/.watch-output/en/a.ai.html", "what the AI step makes a.md from, and deletes");
+    write("output/gone.html", "a page the build no longer makes");
+
+    generator(null).publishPagesEarly(null);
+
+    assertEquals("home", output("index.html"));
+    assertEquals("a", output("en/a.html"));
+    assertFalse(new File(pf.watchOutputDir, "en/a.ai.html").exists());
+    // (deleted by the sync at the end of the build)
+    assertEquals("a page the build no longer makes", output("gone.html"));
+    assertTrue(pf.watchPagesPublished);
+  }
+
+  @Test
+  void pagesThatJekyllWroteAsTheyWereLeaveTheOutputFolderTheLastBuilds() throws Exception {
+    write("temp/.watch-output/a.html", "a");
+    write("output/a.html", "a");
+
+    generator(null).publishPagesEarly(Collections.singleton(Paths.get(out, "a.html").toString()));
+
+    // so a failure after this still says that the pages are those of the last build that succeeded
+    assertFalse(pf.watchPagesPublished);
+  }
+
+  @Test
+  void nothingIsPutInTheOutputFolderEarlyIfJekyllDidntRenderTheSite() throws Exception {
+    write("temp/.watch-output/a.html", "a2");
+    write("output/a.html", "a");
+
+    settings.setGenerationOff(true);
+    generator(null).publishPagesEarly(null);
+    settings.setGenerationOff(false);
+    settings.setSimplifierMode(true);
+    generator(null).publishPagesEarly(null);
+    settings.setSimplifierMode(false);
+    // not watch mode: the build writes to the output folder itself
+    String output = pf.watchOutputDir;
+    pf.watchOutputDir = null;
+    generator(null).publishPagesEarly(null);
+    pf.watchOutputDir = output;
+
+    assertEquals("a", output("a.html"));
+    assertFalse(pf.watchPagesPublished);
+  }
+
+  @Test
+  void nothingIsPutInTheOutputFolderEarlyIfJekyllReturnedAnError() throws Exception {
+    write("temp/.watch-output/a.html", "a2, or half of it");
+    write("output/a.html", "a");
+    PublisherGenerator g = generator(null);
+    g.jekyllReturnedAnError();
+
+    g.publishPagesEarly(null);
+
+    assertEquals("a", output("a.html"));
+    assertFalse(pf.watchPagesPublished);
+  }
+
+  @Test
+  void aPageJekyllWroteAgainAsItWasStaysAsTheLastBuildsHtmlChecksLeftIt() throws Exception {
+    write("temp/.watch-output/a.html", "a, as Jekyll wrote it");
+    PublisherGenerator g = generator(null);
+    g.publishPagesEarly(null);
+    // the rest of that build, and its sync
+    write("output/a.html", "a, html checked");
+    pf.watchPagesPublished = false;
+
+    // the next build: Jekyll renders the whole site again
+    g.publishPagesEarly(null);
+
+    assertEquals("a, html checked", output("a.html"));
+    assertFalse(pf.watchPagesPublished);
+  }
+
+  @Test
+  void anOutputFolderThatCantBeWrittenToEarlyDoesntFailTheBuild() throws Exception {
+    write("temp/.watch-output/a.html", "a2");
+    write("blocked", "a file where the output folder's parent would be");
+    pf.watchOutputDir = dir.resolve("blocked").resolve("output").toString();
+
+    generator(null).publishPagesEarly(null);
+
+    assertFalse(pf.watchPagesPublished);
+    verify(pf.logger).logMessage(startsWith("Unable to put the pages in " + pf.watchOutputDir + " yet"));
+  }
+
+  @Test
+  void whatCantBePutInTheOutputFolderEarlyDoesntFailTheBuild() throws Exception {
+    write("temp/.watch-output/a/page.html", "a is a folder now");
+    write("temp/.watch-output/b.html", "b2");
+    write("output/a", "a file");
+    write("output/b.html", "b");
+
+    generator(null).publishPagesEarly(null);
+
+    assertEquals("b2", output("b.html"));
+    verify(pf.logger).logMessage(startsWith("  Unable to update a"));
+    verify(pf.logger).logMessage(contains("1 written, 0 unchanged, 1 failed"));
   }
 }
