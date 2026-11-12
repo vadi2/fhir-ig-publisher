@@ -10,7 +10,7 @@ Status: in progress (Phase C)
 
 | IG | commit | heap | R1 | R1 qa e/w/h | I1 | I1 qa | I2 | W1..W6 | F2 | F6 | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| ChitSR/sample-ig | 0701fa3 | 7600m | 78 | 1/6/3 | 35 | 1/6/3 | 32 | W1 5.7, W2 20.0, W3 20.2, W4 24.0, W5 22.0, W6 18.2 | 36 | 36 | pending master recheck of F1/F2 |
+| ChitSR/sample-ig | 0701fa3 | 7600m | 78 | 1/6/3 | 35 | 1/6/3 | 32 | W1 5.7, W2 20.0, W3 20.2, W4 24.0, W5 22.0, W6 18.2 | 36 | 36 | pass; F1 (intended), F2 pre-existing |
 | HL7/demo-collect | 0cd5dc5 | 7600m | 107 | 0/0/0 | 48 | 0/0/0 | 51 | W1 1.5, W2 26.7, W3 26.9, W4 39.2, W5 30.4, W6 29.8 | 53 | 54 | pass; only diff vs master = F1 (intended, #48) |
 | costateixeira/spenser | 63c79e0 | 7600m | 63 | 58/20/139 |  |  |  |  |  |  |  |
 | HL7/fhir-consent-management | aad3563 | 7600m | 75 | 2/0/0 |  |  |  |  |  |  |  |
@@ -25,6 +25,13 @@ Status: in progress (Phase C)
 Master lists the top-level `*.ai.html` pages (e.g. `Observation-example.ai.html`, `ImplementationGuide-<id>.ai.html`) in spec.internals "targets"; int does not. 
 The AI step deletes those pages, so they are not in output/ with either jar. Comes from commit 349fc12 "spec.internals doesn't list the ai pages the AI step removes" (in #48, and the older copy in the base branch). 
 Shows up in every archive that holds spec.internals: definitions.*.zip, package*.tgz, <id>.en.tgz (.index.db), validator*.pack, full-ig.zip. No other content diff in those archives.
+
+**F2. In watch mode, html-check messages in qa.txt name `temp/pages/.watch-output/...` instead of `output/...` (pre-existing).**
+sample-ig: the W2/W6 qa.txt has `ERROR: <dir>/temp/pages/.watch-output/en/StructureDefinition-myobservation.html: The page skips a heading level` where the full build F2/F6 has `<dir>/output/en/...`. The master watch (sample-ig, same edits) shows the same paths, so it is not caused by the integration branch. Same message set and counts otherwise.
+
+**F3. master R1 of sample-ig: `.index.db` in hl7.fhir.au.sample.myig.en.tgz had 0 ResourceList rows (pre-existing, master flake).** A second master build (R1b) and every int build have 2 rows. Not seen with int.
+
+Master watch on sample-ig for reference (same spec): W1 22.2 s on master vs 5.7 s on int.
 
 ## Compare method notes
 
