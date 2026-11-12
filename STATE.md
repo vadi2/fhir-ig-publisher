@@ -170,3 +170,5 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   Expect native-skip and summaries-reuse PRs ~02:30-03:00, tail-restart ~04:00+.
 - 02:17 tick (cheap): no new PRs (highest 43), no head moved. All 3 were active 01:08-01:29 with background runs.
 - 02:48 tick: PR #44 (summaries-reuse) opened, no checks, clean. Open: #39-#44. Remaining: native-skip, tail-restart.
+- 03:17 tick: no new PRs (highest 44). native-skip active 02:46 ("deleting w-b3; waiting on bt"): still running more
+  bench builds, ~13 h in. tail-restart expected ~03:40+. No nudges.
