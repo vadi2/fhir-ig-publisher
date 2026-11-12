@@ -1657,7 +1657,7 @@ public class PublisherIGLoader extends PublisherBase {
     }
   }
 
-  private String getPathResourceDirectory(ImplementationGuide.ImplementationGuideDefinitionParameterComponent p) throws IOException {
+  String getPathResourceDirectory(ImplementationGuide.ImplementationGuideDefinitionParameterComponent p) throws IOException {
     if ( p.getValue().endsWith("*")) {
       return Utilities.path(pf.rootDir, p.getValue().substring(0, p.getValue().length() - 1)) + "*";
     }
@@ -2490,20 +2490,7 @@ public class PublisherIGLoader extends PublisherBase {
     pf.context.getCutils().setLocalFileNames(pageTargets());
 
     loadConformance1(true);
-    WatchSession.StepWrites factoryWrites = watchSession == null ? null : factoryWrites();
-    try {
-      for (String s : pf.resourceFactoryDirs) {
-        FileUtilities.clearDirectory(s);
-      }
-      if (!pf.testDataFactories.isEmpty()) {
-        processFactories(pf.testDataFactories);
-      }
-    } finally {
-      if (factoryWrites != null) {
-        // what they wrote in the watched folders is the build's, not an edit (also when they failed, what they wrote before)
-        watchSession.stepWrote(factoryWrites);
-      }
-    }
+    runFactories();
     loadResources2(igf);
 
     loadConformance1(false);
@@ -5235,22 +5222,40 @@ public class PublisherIGLoader extends PublisherBase {
   }
 
 
+  /** Clears the folders of path-factory, and runs the test data factories */
+  void runFactories() throws IOException {
+    WatchSession.StepWrites factoryWrites = watchSession == null ? null : factoryWrites();
+    try {
+      for (String s : pf.resourceFactoryDirs) {
+        FileUtilities.clearDirectory(s);
+      }
+      if (!pf.testDataFactories.isEmpty()) {
+        processFactories(pf.testDataFactories);
+      }
+    } finally {
+      if (factoryWrites != null) {
+        // what they wrote in the watched folders is the build's, not an edit (also when they failed, what they wrote before)
+        watchSession.stepWrote(factoryWrites);
+      }
+    }
+  }
+
   /**
    * Watch mode: where the test data factories write (see processFactories()). Null if they write nowhere watched
    */
   private WatchSession.StepWrites factoryWrites() throws IOException {
     List<Path> trees = new ArrayList<>();
-    List<Path> folders = new ArrayList<>();
-    factoryOutputs(FileUtilities.getDirectoryForFile(this.settings.getConfigFile()), pf.testDataFactories, pf.resourceFactoryDirs, trees, folders);
-    return watchSession.stepWriting("the test data factories", trees, folders);
+    List<Path> files = new ArrayList<>();
+    factoryOutputs(FileUtilities.getDirectoryForFile(this.settings.getConfigFile()), pf.testDataFactories, pf.resourceFactoryDirs, trees, files);
+    return watchSession.stepWriting("the test data factories", trees, files);
   }
 
   /**
    * Where the test data factories write: below the folders of path-factory, which are cleared first, and each factory
-   * source's log folder (trees), and in the folder of each factory's output files (folders; below the part of it that
-   * isn't named by the row's values, if it is)
+   * source's log folder (trees), and each factory's output files (files; with the row's values in their path, as
+   * $name$, as the factory names them)
    */
-  static void factoryOutputs(String rootFolder, List<String> sources, List<String> factoryDirs, List<Path> trees, List<Path> folders) {
+  static void factoryOutputs(String rootFolder, List<String> sources, List<String> factoryDirs, List<Path> trees, List<Path> files) {
     Path root = Paths.get(rootFolder).toAbsolutePath().normalize();
     for (String s : factoryDirs) {
       trees.add(Paths.get(s.endsWith("*") ? s.substring(0, s.length() - 1) : s).toAbsolutePath().normalize());
@@ -5262,13 +5267,7 @@ public class PublisherIGLoader extends PublisherBase {
         for (JsonObject fact : org.hl7.fhir.utilities.json.parser.JsonParser.parseObject(source.toFile()).forceArray("factories").asJsonObjects()) {
           String fn = fact.asString("filename");
           if (fn != null) {
-            String dir = folderOf(fn);
-            int v = dir.indexOf('$');
-            if (v < 0) {
-              folders.add(root.resolve(dir).normalize());
-            } else {
-              trees.add(root.resolve(folderOf(dir.substring(0, v))).normalize());
-            }
+            files.add(root.resolve(fn).normalize());
           }
         }
       } catch (Exception e) {
@@ -5277,12 +5276,7 @@ public class PublisherIGLoader extends PublisherBase {
     }
   }
 
-  // the folder part of a relative path ("" if none)
-  private static String folderOf(String path) {
-    return path.substring(0, Math.max(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))));
-  }
-
-  private void processFactories(List<String> factories) throws IOException {
+  void processFactories(List<String> factories) throws IOException {
     LiquidEngine liquid = new LiquidEngine(pf.context, pf.validator.getExternalHostServices());
     for (String f : factories) {
       String rootFolder = FileUtilities.getDirectoryForFile(this.settings.getConfigFile());

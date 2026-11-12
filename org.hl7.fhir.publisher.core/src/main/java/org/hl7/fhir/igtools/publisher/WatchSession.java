@@ -15,6 +15,8 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Consumer;
 import java.util.function.Predicate;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import org.hl7.fhir.igtools.templates.Template;
 
@@ -314,18 +316,20 @@ public class WatchSession {
 
   /**
    * The files in the watched folders that a step of the build (e.g. the test data factories) is about to write: see
-   * stepWrote()
+   * stepWriting()
    */
   public static final class StepWrites {
     private final String step;
     private final List<Path> trees;
-    private final List<Path> folders;
+    private final List<Pattern> files;
+    private final List<Path> roots;
     private final SourceSnapshot before;
 
-    private StepWrites(String step, List<Path> trees, List<Path> folders, SourceSnapshot before) {
+    private StepWrites(String step, List<Path> trees, List<Pattern> files, List<Path> roots, SourceSnapshot before) {
       this.step = step;
       this.trees = trees;
-      this.folders = folders;
+      this.files = files;
+      this.roots = roots;
       this.before = before;
     }
 
@@ -335,27 +339,79 @@ public class WatchSession {
           return true;
         }
       }
-      return folders.contains(p.getParent());
+      for (Pattern f : files) {
+        if (f.matcher(p.toString()).matches()) {
+          return true;
+        }
+      }
+      return false;
     }
   }
 
   /**
-   * A step of the build is about to write in these folders: in trees, any file below them, in folders, only the files
-   * directly in them (a factory's output files may sit next to the user's). Those of them that aren't watched are left
-   * out. Null if none is watched, or before the first build
+   * A step of the build is about to write these: any file below trees, and files (a factory's output files may sit
+   * next to the user's). A part of a file's path may be named by a value, as $name$ (input/$type$/x.json): then it is
+   * any file whose path fits it. Those of them that aren't watched are left out. Null if none is watched, or before the
+   * first build
    */
-  public StepWrites stepWriting(String step, Collection<Path> trees, Collection<Path> folders) throws IOException {
+  public StepWrites stepWriting(String step, Collection<Path> trees, Collection<Path> files) throws IOException {
     if (buildStart == null) {
       return null;
     }
     List<Path> t = watchedOnly(trees);
-    List<Path> f = watchedOnly(folders);
-    if (t.isEmpty() && f.isEmpty()) {
+    List<Path> roots = new ArrayList<>(t);
+    List<Pattern> f = new ArrayList<>();
+    for (Path file : files) {
+      Path n = file.toAbsolutePath().normalize();
+      // what is read before and after the step: the file, or the folder above the first part named by a value
+      Path root = aboveValues(n);
+      if (isWatched(root) && !excluded(root)) {
+        f.add(filePattern(n));
+        if (!roots.contains(root)) {
+          roots.add(root);
+        }
+      }
+    }
+    if (roots.isEmpty()) {
       return null;
     }
-    List<Path> roots = new ArrayList<>(t);
-    roots.addAll(f);
-    return new StepWrites(step, t, f, take(roots, buildStart));
+    return new StepWrites(step, t, f, roots, take(roots, buildStart));
+  }
+
+  private static final Pattern VALUE = Pattern.compile("\\$[^$]*\\$");
+
+  // the folder above the first part of the (absolute) path named by a value (the path itself if none is)
+  private static Path aboveValues(Path file) {
+    Path res = file.getRoot();
+    for (Path name : file) {
+      if (VALUE.matcher(name.toString()).find()) {
+        return res;
+      }
+      res = res.resolve(name);
+    }
+    return file;
+  }
+
+  // any path that fits it, whatever the values are (a value may name folders too)
+  private static Pattern filePattern(Path file) {
+    String s = file.toString();
+    StringBuilder b = new StringBuilder();
+    Matcher m = VALUE.matcher(s);
+    int last = 0;
+    while (m.find()) {
+      b.append(Pattern.quote(s.substring(last, m.start()))).append(".*");
+      last = m.end();
+    }
+    return Pattern.compile(b.append(Pattern.quote(s.substring(last))).toString());
+  }
+
+  private boolean excluded(Path p) {
+    for (Path e : excluded) {
+      if (p.startsWith(e)) {
+        return true;
+      }
+    }
+    return false;
   }
 
   private List<Path> watchedOnly(Collection<Path> paths) {
@@ -380,9 +436,7 @@ public class WatchSession {
     if (writes == null || buildStart == null) {
       return Collections.emptySet();
     }
-    List<Path> roots = new ArrayList<>(writes.trees);
-    roots.addAll(writes.folders);
-    SourceSnapshot after = take(roots, writes.before);
+    SourceSnapshot after = take(writes.roots, writes.before);
     Set<Path> written = new TreeSet<>();
     for (Path p : after.changesSince(writes.before).all()) {
       if (writes.covers(p)) {
@@ -391,6 +445,10 @@ public class WatchSession {
     }
     if (!written.isEmpty()) {
       buildStart = buildStart.withFiles(written, after);
+      if (sushiInputs != null) {
+        // SUSHI ran on the sources before the step wrote: they are not a change for SUSHI either
+        sushiInputs = sushiInputs.withFiles(written, after);
+      }
       log.accept("Watch mode: " + (written.size() > 3 ? written.size() + " files" : written.toString()) + " written by "
           + writes.step + ": not a change");
     }

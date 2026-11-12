@@ -524,10 +524,11 @@ class WatchTailAbandonTest {
     Files.write(root.resolve("factories.json"), ("{\"factories\": [{\"name\": \"P\", \"filename\": \"input/factories/Patient-$counter$.json\"},"
         + " {\"name\": \"B\", \"filename\": \"input/tests/Bundle.json\"}, {\"name\": \"C\", \"filename\": \"input/cases/$id$/c.json\"}]}").getBytes(StandardCharsets.UTF_8));
     List<Path> trees = new ArrayList<>();
-    List<Path> folders = new ArrayList<>();
-    PublisherIGLoader.factoryOutputs(root.toString(), List.of("factories.json"), List.of(factories.toString()), trees, folders);
-    assertEquals(List.of(factories.toAbsolutePath(), root.resolve("log").toAbsolutePath(), input.resolve("cases").toAbsolutePath()), trees);
-    assertEquals(List.of(factories.toAbsolutePath(), input.resolve("tests").toAbsolutePath()), folders);
+    List<Path> files = new ArrayList<>();
+    PublisherIGLoader.factoryOutputs(root.toString(), List.of("factories.json"), List.of(factories.toString()), trees, files);
+    assertEquals(List.of(factories.toAbsolutePath(), root.resolve("log").toAbsolutePath()), trees);
+    assertEquals(List.of(factories.resolve("Patient-$counter$.json").toAbsolutePath(), input.resolve("tests/Bundle.json").toAbsolutePath(),
+        input.resolve("cases/$id$/c.json").toAbsolutePath()), files);
 
     Publisher p = publisher(new PublisherFields());
     WatchSession session = new WatchSession(root, List.of(input));
@@ -537,7 +538,7 @@ class WatchTailAbandonTest {
         if (build > 1) {
           assertTrue(session.changesSincePreviousBuild().isEmpty(), "build " + build);
         }
-        WatchSession.StepWrites w = session.stepWriting("the test data factories", trees, folders);
+        WatchSession.StepWrites w = session.stepWriting("the test data factories", trees, files);
         runFactories(input, build);
         assertFalse(session.stepWrote(w).isEmpty());
 
@@ -555,7 +556,7 @@ class WatchTailAbandonTest {
 
       // a build in which the user saves a file while it runs gives way to it, factories or not
       session.startBuild();
-      WatchSession.StepWrites w = session.stepWriting("the test data factories", trees, folders);
+      WatchSession.StepWrites w = session.stepWriting("the test data factories", trees, files);
       runFactories(input, 4);
       session.stepWrote(w);
       Files.write(fsh, "another".getBytes(StandardCharsets.UTF_8));
@@ -584,6 +585,8 @@ class WatchTailAbandonTest {
     }
     Files.createDirectories(input.resolve("tests"));
     Files.write(input.resolve("tests").resolve("Bundle.json"), ("{\"run\": " + run + "}").getBytes(StandardCharsets.UTF_8));
+    Files.createDirectories(input.resolve("cases/" + run));
+    Files.write(input.resolve("cases/" + run + "/c.json"), ("{\"run\": " + run + "}").getBytes(StandardCharsets.UTF_8));
     Files.createDirectories(input.getParent().resolve("log"));
     Files.write(input.getParent().resolve("log").resolve("P.log"), ("run " + run).getBytes(StandardCharsets.UTF_8));
   }
