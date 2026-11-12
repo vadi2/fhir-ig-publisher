@@ -16,8 +16,8 @@ Status: in progress (Phase C)
 | IHE/ITI.DIS | 5a37d30b52 | 7600m | 103 | 0/23/119 | 74 | 66 | 66, 10/37/32/43/39/30 (all edits seen) | 60 | 60 | 0/23/119 | REGRESSION (order only, looks intended): llms.txt/llms.md page order, HL7 #1461 watch-page-rebuild (in base). pre-existing diffs: THO version in a NamingSystem narrative link, package .index.db rows, used-by list order |
 | hl7germany/medication-ig-de-r4 | 06c8d75d78 | 7600m | 174 | 1673/2112/815 | 150 | 168 | 143, 12/107/98/131/130/106 (all edits seen) | 144 | 144 | 1673/2112/815 | REGRESSION (order only, looks intended): llms.txt/llms.md page order, HL7 #1461 (as dis). pre-existing diffs: package .index.db rows, tx.fhir.org bcp:47 expansion display in package-combined.tgz, used-by list order |
 | HL7/davinci-pdex-formulary | 549af4d87a | 7600m | 116 | 0/0/22 | 117 | 95 | 114, 5/61/59/76/74/63 (all edits seen, see notes) | 115 | 114 | 0/0/22 | pending master watch: W2-only link difference. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48 |
-| ahdis/ch-ekm | cb48773900 | 7600m | 315 | 794/8352/4461 | | | | | | | |
-| HL7/phd | 565d3336a2 | 7600m | 100 | 0/0/2 | | | | | | | |
+| ahdis/ch-ekm | cb48773900 | 7600m | 315 | 794/8352/4461 | 292 | 210 | 284, 8/218/222/230/232/229 (all edits seen) | 270 | 258 | 794/8352/4461 | pending master M1/M2: mapping column order, NamingSystem version links. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48 |
+| HL7/phd | 565d3336a2 | 7600m | 100 | 0/0/2 | 100 | 88 | 108, 1/42/36/72/75/40 (all edits seen) | 101 | 95 | 0/0/2 | pending master M1/M2: child-profile and used-by list order. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48. pre-existing: package .index.db rows |
 | TWNHIFHIR/empd | 988d8dbbaf | 7600m | 209 | 0/0/0 | | | | | | | |
 | hl7-eu/eps | 3314660fc5 | 7600m | 188 | 0/51/15 | | | | | | | |
 
@@ -34,6 +34,18 @@ Status: in progress (Phase C)
 ### medde
 - QA counts and messages equal in every build. Every int build equals every other int build (I1 = I2, W2 = F2, W6 = F6, W6 = I1).
 - vs R1: package.tgz `.index.db` rows (28 vs 0), and package-combined.tgz ValueSet-all-languages (tx.fhir.org bcp:47 expansion) display "Interlingua (International Auxiliary Language" in R1 vs "... Association)" in every int build. Master rerun M1 (fresh, 155 s) has the int values for both, so both are pre-existing (they vary between master runs). int vs M1: order only (llms.txt page order, as dis; used-by lists).
+
+### chekm
+- QA counts equal in every build (794/8352/4461, 98 broken links); message sets equal once Line/col is masked.
+- Line numbers of about 60 broken-link errors in en/StructureDefinition-ch-ekm-patient-mappings.html and -immunization-mappings.html move between builds: the mapping columns (e.g. "Immunization Form to CH EKM Immunization") come in a different order. This also varies between two int builds (I1 vs I2) and between W2/F2, so it is run-to-run variation; master M1/M2 pending.
+- Every comparison (I1, I2 vs R1; I1 vs I2; W2 vs F2; W6 vs F6; W6 vs I1) differs in NamingSystem link versions in narratives (THO 7.0.1/5.3.0/6.2.0, ch-term 3.3.0/3.4.0; 460 to 612 files plus their escaped .json.html/.xml.html), the known pattern from dis.
+- vs R1 also spec.internals (#48) and .index.db rows.
+
+### phd
+- QA SAME (0/0/2) in every build.
+- W2 = F2, W6 = F6, W6 = I1: no content difference, order only.
+- Order only, in every pair including int vs int: used-by lists in *-ref-*list.csv/json and package.db Resources, and the "Child profiles" list of the abstract PhdBaseObservation (narrative and pages). Master M1/M2 pending.
+- I1, I2 vs R1: spec.internals (#48, .ai.html targets) and package .index.db ResourceList rows.
 
 ### formulary
 - QA counts and messages equal in every build.
