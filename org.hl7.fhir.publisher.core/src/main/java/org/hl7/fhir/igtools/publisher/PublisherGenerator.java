@@ -319,6 +319,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       logMessage("Generate HTML Outputs");
       // the resources don't change while the html is generated, so what they use only needs to be worked out once
       pf.sdUsageCache = new IdentityHashMap<>();
+      if (pf.inputCache != null && !settings.isGenerationOff()) {
+        pf.inputCache.startPhase(InputCache.PHASE_HTML);
+      }
       try {
         for (FetchedFile f : pf.changeList) {
           f.start("generate2");
@@ -328,12 +331,27 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
               convertForRendering(f);
               redoRenderingChanges(f);
             } else {
-              if (pf.rapido != null) {
-                pf.rapido.startRecording(f, RapidoTracker.PHASE_HTML);
-              }
-              generateHtmlOutputs(f, false, db, null);
-              if (pf.rapido != null) {
-                pf.rapido.stopRecording();
+              // the input cache is never on in a Rapido build
+              InputCache.Step cached = pf.inputCache == null || settings.isGenerationOff() ? null : pf.inputCache.beginHtml(f);
+              if (cached == null || !cached.replay() || !replayHtmlOutputs(f, cached)) {
+                if (cached != null && cached.replay()) {
+                  cached = null;
+                }
+                if (pf.rapido != null) {
+                  pf.rapido.startRecording(f, RapidoTracker.PHASE_HTML);
+                }
+                boolean ok = false;
+                try {
+                  generateHtmlOutputs(f, false, db, null);
+                  ok = true;
+                } finally {
+                  if (cached != null) {
+                    pf.inputCache.endHtml(cached, ok);
+                  }
+                }
+                if (pf.rapido != null) {
+                  pf.rapido.stopRecording();
+                }
               }
             }
           } finally {
@@ -342,6 +360,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
       } finally {
         pf.sdUsageCache = null;
+        if (pf.inputCache != null) {
+          pf.inputCache.endPhase();
+        }
       }
 
       logMessage("Generate Spreadsheets");
@@ -815,6 +836,44 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         db.saveResource(f, r, json);
       }
     }
+  }
+
+  /**
+   * The input cache has the file's html outputs from an earlier build: it writes them, and this does the rest of
+   * what generating them does to the build
+   */
+  private boolean replayHtmlOutputs(FetchedFile f, InputCache.Step cached) throws Exception {
+    // generating the html converted these for rendering, and later steps use them
+    Map<Integer, Resource> converted = new HashMap<>();
+    for (int i : pf.inputCache.htmlConversions(cached)) {
+      try {
+        converted.put(i, convertFromElement(f.getResources().get(i).getElement()));
+      } catch (Exception e) {
+        pf.inputCache.abandon(cached, "converting " + f.getResources().get(i).fhirType() + "/" + f.getResources().get(i).getId() + " for rendering failed: " + e.getMessage());
+        return false;
+      }
+    }
+    InputCache.HtmlReplay replay = pf.inputCache.replayHtml(cached);
+    for (InputCache.NpmEntry e : replay.npm) {
+      if (e.category != null) {
+        addFileToNpm(NPMPackageGenerator.Category.valueOf(e.category), e.name, e.content);
+      } else {
+        addFileToNpm(e.folder, e.name, e.content);
+      }
+    }
+    for (InputCache.FragmentUse u : replay.fragmentUses) {
+      PublisherBase.FragmentUseRecord frag = pf.fragmentUses.get(u.key);
+      if (frag == null) {
+        frag = new PublisherBase.FragmentUseRecord();
+        pf.fragmentUses.put(u.key, frag);
+      }
+      frag.record(u.time, u.size);
+    }
+    for (Map.Entry<Integer, Resource> e : converted.entrySet()) {
+      f.getResources().get(e.getKey()).setResource(e.getValue());
+    }
+    redoRenderingChanges(f);
+    return true;
   }
 
   private void generateHtmlOutputs(FetchedFile f, boolean regen, DBBuilder db, String lang) throws Exception {
@@ -1840,6 +1899,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         fragment("ValueSet-"+prefixForContainer+vs.getId()+"-expansion", html, f.getOutputNames(), r, vars, null, start, "expansion", "ValueSet", lang);
       } else {
         ValueSetExpansionOutcome exp = this.pf.context.expandVS(new ExpansionOptions().withCacheOk(true).withHierarchical(true).withLanguage(lrc.getLocale().getLanguage()).withIncompleteOk(true), vs);
+        if (pf.inputCache != null) {
+          // the expansion goes into package.db, and rendering it changes the object the terminology cache holds
+          pf.inputCache.noteUncacheable("value set expansion");
+        }
 
         if (db != null) {
           db.recordExpansion(vs, exp);
@@ -2865,6 +2928,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       pf.trackedFragments.put(id, new ArrayList<>());
     }
     pf.trackedFragments.get(id).add(name+".xhtml");
+    if (pf.inputCache != null) {
+      pf.inputCache.noteTrackedFragment(id, name+".xhtml");
+    }
     if (pf.rapido != null) {
       pf.rapido.recordTrackedFragment(id, name+".xhtml");
     }
@@ -2885,6 +2951,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
     long time = System.currentTimeMillis() - start;
     frag.record(time, fixedContent.length());
+    if (pf.inputCache != null) {
+      pf.inputCache.noteFragmentUse(context+"."+code, time, fixedContent.length());
+    }
     if (pf.rapido != null) {
       pf.rapido.recordFragmentUse(context+"."+code, time, fixedContent.length());
     }
@@ -2892,6 +2961,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (checkMakeFile(FileUtilities.stringToBytes(wrapLiquid(fixedContent)), Utilities.path(pf.tempDir, "_includes", name+(lang == null ? "" : "-" + lang)+".xhtml"), outputTracker)) {
       if (settings.getMode() != PublisherUtils.IGBuildMode.AUTOBUILD && pf.makeQA) {
         FileUtilities.stringToFile(pageWrap(fixedContent, name), Utilities.path(pf.qaDir, name+(lang == null ? "" : "-" + lang)+".html"));
+        if (pf.inputCache != null) {
+          pf.inputCache.noteFile(Utilities.path(pf.qaDir, name+(lang == null ? "" : "-" + lang)+".html"));
+        }
       }
     }
     // For multi-language IGs, also write a non-suffixed copy for the default language
@@ -2900,6 +2972,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       String unsuffixedPath = Utilities.path(pf.tempDir, "_includes", name+".xhtml");
       if (!pf.allOutputs.contains(unsuffixedPath.toLowerCase())) {
         FileUtilities.bytesToFile(FileUtilities.stringToBytes(wrapLiquid(fixedContent)), unsuffixedPath);
+        if (pf.inputCache != null) {
+          pf.inputCache.noteFile(unsuffixedPath);
+        }
       }
     }
   }
@@ -4464,6 +4539,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
 
   private void addFileToNpm(NPMPackageGenerator.Category other, String name, byte[] cnt) throws IOException {
+    if (pf.inputCache != null) {
+      pf.inputCache.noteNpm(other.name(), null, name, cnt);
+    }
     if (pf.rapido != null) {
       pf.rapido.recordNpm(other.name(), null, name, cnt);
     }
@@ -4474,6 +4552,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   private void addFileToNpm(String other, String name, byte[] cnt) throws IOException {
+    if (pf.inputCache != null) {
+      pf.inputCache.noteNpm(null, other, name, cnt);
+    }
     if (pf.rapido != null) {
       pf.rapido.recordNpm(null, other, name, cnt);
     }
@@ -6820,6 +6901,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
 
   private String processSQLCommand(DBBuilder db, String src, FetchedFile f) throws FHIRException, IOException {
+    if (pf.inputCache != null) {
+      pf.inputCache.noteUncacheable("sql");
+    }
     long start = System.currentTimeMillis();
     String output = db == null ? "<span style=\"color: maroon\" data-fhir=\"generated\">No SQL this build</span>" : db.processSQL(src);
     int i = this.pf.sqlIndex++;
@@ -6934,6 +7018,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   private String processSQLData(DBBuilder db, String src, FetchedFile f) throws FHIRException, IOException {
+    if (pf.inputCache != null) {
+      pf.inputCache.noteUncacheable("sql");
+    }
     long start = System.currentTimeMillis();
 
     if (db == null) {

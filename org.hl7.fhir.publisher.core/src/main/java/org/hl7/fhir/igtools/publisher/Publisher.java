@@ -586,6 +586,13 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       log("Generating Outputs in "+ pf.outputDir);
       Map<String, String> uncsList = scanForUnattributedCodeSystems();
       generator.generate();
+      if (pf.inputCache != null) {
+        pf.inputCache.finish();
+        ValidationMessage mismatches = pf.inputCache.verificationMessage();
+        if (mismatches != null) {
+          pf.errors.add(mismatches);
+        }
+      }
       clean();
       pf.dependentIgFinder.finish(pf.outputDir, pf.sourceIg.present());
       List<FetchedResource> fragments = new ArrayList<>();
@@ -2140,21 +2147,36 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
         }
       }
       if (example != null) {
-        FetchedResource source = null;
-        for (FetchedFile f : pf.fileList) {
-          for (FetchedResource r : f.getResources()) {
-            if (r.getResource() == profile) {
-              source = r;
-            }
-          }
-        }
+        FetchedResource source = sourceOf(pf.fileList, profile);
         if (source != null) {
           source.addFoundExample(example);
           example.getFoundProfiles().add(profile.getUrl());
+          if (pf.inputCache != null) {
+            pf.inputCache.noteFoundExample(source, example, profile.getUrl());
+          }
         }
       }
     }
 
+  }
+
+  /**
+   * the IG's resource that the profile was loaded from, or null. Telling which it is isn't a read of each resource
+   * (the input cache would have the validation depend on all of them): only the one found is read
+   */
+  static FetchedResource sourceOf(List<FetchedFile> files, StructureDefinition profile) {
+    FetchedResource source = null;
+    for (FetchedFile f : files) {
+      for (FetchedResource r : f.getResources()) {
+        if (r.getResourceQuietly() == profile) {
+          source = r;
+        }
+      }
+    }
+    if (source != null) {
+      source.getResource();
+    }
+    return source;
   }
 
   public static void publishDirect(String path) throws Exception {

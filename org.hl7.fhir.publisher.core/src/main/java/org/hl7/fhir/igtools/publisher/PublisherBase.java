@@ -311,6 +311,9 @@ public class PublisherBase implements ILoggingService {
       pf.rapido.recordOutput(s);
     }
     outputTracker.add(path);
+    if (pf.inputCache != null) {
+      pf.inputCache.noteOutput(s, path);
+    }
 
     File f = new CSFile(path);
     File folder = new File(FileUtilities.getDirectoryForFile(f));

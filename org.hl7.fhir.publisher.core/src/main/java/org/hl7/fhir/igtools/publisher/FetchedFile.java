@@ -29,6 +29,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+import org.hl7.fhir.igtools.publisher.FetchedReads.FilePart;
 import org.hl7.fhir.utilities.json.model.JsonObject;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 
@@ -188,12 +189,14 @@ public class FetchedFile {
   }
  
   public long getHash() {
+    FetchedReads.read(this, FilePart.CONTENT);
     return hash;
   }
   public void setHash(long hash) {
     this.hash = hash;
   }
   public byte[] getSource() {
+    FetchedReads.read(this, FilePart.CONTENT);
     if (source == null)
       throw new Error("Source has been dropped");
     return source;
@@ -218,9 +221,11 @@ public class FetchedFile {
     return r;
   }
   public List<ValidationMessage> getErrors() {
+    FetchedReads.read(this, FilePart.ERRORS);
     return errors;
   }
   public List<ValidationMessage> getFilteredMessages() {
+    FetchedReads.read(this, FilePart.ERRORS);
     return filteredMessages;
   }
   public void setFilteredMessages(List<ValidationMessage> filteredMessages) {
@@ -233,6 +238,7 @@ public class FetchedFile {
     this.bundle = bundle;
   }
   public Map<String, String> getValuesetsToLoad() {
+    FetchedReads.read(this, FilePart.CONTENT);
     return valuesetsToLoad;
   }
   public boolean isFolder() {
@@ -248,6 +254,7 @@ public class FetchedFile {
   }
 
   public Set<String> getOutputNames() {
+    FetchedReads.read(this, FilePart.OUTPUTS);
     return outputNames;
   }
   public int getProcessMode() {
@@ -257,9 +264,11 @@ public class FetchedFile {
     this.processMode = processMode;
   }
   public Boolean hasTitle() {
+    FetchedReads.read(this, FilePart.CONTENT);
     return title != null;
   }
   public String getTitle() {
+    FetchedReads.read(this, FilePart.CONTENT);
     return title == null ? name : title;
   }
   public void setTitle(String title) {
@@ -359,6 +368,7 @@ public class FetchedFile {
   }
   
   public long getSize() {
+    FetchedReads.read(this, FilePart.CONTENT);
     return size;
   }
   public boolean isLoaded() {
@@ -392,6 +402,7 @@ public class FetchedFile {
   }
 
   public boolean getTranslated(String l) {
+    FetchedReads.read(this, FilePart.CONTENT);
     if (translations.containsKey(l) && translations.get(l)) {
       return true;
     } else {

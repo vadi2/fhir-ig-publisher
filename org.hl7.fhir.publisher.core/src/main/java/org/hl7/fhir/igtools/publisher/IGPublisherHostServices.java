@@ -83,7 +83,7 @@ public class IGPublisherHostServices extends BaseHostServices {
     }
     for (FetchedFile f : fileList) {
       for (FetchedResource r : f.getResources()) {
-        if (r.getElement() != null && url.equals(r.fhirType()+"/"+r.getId())) {
+        if (url.equals(r.fhirType()+"/"+r.getId()) && r.getElement() != null) {
           return r.getElement();
         }
       }
