@@ -14,7 +14,7 @@ Status: in progress (Phase C)
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | HL7Chile/MHD-CL | 360872e | 7600m | 133 | 0/28/5 | 67 | 0/28/5 | 55 | 0/27/5 | 57 / 3 / 33 / 31 / 34 / 33 / 30 | 0/27/5 | 0/27/5 | 73 | 0/28/5 | REGRESSION: llms.txt page order (HL7 #1461, likely intended); pre-existing diffs: SCT edition warning missing on reused folders, package .index.db rows |
 | hl7-eu/readi | 0dd3e92 | 7600m | 72 | 165/59/55 | 54 | 165/59/55 | 50 | 165/59/55 | 55 / 2 / 30 / 27 / 40 / 34 / 27 | 165/59/55 | 165/59/55 | 51 | 165/59/55 | REGRESSION: spec.internals drops the .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version in narrative links |
-| RIVO-Noord/zorgviewer-ig | aab62e4 | 7600m | 139 | 669/137/128 |  |  |  |  |  |  |  |  |  |  |
+| RIVO-Noord/zorgviewer-ig | aab62e4 | 7600m | 139 | 669/137/128 | 126 | 669/137/128 | 92 | 669/137/128 | 131 / 6 / 90 / 72 / 72 / 69 / 71 | 669/137/128 | 669/137/128 | 115 | 669/137/128 | REGRESSION: llms.txt page order (HL7 #1461) only; pre-existing diffs: watch QA paths under temp/pages/.watch-output, "used by" csv order |
 | HL7/davinci-ra | f003bae | 7600m | 188 | 0/0/0 |  |  |  |  |  |  |  |  |  |  |
 | HL7/imaging-service-request-ig | def90dc | 7600m | 111 | 195/225/244 |  |  |  |  |  |  |  |  |  |  |
 | hl7au/au-fhir-core | 3de0d01 | 7600m | 171 | 62/220/47 |  |  |  |  |  |  |  |  |  |  |
@@ -35,3 +35,12 @@ Status: in progress (Phase C)
 - **REGRESSION (order only), HL7 #1461**: llms.txt, en/llms.txt and en/ai.zip page order, as for MHD-CL.
 - pre-existing: the narrative of Bundle-readi-sample-1-r4 (json/xml/ttl, its html pages, examples.*.zip, package.db, packages) links NamingSystem-uri to terminology.hl7.org 7.5.0 in some builds and 7.1.0 in others, for master too (R1 and a second fresh master build: 7.5.0; a second master build in the same folder: 7.1.0). int.jar: I1 7.5.0, I2 7.1.0, F2 7.1.0, W2 7.1.0, W6 7.5.0. Not tied to the folder or the jar.
 - QA identical everywhere (165/59/55, 3 broken links, same 282 messages). W2 output = F2, W6 output = I1. No 502s.
+
+### RIVO-Noord/zorgviewer-ig
+
+- **REGRESSION (order only), HL7 #1461**: llms.txt and ai.zip page order, as for MHD-CL.
+- pre-existing: in the watch builds (W2, W6) the html-check messages name `temp/pages/.watch-output/<page>.html` instead of `output/<page>.html` (12 messages, same text otherwise). A master watch session (W1, W2) gives the same paths.
+- not a difference: "index.html ... Line 350, column 2687" vs 2688 in the watch QA: the page embeds the absolute run folder (`background-image: url(<run folder>/temp/pagesdata:image/png...`, master too), and the watch folder name is one character shorter.
+- masked: the order of the "used by" lists in codesystem-ref-all-list.csv, codesystem-ref-list.csv, valueset-ref-all-list.csv (and csvs.zip, full-ig.zip) changes between any two builds, master included.
+- QA counts identical everywhere (669/137/128, 43 broken links). W2 output = F2 and W6 output = I1 apart from the csv order.
+- Rapido: every watch resource edit (W2..W6) was a Complete Build because "terminology server calls failed in the last build (5)" (an STU3 IG with tx calls that fail every time, no 502s); master does the same, and also for W1 (int.jar: Page Rebuild, 6 s, master 72 s).
