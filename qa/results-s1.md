@@ -14,8 +14,8 @@ Status: in progress (Phase C)
 | HL7/demo-collect | 0cd5dc5 | 7600m | 107 | 0/0/0 | 48 | 0/0/0 | 51 | W1 1.5, W2 26.7, W3 26.9, W4 39.2, W5 30.4, W6 29.8 | 53 | 54 | pass; only diff vs master = F1 (intended, #48) |
 | costateixeira/spenser | 63c79e0 | 7600m | 63 | 58/20/139 | 58 | 58/20/139 | 51 | W1 1.7, W2 27.5, W3 21.9, W4 53.8, W5 50.7, W6 30.6 | 49 | 56 | pass; F1 (intended), F3 pre-existing |
 | HL7/fhir-consent-management | aad3563 | 7600m | 75 | 2/0/0 | 76 | 2/0/0 | 75 | W1 8.6, W2 43.8, W3 42.5, W4 55.8, W5 51.5, W6 41.1 | 75 | 75 | pass; F1 (intended), F4 pre-existing |
-| HL7/emedicinal-product-info | 66968b7 | 7600m | 135 | 7/0/0 | 136 | 7/0/0 | 118 |  |  |  |  |
-| hyweb-cdc/niis | b343858 | 7600m | 116 | 0/0/0 |  |  |  |  |  |  |  |
+| HL7/emedicinal-product-info | 66968b7 | 7600m | 135 | 7/0/0 | 136 | 7/0/0 | 118 | W1 23.0, W2 79.8, W3 82.7, W4 109.5, W5 109.1, W6 85.8 | 119 | 117 | pass; F1 (intended), F3 pre-existing; comparison pages differ only in embedded Java stack traces |
+| hyweb-cdc/niis | b343858 | 7600m | 116 | 0/0/0 | 99 | 0/0/0 | 100 |  |  |  |  |
 | uzinfocom-org/digital-health-ig | 31e406f | 7600m | 748 | 5/268/9446 |  |  |  |  |  |  |  |
 | HL7/US-Core | 3a65397 |  |  |  |  |  |  |  |  |  |  |
 
@@ -44,3 +44,4 @@ fhir-consent-management watch: the first run's W4 used an instance that my spec 
 - Order-only diffs seen on both jars between runs (codesystem-ref-*.json/csv, llms.txt, en/ai.zip, package.db row order) are not counted.
 - fhir-consent-management: first master R1 hit tx.fhir.org 502s (60 tx errors); redone. tx-error messages are listed separately in each compare.
 - niis: master R1 fails under LC_ALL=C (non-ASCII image file name, Java file name encoding ANSI_X3.4-1968); pre-existing on master, related to #25 ws10-nonascii-names. All builds use C.UTF-8.
+- emedicinal-product-info: three `comparison-v1.0.0/xx-*.html` pages embed a Java stack trace (master too). Between master and int the frames differ only by line numbers; between watch and full builds by the watch call path (`lambda$execute$0`, `completeBuild`). With the frames masked, nothing is left except F1/F3.
