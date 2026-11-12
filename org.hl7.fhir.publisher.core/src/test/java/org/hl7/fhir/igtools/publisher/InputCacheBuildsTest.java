@@ -511,4 +511,19 @@ class InputCacheBuildsTest {
     assertEquals("<p>Patient p, built " + b2.buildDate() + "</p>", new String(Files.readAllBytes(page.toPath()), StandardCharsets.UTF_8));
     assertTrue(b2.file.getOutputNames().contains(page.getAbsolutePath()));
   }
+
+  @Test
+  void theRequirementsTheHtmlCheckWritesInTheIgsFolder_areNotAnInput() throws Exception {
+    Build b1 = new Build("Smith");
+    b1.open();
+    List<ValidationMessage> first = b1.validationStep(false);
+    b1.finish();
+    // the html check suggests a Requirements resource made from the narrative, after the steps ran
+    Files.write(new File(root, "Requirements-fromNarrative.json").toPath(), "{\"resourceType\":\"Requirements\"}".getBytes(StandardCharsets.UTF_8));
+
+    Build b2 = new Build("Smith");
+    b2.open();
+    assertEquals(text(first), text(b2.validationStep(true)));
+    b2.finish();
+  }
 }

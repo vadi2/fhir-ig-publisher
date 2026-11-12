@@ -487,6 +487,8 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     // written by sushi on every run
     skip.add(canonical(Utilities.path(pf.rootDir, "fsh-generated", "fsh-index.txt")));
     skip.add(canonical(Utilities.path(pf.rootDir, "fsh-generated", "data", "fsh-index.json")));
+    // written by the html check (ConformanceStatementHandler), after the steps ran: a suggestion for the IG's author
+    skip.add(canonical(Utilities.path(pf.rootDir, "Requirements-fromNarrative.json")));
     return skip;
   }
 
