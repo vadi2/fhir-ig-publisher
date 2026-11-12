@@ -483,9 +483,18 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       return;
     }
     Arrays.sort(list);
-    d.add(rel + "/").add(list.length);
+    // the skipped entries aren't counted: the folders a build writes (output, temp, the cache's own) aren't there
+    // before the first build
+    List<File> children = new ArrayList<>();
     for (String s : list) {
-      hashTree(root, new File(dir, s), d, skip, visited);
+      File f = new File(dir, s);
+      if (!skip.contains(canonical(f.getAbsolutePath()))) {
+        children.add(f);
+      }
+    }
+    d.add(rel + "/").add(children.size());
+    for (File f : children) {
+      hashTree(root, f, d, skip, visited);
     }
   }
 
