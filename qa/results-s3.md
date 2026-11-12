@@ -1,6 +1,6 @@
 # QA results: shard s3
 
-Status: Phase C in progress (xshare, madfsh, usps, sact, hroute done).
+Status: Phase C in progress (xshare, madfsh, usps, sact, hroute, vris done).
 
 Reference jar: origin/master 32046bcdd9. Integration jar: `qa/integration-ready` 6c1abf463d. Heap 7600m unless noted. VM 15 GB / 4 CPU, 16 GB swap.
 
@@ -11,7 +11,7 @@ Reference jar: origin/master 32046bcdd9. Integration jar: `qa/integration-ready`
 | HL7/us-fhir-ps | c20fdb208c | 7600m | 94 s (R1b 70 s) | 0/7/21 | 64 s, 0/7/21 | 56 s, 0/7/21 | 62/6/43/50/37/38/34 s, all edits seen, QA 0/7/21; rerun 64/6/42/34/38/35/32 s | 65 s | 67 s | REGRESSION: F1 only (I1/I2). pre-existing diffs: NamingSystem link/name chosen from a random THO package (masked); one W2 vs F2 diff of this kind (us-npi display) not reproduced on a rerun. W6=F6, W6=I1 same |
 | hl7-eu/phoenix-sact | f9246ccc86 | 7600m | 53 s | 0/2/77 | 62 s, 0/2/77 | 55 s, 0/2/77 | 64/1/27/34/36/38/26 s, all edits seen, QA 0/2/77 | 64 s | 64 s | REGRESSION: F1 only (I1/I2). W2=F2, W6=F6, W6=I1 same |
 | savannahghi/healthy-route-ig | 7a1e3e908a | 7600m | 99 s | 4/217/861 | 94 s, 4/217/861 | 76 s, 4/217/861 | 82/5/51/43/63/66/51 s, all edits seen, QA 4/217/861 | 88 s | 82 s | REGRESSION: F1 only (I1/I2). W2=F2, W6=F6, W6=I1 same |
-| TEHIK-EE/ig-ee-vris | c1741f186c | 7600m | 121 s (R1b) | 95/876/216 | | | | | | pending |
+| TEHIK-EE/ig-ee-vris | c1741f186c | 7600m | 121 s (R1b) | 95/876/216 | 136 s, 95/876/216 | 118 s, 95/876/216 | 129/2/95/101/100/102/98 s, all edits seen, QA 95/876/216 | 123 s | 126 s | REGRESSION: F1 only (I1/I2). W2=F2, W6=F6, W6=I1 same |
 | HL7/davinci-pct | 7d64232695 | 7600m | 274 s | 0/9/2 | | | | | | pending |
 | Interop-Sante/hl7.fhir.fr.core | 0e518baa85 | 7600m | 295 s | 165/337/6283 | | | | | | pending |
 
