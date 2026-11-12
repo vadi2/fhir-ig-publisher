@@ -1,10 +1,10 @@
 # QA results, shard s4
 
-Status: in progress (Phase C)
+**Summary: shard s4 done, 7 of 7 IGs. No correctness regression: QA counts and messages match master except differences master shows too (watch QA paths, SCT-edition warning on reused folders), and watch outputs equal fresh builds up to pre-existing variance. Two output changes, both likely intended: llms.txt/llms.md page order (HL7 #1461, all IGs) and spec.internals no longer listing `*.ai.html` (#48, IGs that have them). Everything else is pre-existing (master shows it) or noise. Fresh full builds 5-50% faster than master R1 (I1 vs R1).**
 
 - master.jar: origin/master 32046bcdd9b0ec91d93db76f9897b745e406139b
 - int.jar: qa/integration-ready 6c1abf463d8ae87d30871898c6abdaa63c7df673 (sha256 49133bd5ec0f188b73dde7e000bcda234df1db6e26f8d487e98e9a1f87f83890)
-- VM: 4 CPU, 15 GB, 16 GB swap file. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx<heap> -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org`, shared package cache, no -threads.
+- VM: 4 CPU, 15 GB, 16 GB swap file (8 GB from au-core on, unused). Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx<heap> -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org`, shared package cache, no -threads.
 - Times in seconds: whole java run for R1/I1/I2/F2; for the watch, first build, then each edit to "Finished @" (one watch session, W1..W6 in order).
 - W1 page text; W2 profile text (description/short); W3 example field; W4 new example; W5 delete it; W6 revert to clean source. Every step's new text was found in output (OK).
 - F6 = I1 (same command on the same clean sources), so W6 is compared to I1 and to R1.
@@ -18,7 +18,7 @@ Status: in progress (Phase C)
 | HL7/davinci-ra | f003bae | 7600m | 188 | 0/0/0 | 96 | 0/0/0 | 86 | 0/0/0 | 93 / 10 / 60 / 50 / 67 / 68 / 61 | 0/0/0 | 0/0/0 | 98 | 0/0/0 | REGRESSION: spec.internals drops .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version and identifier display in narratives |
 | HL7/imaging-service-request-ig | def90dc | 7600m | 111 | 195/225/244 | 83 | 195/225/244 | 79 | 195/225/244 | 96 / 2 / 48 / 38 / 68 / 69 / 41 | 195/225/244 | 195/225/244 | 83 | 195/225/244 | REGRESSION: spec.internals drops .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version and identifier display in narratives |
 | hl7au/au-fhir-core | 3de0d01 | 7600m | 171 | 62/220/47 | 135 | 62/220/47 | 112 | 62/220/47 | 138 / 3 / 102 / 98 / 99 / 100 / 114 | 62/220/47 | 62/220/47 | 148 | 62/220/47 | REGRESSION: spec.internals drops .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version in narratives, watch QA paths |
-| sfaassn2025-source/base | e11fe94 | 7600m | 354 | 0/3/2 |  |  |  |  |  |  |  |  |  |  |
+| sfaassn2025-source/base | e11fe94 | 7600m | 354 | 0/3/2 | 336 | 0/3/2 | 329 | 0/3/2 | 341 / 50 / 250 / 238 / 328 / 328 / 240 | 0/3/2 | 0/3/2 | 323 | 0/3/2 | REGRESSION: llms.txt page order (HL7 #1461); pre-existing diffs: package .index.db ResourceList |
 
 ## Details
 
@@ -73,3 +73,12 @@ Status: in progress (Phase C)
 - noise: comparison-v2.0.0/xx-3-Identifier-Identifier.html, xx-5-Address-Address.html show a Java stack trace (master too); the line numbers differ with the code.
 - pre-existing: package.db nondeterministic content. masked: "used by" order in valueset-/codesystem-ref-all-list.csv, csvs.zip.
 - No 502s.
+
+### sfaassn2025-source/base
+
+- **REGRESSION (order only), HL7 #1461**: llms.txt, ai.zip (llms.md, llms.txt) page order.
+- pre-existing: package.tgz .index.db ResourceList populated in I1/I2/W6, empty in R1 (nondeterministic, as for mhd-cl; master the same).
+- masked/noise: "used by" order in valueset-ref-list.csv, valueset-ref-all-list.csv, codesystem-ref-list.csv, codesystem-ref-all-list.csv, csvs.zip, full-ig.zip site copies. The watch pairs (W2 vs F2, W6 vs I1) differ only in these.
+- no spec.internals change here (no `*.ai.html` targets in this IG's definitions).
+- perf note: W1 (one page changed) took 50 s against 3 s on the other IGs: the page rebuild itself is 4.6 s, but the html check of 406 files is redone because 405 were written by the AI step since the first build's check.
+- QA identical everywhere (0/3/2, same messages and suppressed counts). No 502s.
