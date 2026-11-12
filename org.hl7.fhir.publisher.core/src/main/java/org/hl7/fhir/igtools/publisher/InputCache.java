@@ -75,8 +75,8 @@ import org.hl7.fhir.validation.instance.utils.CanonicalResourceLookupResult;
  * effects can't all be journaled (it asked the terminology server, ran SQL against the package database, changed
  * something the cache doesn't track) is not stored.
  *
- * <p>What a step reads: what every step reads (K0: the publisher, the build's settings, the packages, and the files
- * that aren't the IG's own; and the IG's set of files and resources, and the publisher's state, as they stand when
+ * <p>What a step reads: what every step reads (K0: the code (the publisher's and the core library's jars, and the
+ * class path), the build's settings, the packages, and the files that aren't the IG's own; and the IG's set of files and resources, and the publisher's state, as they stand when
  * the step's phase starts); its own file and resources; each of the IG's other resources it uses, at its content
  * digest (the getters of {@link FetchedResource} and {@link FetchedFile} report reads, as do the worker context's
  * lookups, and the memos the cache watches); the terminology cache entries it looked up; and the warn-once sets it
@@ -145,8 +145,10 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   /** the profile the validator last validated against: the messages it raises before it starts on a profile get it */
   private Field fValidationContext;
   private PublisherSettings settings;
-  /** what every step reads: the publisher, the build's settings, the packages and the files that aren't the IG's own */
+  /** what every step reads: the code, the build's settings, the packages and the files that aren't the IG's own */
   private String k0;
+  /** why the build key couldn't be worked out (the cache is off) */
+  private String k0Failure;
   private String phase;
   /** the IG's inputs as they stood when the phase started */
   private InputCacheInputs inputs;
@@ -333,19 +335,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   private String computeK0(PublisherSettings settings) throws IOException {
     InputCacheDigest d = new InputCacheDigest();
     d.add(FORMAT).add(IGVersionUtil.getVersion()).add(IGVersionUtil.getBuildTime());
-    try {
-      File jar = new File(InputCache.class.getProtectionDomain().getCodeSource().getLocation().toURI());
-      d.add(jar.getAbsolutePath());
-      if (jar.isFile()) {
-        d.add(jar.length()).add(jar.lastModified());
-      } else {
-        hashTree(jar, d, Collections.emptySet());
-      }
-    } catch (Exception e) {
-      // can't tell which publisher this is, so nothing it stores can be found again
-      log.accept("Input cache: no hits this build, unable to identify the publisher's jar: " + e);
-      d.add(Long.toString(System.nanoTime()));
-    }
+    digestCode(d, CODE, System.getProperty("java.class.path"));
     d.add(pf.rootDir).add(pf.tempDir).add(pf.qaDir).add(pf.igName);
     d.add("ini").bytes(readOrNull(settings.getConfigFile()));
     d.add("sushi").bytes(readOrNull(Utilities.path(pf.rootDir, "sushi-config.yaml")));
@@ -394,6 +384,54 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     }
     d.add(Locale.getDefault().toString()).add(TimeZone.getDefault().getID()).add(System.getProperty("file.encoding")).add(System.getProperty("java.version"));
     return d.finish();
+  }
+
+  /** the classes of the publisher and of each of the core library's modules it uses */
+  static final List<Class<?>> CODE = Collections.unmodifiableList(Arrays.asList(InputCache.class, org.hl7.fhir.utilities.Utilities.class,
+    org.hl7.fhir.model.Base.class, IWorkerContext.class, BaseWorkerContext.class, InstanceValidator.class, org.hl7.fhir.r5.model.Resource.class,
+    org.hl7.fhir.convertors.factory.VersionConvertorFactory_40_50.class));
+
+  /**
+   * The code the build runs: the jar (or folder of classes) each of the classes came from, and each entry of the class
+   * path, by size and time (a folder by content). An IOException if one of the classes can't be traced to a file:
+   * the cache is off then, since what it stored could have been made by other code
+   */
+  static void digestCode(InputCacheDigest d, Collection<Class<?>> classes, String classPath) throws IOException {
+    for (File f : codeFiles(classes, classPath)) {
+      d.add(f.getAbsolutePath());
+      if (f.isFile()) {
+        d.add(f.length()).add(f.lastModified());
+      } else if (f.isDirectory()) {
+        hashTree(f, d, Collections.emptySet());
+      } else {
+        d.add("missing");
+      }
+    }
+  }
+
+  /** the jars and folders the classes came from, and the class path's */
+  static List<File> codeFiles(Collection<Class<?>> classes, String classPath) throws IOException {
+    Set<String> done = new HashSet<>();
+    List<File> code = new ArrayList<>();
+    for (Class<?> c : classes) {
+      File f;
+      try {
+        f = new File(c.getProtectionDomain().getCodeSource().getLocation().toURI());
+      } catch (Exception e) {
+        throw new IOException("unable to tell which jar " + c.getName() + " is from (" + e + ")");
+      }
+      if (done.add(f.getAbsolutePath())) {
+        code.add(f);
+      }
+    }
+    if (classPath != null) {
+      for (String s : classPath.split(java.util.regex.Pattern.quote(File.pathSeparator))) {
+        if (!s.isEmpty() && done.add(new File(s).getAbsolutePath())) {
+          code.add(new File(s));
+        }
+      }
+    }
+    return code;
   }
 
   private Set<String> otherFilesSkip() throws IOException {
@@ -507,14 +545,24 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     boolean was = probing;
     probing = true;
     try {
-      this.phase = phase;
+      this.phase = null;
       this.inputs = null;
       if (k0 == null) {
+        if (k0Failure != null) {
+          return;
+        }
         // worked out once the IG is loaded, so that the IG's own files (pages too) are left out by path: what's in
         // them is read with them
-        k0 = computeK0(settings);
+        try {
+          k0 = computeK0(settings);
+        } catch (IOException e) {
+          k0Failure = e.getMessage();
+          log.accept("Input cache: off for this build: " + k0Failure);
+          return;
+        }
         t = spent("settings digest", t);
       }
+      this.phase = phase;
       inputs = InputCacheInputs.of(pf, buildDate);
       watchMemos();
       t = spent("phase inputs", t);

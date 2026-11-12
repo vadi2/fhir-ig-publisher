@@ -617,6 +617,41 @@ class InputCacheTest {
     assertTrue(n > 180 && n < 320, "about a quarter selected, was " + n);
   }
 
+  // ---- the build key ------------------------------------------------------------------------------------------------
+
+  @Test
+  void code_isTheCoreLibrarysJarsToo() throws Exception {
+    List<File> code = InputCache.codeFiles(InputCache.CODE, null);
+    for (Class<?> c : new Class<?>[] {InputCache.class, org.hl7.fhir.validation.instance.InstanceValidator.class,
+      org.hl7.fhir.standalone.context.BaseWorkerContext.class, org.hl7.fhir.services.context.IWorkerContext.class, org.hl7.fhir.utilities.Utilities.class}) {
+      File f = new File(c.getProtectionDomain().getCodeSource().getLocation().toURI());
+      assertTrue(code.contains(f), c.getName() + " from " + f + " isn't in " + code);
+    }
+  }
+
+  @Test
+  void code_aChangedJarOnTheClassPathChangesTheKey() throws Exception {
+    File jar = new File(tmp, "lib.jar");
+    Files.write(jar.toPath(), "a".getBytes(StandardCharsets.UTF_8));
+    String cp = jar.getAbsolutePath() + File.pathSeparator + new File(tmp, "missing.jar").getAbsolutePath();
+    String before = code(cp);
+    assertEquals(before, code(cp));
+    Files.write(jar.toPath(), "ab".getBytes(StandardCharsets.UTF_8));
+    assertNotEquals(before, code(cp));
+  }
+
+  private static String code(String cp) throws Exception {
+    InputCacheDigest d = new InputCacheDigest();
+    InputCache.digestCode(d, Arrays.asList(InputCache.class), cp);
+    return d.finish();
+  }
+
+  @Test
+  void code_thatCantBeTracedToAFile_isAnError_notAKeyThatNeverHits() {
+    // a class of the platform's has no code source
+    assertThrows(java.io.IOException.class, () -> InputCache.digestCode(new InputCacheDigest(), Arrays.asList(String.class), null));
+  }
+
   // ---- file names -----------------------------------------------------------------------------------------------------
 
   @Test
