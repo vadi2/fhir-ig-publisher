@@ -29,6 +29,7 @@ import java.util.Map;
 
 import org.apache.commons.io.FileUtils;
 import org.hl7.fhir.standalone.context.SimpleWorkerContext;
+import org.hl7.fhir.utilities.logging.ILoggingService;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueType;
@@ -121,6 +122,51 @@ class PageRebuildTest {
     assertSame(records, next.getHtmlRecords());
     assertNotSame(last.getAiCache(), next.getAiCache());
     assertNull(next.getPf());
+  }
+
+  @Test
+  void whileABuildIsFinishingItKnowsIfAPageRebuildCouldFollowIt() throws IOException {
+    // (the build hasn't finished: pagesFor would say no)
+    assertTrue(state.pageRebuildCouldFollow(changes(() -> write("input/pagecontent/index.md", "# Home, edited"))));
+    assertNull(state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# Home, edited again")), new ArrayList<>()));
+
+    assertFalse(state.pageRebuildCouldFollow(changes(() -> write("input/fsh/a.fsh", "Profile: B"))));
+    assertFalse(state.pageRebuildCouldFollow(changes(() -> write("input/pagecontent/new.md", "new"))));
+    assertFalse(state.pageRebuildCouldFollow(changes(() -> { })));
+    // before the build has its fields
+    assertFalse(new PageRebuild().pageRebuildCouldFollow(changes(() -> write("input/pagecontent/index.md", "# 1"))));
+
+    state.tailAbandoned();
+    assertFalse(state.pageRebuildCouldFollow(changes(() -> write("input/pagecontent/index.md", "# 2"))));
+  }
+
+  @Test
+  void whenItCantBeToldIfAPageRebuildCouldFollowTheLogSaysWhy() throws IOException {
+    List<String> log = new ArrayList<>();
+    pf.logger = new ILoggingService() {
+      public void logMessage(String message) {
+        log.add(message);
+      }
+
+      public void logDebugMessage(LogCategory category, String message) {
+      }
+    };
+    pf.altMap = null;
+    assertFalse(state.pageRebuildCouldFollow(changes(() -> write("input/pagecontent/index.md", "# Home, edited"))));
+    assertEquals(1, log.size());
+    assertTrue(log.get(0).startsWith("Couldn't tell if a page rebuild can follow this build for the changes: java.lang.NullPointerException"), log.get(0));
+  }
+
+  @Test
+  void noPageRebuildCouldFollowABuildThatFoundWhyNotOrDroppedItsState() throws IOException {
+    state.notReusable("the template's scripts read the pages");
+    assertFalse(state.pageRebuildCouldFollow(changes(() -> write("input/pagecontent/index.md", "# Home, edited"))));
+
+    PageRebuild dropped = new PageRebuild();
+    dropped.setPf(pf);
+    assertTrue(dropped.pageRebuildCouldFollow(changes(() -> write("input/pagecontent/index.md", "# 1"))));
+    dropped.dropped();
+    assertFalse(dropped.pageRebuildCouldFollow(changes(() -> write("input/pagecontent/index.md", "# 2"))));
   }
 
   @Test

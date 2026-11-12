@@ -13,6 +13,7 @@ import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -27,6 +28,7 @@ import java.util.Arrays;
 import java.util.Collections;
 
 import org.hl7.fhir.igtools.templates.Template;
+import org.hl7.fhir.services.utilities.NPMPackageGenerator;
 import org.hl7.fhir.utilities.logging.ILoggingService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -367,6 +369,86 @@ class WatchCompleteBuildJekyllTest {
     assertFalse(pf.watchPagesPublished);
   }
 
+  /** A tail that gives way as soon as it's asked, once the pages are up (see TailWatch) */
+  private TailWatch tailWithAChange() throws IOException {
+    write("watched/a.fsh", "one");
+    SourceSnapshot start = SourceSnapshot.take(Collections.singletonList(dir.resolve("watched")), null);
+    write("watched/a.fsh", "another");
+    SourceSnapshot.Changes changes = SourceSnapshot.take(Collections.singletonList(dir.resolve("watched")), start).changesSince(start);
+    return new TailWatch(new TailWatch.ChangeSource() {
+      public void start() {
+      }
+
+      public SourceSnapshot.Changes settledChanges() {
+        return changes;
+      }
+
+      public void stop() {
+      }
+    }, false, null, s -> { });
+  }
+
+  @Test
+  void theRestOfTheBuildCanGiveWayToAChangeOnceThePagesAreInTheOutputFolder() throws Exception {
+    write("temp/.watch-output/a.html", "a2");
+    write("output/a.html", "a");
+    pf.watchTail = tailWithAChange();
+    assertFalse(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES), "the author is still waiting for the pages");
+
+    generator(null).publishPagesEarly(null);
+
+    assertEquals("a2", output("a.html"));
+    assertTrue(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES));
+  }
+
+  @Test
+  void aBuildThatGivesWayBeforeItsPackagesClosesThem() throws Exception {
+    // a package keeps its index in a file in the temp folder until it is finished
+    pf.npm = mock(NPMPackageGenerator.class);
+    NPMPackageGenerator r4 = mock(NPMPackageGenerator.class);
+    NPMPackageGenerator ru = mock(NPMPackageGenerator.class);
+    doThrow(new IOException("disk full")).when(r4).finish();
+    when(r4.filename()).thenReturn("package.r4.tgz");
+    pf.vnpms.put("r4", r4);
+    pf.lnpms.put("ru", ru);
+    pf.changeList.add(new FetchedFile("a.json"));
+
+    generator(null).releasePackages(null);
+
+    verify(pf.npm).finish();
+    verify(r4).finish();
+    verify(ru).finish();
+    verify(pf.logger).logMessage(contains("Unable to close the package package.r4.tgz"));
+
+    // a page rebuild has no packages of its own: the last build's are finished
+    NPMPackageGenerator last = mock(NPMPackageGenerator.class);
+    pf.npm = last;
+    generator(null).releasePackages(new PageRebuild());
+    verify(last, never()).finish();
+  }
+
+  @Test
+  void theRestOfTheBuildDoesNotGiveWayIfThePagesAreNotInTheOutputFolder() throws Exception {
+    write("temp/.watch-output/a.html", "a2");
+    write("output/a.html", "a");
+    pf.watchTail = tailWithAChange();
+
+    PublisherGenerator g = generator(null);
+    g.jekyllReturnedAnError();
+    g.publishPagesEarly(null);
+    settings.setGenerationOff(true);
+    generator(null).publishPagesEarly(null);
+    settings.setGenerationOff(false);
+    write("blocked", "a file where the output folder's parent would be");
+    String output = pf.watchOutputDir;
+    pf.watchOutputDir = dir.resolve("blocked").resolve("output").toString();
+    generator(null).publishPagesEarly(null);
+    pf.watchOutputDir = output;
+
+    assertEquals("a", output("a.html"));
+    assertFalse(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES));
+  }
+
   @Test
   void aPageJekyllWroteAgainAsItWasStaysAsTheLastBuildsHtmlChecksLeftIt() throws Exception {
     write("temp/.watch-output/a.html", "a, as Jekyll wrote it");
@@ -407,5 +489,20 @@ class WatchCompleteBuildJekyllTest {
     assertEquals("b2", output("b.html"));
     verify(pf.logger).logMessage(startsWith("  Unable to update a"));
     verify(pf.logger).logMessage(contains("1 written, 0 unchanged, 1 failed"));
+  }
+
+  @Test
+  void theRestOfTheBuildDoesNotGiveWayIfSomePagesCouldNotBePutInTheOutputFolder() throws Exception {
+    // the sync at the end of the build is what puts them there
+    write("temp/.watch-output/a/page.html", "a is a folder now");
+    write("temp/.watch-output/b.html", "b2");
+    write("output/a", "a file");
+    write("output/b.html", "b");
+    pf.watchTail = tailWithAChange();
+
+    generator(null).publishPagesEarly(null);
+
+    assertEquals("b2", output("b.html"));
+    assertFalse(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES));
   }
 }

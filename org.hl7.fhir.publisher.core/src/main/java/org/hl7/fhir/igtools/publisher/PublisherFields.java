@@ -104,6 +104,9 @@ public class PublisherFields {
     boolean watchPagesPublished;
     // in watch mode, when this build or page rebuild started (System.nanoTime())
     long watchBuildStarted;
+    // in watch mode, what lets the rest of the build give way to a change once its pages are in the output folder
+    // (null: it always runs to its end)
+    TailWatch watchTail;
     // in watch mode, whether the staging folder still has what the last build wrote, for the Jekyll that's kept running
     // (see PublisherIGLoader.keepsStagedOutput())
     boolean stagedOutputKept;

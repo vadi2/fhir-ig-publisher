@@ -97,6 +97,14 @@ public class PublisherBase implements ILoggingService {
     pf.logger.logMessage(s);
   }
 
+  /**
+   * Watch mode, between two steps of what follows Jekyll: whether the build stops here, before this step, because the
+   * watched files changed since it started (see TailWatch). Publisher.finishIg() then ends the build
+   */
+  boolean givesWayBefore(TailWatch.Step next) {
+    return pf.watchTail != null && pf.watchTail.givesWayBefore(next);
+  }
+
   protected String getTargetOutput() {
     return settings.getTargetOutput();
   }

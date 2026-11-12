@@ -830,13 +830,35 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         replay.dropCheckedPackageOutputs();
       }
     }
+    // watch mode: and the files that builds before this one wrote, and then gave up the rest of their tails before
+    // the AI step and the html checks got to them (see TailWatch)
+    PageRebuild state = replay != null ? replay : pageRebuild;
+    if (state != null) {
+      int left = state.countUnprocessed();
+      fresh = state.withUnprocessed(fresh);
+      if (left != 0 && freshFrom != null) {
+        freshFrom.append(fresh == null ? "; and all the files, as a build that gave up its html checks for a change had them all to check"
+            : ", " + left + " left by the builds that gave up their html checks for a change");
+      }
+    }
     if (jekyllOk) {
       publishPagesEarly(jekyllWritten);
+    }
+    // (before the full garbage collection too: a file saved while the build ran doesn't wait for it)
+    TailWatch.Step afterPages = replay == null ? TailWatch.Step.PACKAGES : TailWatch.Step.AI;
+    if (givesWayBefore(afterPages)) {
+      reclaimAfterJekyll = false;
+      releasePackages(replay);
+      return;
     }
     if (reclaimAfterJekyll) {
       reclaimAfterJekyll = false;
       System.gc();
       printMemUsage();
+    }
+    if (givesWayBefore(afterPages)) {
+      releasePackages(replay);
+      return;
     }
     if (jekyllOk && replay == null) {
       keepForPageRebuild(() -> pageRebuild.afterJekyll());
@@ -891,10 +913,16 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
         // the combined package is made from package.tgz, so it has to wait until that has been written. It needs
         // terminology for the expansions, which is still loaded here unless the IG unloads it early
+        if (givesWayBefore(TailWatch.Step.PACKAGES)) {
+          return;
+        }
         if (pf.txUnloadEarly) {
           log("Not generating the combined package: terminology has been unloaded (tx-unload-early)");
         } else {
           genCombinedPackage();
+        }
+        if (givesWayBefore(TailWatch.Step.PACKAGES)) {
+          return;
         }
 
         if (settings.getMode() == null || settings.getMode() == PublisherUtils.IGBuildMode.MANUAL) {
@@ -923,10 +951,16 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           //generatePackageVersion(npm.filename(), s);
         }
         FileUtilities.bytesToFile(org.hl7.fhir.utilities.json.parser.JsonParser.composeBytes(json), Utilities.path(pf.outputDir, "sub-package-list.json"));
+        if (givesWayBefore(TailWatch.Step.PACKAGES)) {
+          return;
+        }
         generateZips(df);
       }
       if (archives() != null) {
         archives().finish(!pf.changeList.isEmpty());
+      }
+      if (givesWayBefore(TailWatch.Step.AI)) {
+        return;
       }
       keepForPageRebuild(() -> pageRebuild.afterPackage());
       if (fresh != null) {
@@ -1038,6 +1072,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       throw new FHIRException("The auto-build infrastructure does not publish IGs unless the publish-box is present ("+ pf.inspector.getPublishboxParsingSummary()+"). For further information, see note at http://wiki.hl7.org/index.php?title=FHIR_Implementation_Guide_Publishing_Requirements#HL7_HTML_Standards_considerations");
     }
     generateFragmentUsage();
+    if (givesWayBefore(TailWatch.Step.FULL_ZIP)) {
+      return;
+    }
     log("Build final .zip");
     if (settings.getMode() == PublisherUtils.IGBuildMode.PUBLICATION) {
       IGReleaseVersionUpdater igvu = new IGReleaseVersionUpdater(pf.outputDir, null, null, new ArrayList<>(), new ArrayList<>(), null, pf.outputDir);
@@ -4856,6 +4893,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (r.getWritten() > 0) {
       pf.watchPagesPublished = true;
     }
+    if (pf.watchTail != null && r.getFailures().isEmpty()) {
+      // the author has the pages: what's left of the build can give way to the next change
+      pf.watchTail.pagesPublished();
+    }
     for (String s : r.getFailures()) {
       log("  " + s);
     }
@@ -4864,6 +4905,29 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         + r.getWritten() + " written, " + r.getUnchanged() + " unchanged"
         + (r.getFailures().isEmpty() ? "" : ", " + r.getFailures().size() + " failed")
         + " (" + DurationUtil.presentDuration(now - start) + "). They are as Jekyll rendered them: the html checks, the packages and the qa pages follow");
+  }
+
+  /**
+   * Watch mode: a complete build gave up the rest of its tail before the package step (see TailWatch). The packages
+   * it was filling hold an index in a file in the system's temp folder until they are finished, so they are finished
+   * here: what that writes in the staging folder is written again by the next build. Not in a page rebuild, whose
+   * packages the build before it finished
+   */
+  void releasePackages(PageRebuild replay) {
+    if (replay != null || pf.npm == null || pf.changeList.isEmpty()) {
+      return;
+    }
+    List<NPMPackageGenerator> packages = new ArrayList<>();
+    packages.add(pf.npm);
+    packages.addAll(pf.vnpms.values());
+    packages.addAll(pf.lnpms.values());
+    for (NPMPackageGenerator p : packages) {
+      try {
+        p.finish();
+      } catch (IOException | RuntimeException e) {
+        log("Unable to close the package " + p.filename() + ", which the build didn't get to (its index stays in the temp folder): " + e);
+      }
+    }
   }
 
   /** Jekyll said that it had finished, and then returned an error: the build goes on with what it wrote */
@@ -5474,6 +5538,22 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * (see PublisherIGLoader.clearOutputUnlessKept()): where the folder was emptied, the archives are found missing,
    * and are written
    */
+  /**
+   * As PublisherBase.givesWayBefore(), and when the build stops, the archives of the last build that were moved aside
+   * for Jekyll and not taken up by a package step that finished go back where the last build left them (nothing of
+   * them is recorded, so the next build writes them again)
+   */
+  @Override
+  boolean givesWayBefore(TailWatch.Step next) {
+    if (!super.givesWayBefore(next)) {
+      return false;
+    }
+    if (archives() != null) {
+      archives().finish(false);
+    }
+    return true;
+  }
+
   private RapidoArchives archives() {
     return pf.rapido == null || pf.watchOutputDir == null ? null : pf.rapido.getArchives();
   }
