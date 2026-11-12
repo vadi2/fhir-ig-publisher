@@ -19,7 +19,7 @@ Status: in progress (Phase C)
 | HL7/fhir-bfdr | 1f981246 | 7600m | 406 | 291/365/791 | 291 | 291/365/791 | 278 | 297, 7.1/208/185/246/265/212 | 290 | 287 | pending: FINDING-1 family (identifier system display SSN/NPI varies), master rerun queued |
 | HL7/davinci-pdex-plan-net | 8d9037d0 | 9g | 275 | 11/865/8 | 104 | 11/865/8 | 90 | 101, 5.6/55/51/76/77/54 | 94 | 117 | pending: FINDING-2 (watch differential build changes a link in package-combined.tgz), master watch rerun queued |
 | aehrc/smart-forms-ig | 95651ff7 | 9g | 309 | 146/294/119 | 280 | 146/294/119 | 256 | 267, 4.1/249/235/240/246/248 | 273 | 265 | pending: FINDING-3 (ConceptMap table column order varies between builds), master reruns queued |
-| nw-gmsa/nw-gmsa.github.com | 7ec7380b | 9g |  |  |  |  |  |  |  |  |  |
+| nw-gmsa/nw-gmsa.github.com | 7ec7380b | 9g | 553 | 85/3543/1674 | 545 | 85/3543/1674 | 537 | 642, 13/522/390/515/552/439 | 562 | 557 | pending: FINDING-2 (same pattern as plan-net), master watch rerun queued |
 
 ## Notes per IG
 
@@ -38,6 +38,13 @@ Status: in progress (Phase C)
 - I1, I2, F6 vs R1: same qa counts and messages (4). 143 files differ: timestamps inside binaries (xlsx, packages, packs, spec.internals), fragment-usage-analysis.csv timings, llms.txt page order, and the "used by" order in valueset-ref-list / valueset-ref-all-list (csv, json) and codesystem-ref-all-list.json (same entries, checked with an order-insensitive compare).
 - W2 vs F2, W6 vs F6, W6 vs I1: same qa and messages; the same classes of diffs (used-by order also varies between two int builds).
 - Watch: W1 page rebuild 1.2 s (en/guidance.html), W2 differential (47 of 103 files), W3 differential (70 of 103), W4/W5 complete builds add and remove Patient-QaNewW4; W6 removes all edits.
+
+### nw-gmsa
+- Built with LC_ALL=C.UTF-8 (all runs, both jars). Under the VM's POSIX locale master R1 stops after 80 s: "Unable to read input/images/NW GLH Genomic Testing Request Form \u2013 Rare Disease.png: its name can't be decoded with the file name encoding 'ANSI_X3.4-1968' ... run the IG Publisher with a UTF-8 locale". An int run under the POSIX locale is queued as an extra data point (#25 touches non-ASCII names).
+- qa counts and messages (3247, 10 broken links) same in every build and watch step.
+- R1 vs int: R1 output was removed (disk), manifests only. Apart from timestamps, ref list order and llms order, the differing files are the examples Observation-m2-diagnostic-implication, Observation-brca1-variant and Bundle-ctdna9737383222-eulab-document. Their hash changes in nearly every build, including watch steps that don't touch them, and W6 vs F6 is identical after the UUID mask: random UUIDs in the narrative.
+- FINDING-2 again: after each Rapido differential build (W3, W6) package-combined.tgz holds a different StructureDefinition-Composition-eu-lab-2.1.0.json: the snapshot definition of element 82 loses its trailing whitespace. R1, I1, F2, F6 and the complete watch builds (W2, W4, W5) all have the master hash. Everything else in W6 vs F6 is the same after masking.
+- Watch: W1 page rebuild 13 s (root check fails falsely), W2 complete build (terminology calls failed before, by design), W3 differential (398 of 601 files), W4/W5 complete builds add and remove Basic-QaNewW4; W6 removes all edits.
 
 ### smart-forms
 - qa counts and messages (559) same in every build and watch step.
