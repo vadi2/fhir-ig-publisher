@@ -1,6 +1,6 @@
 # QA results: shard s3
 
-**Summary: shard s3 done, 8/8 IGs built and compared. One regression, F1 (llms.txt/llms.md page order, HL7 #1461, looks intended), seen in every IG's I1/I2. No other regressions: every watch session saw all edits, W6 equals F6 and I1 everywhere, W2 equals F2 everywhere except pre-existing master watch behavior (pct). QA counts unchanged in all builds.**
+**Summary: shard s3 done, 8/8 IGs built and compared. One regression, F1 (llms.txt/llms.md page order, HL7 #1461, looks intended), seen in every IG's I1/I2. No other regressions: every watch session saw all edits, W6 equals F6 and I1 everywhere, W2 equals F2 everywhere except pre-existing master behavior (pct us-core link form; one usps us-npi display, not reproduced on a rerun). QA counts unchanged in all builds.**
 
 Status: done.
 
