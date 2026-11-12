@@ -90,3 +90,24 @@ skip: source not reachable. The qas.json repo path is base64 (MOHW-TWCoreIG / "T
 - every edit reached output/en/. F2 = W2, F6 = W6, W6 = I1 (no differences after masking).
 - verdict: **F-IDX only**. I1, I2 and W6 differ from R1 only in `hl7.fhir.uv.cpg.en.tgz` (and its copy in
   full-ig.zip): `package/.index.db` ResourceList is empty on master and filled on int.
+
+## omnifhir/lars (lars) @ aa9243c
+- heap 7600m. QA 13 / 21 / 40 in every build, same message set.
+- times (s): R1 829, I1 728, I2 717; watch first about 780, W1 41 (Page Rebuild), W2 355 (Differential, 43 of 81),
+  W3 513 (Differential), W4 731 and W5 675 (Complete, files added/removed), W6 368 (Differential); F2 749, F6 699.
+  Master watch (W1, W2 only): first 737, W1 304 (Differential), W2 691 (Complete, "changed: ig").
+- every edit reached output/.
+- W6 = I1. I1, I2, W6 vs R1: F-IDX only (package.tgz, ResourceList 0 rows on master, 43 on int = .index.json).
+- **FINDING L2 (regression, watch only, HL7 #1466 d6af077)**: W2 (FSH profile description edit). On master, SUSHI's IG
+  change forces a Complete Build. With #1466 an IG entry's description alone no longer does, so int runs a
+  Differential Build. Its output differs from F2 (full build of the same source) and from master's W2:
+  - a. package-combined.tgz `StructureDefinition-DiagnosticReport-twcore-0.3.2.json` (a dependency SD): both
+    markdown links read `[檢驗檢查](observation.html)`. In F2, every full build and master W2, one reads
+    `(http://hl7.org/fhir/R4/observation.html)`. genCombinedPackage serializes dependency SDs from the live context
+    (PublisherGenerator ~1167-1190), so the SD looks rewritten in place by an earlier render and reused.
+  - b. ValueSet-lars-specimen-type-values.html: the CLD gains `<a name="lars-specimen-type-values"> </a><a
+    name="hclars-specimen-type-values"> </a>`. Not in F2 or master W2. Same artifact in cqm W6.
+  W3 and W6 (also Differential) are clean, and W6 = I1. QA counts and messages are equal.
+- L3 (pre-existing): the column order in organization-lars-mappings.html (LabMonthly vs LabDaily) varies by build
+  (R1, I1, W6 Monthly first; F2, F6, W2 and master W2 Daily first). This explains F6 vs W6.
+- verdict: **REGRESSION L2 (#1466 exposes the differential path for this edit) + F-IDX**.
