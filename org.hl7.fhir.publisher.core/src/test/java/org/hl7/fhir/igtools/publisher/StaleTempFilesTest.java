@@ -401,11 +401,12 @@ class StaleTempFilesTest {
     Path stale = link.resolve("pages").resolve("old.html");
     Files.createDirectories(stale.getParent());
     Files.write(stale, new byte[] {'o'});
-    StaleTempFiles st = new StaleTempFiles(link.toString(), Collections.singletonList(link.resolve("_rapido").toString()));
+    List<String> skip = Collections.singletonList(link.resolve("_rapido").toString());
+    StaleTempFiles st = new StaleTempFiles(link.toString(), skip);
     st.save(names(stale));
     tick();
 
-    st = new StaleTempFiles(link.toString(), Collections.singletonList(link.resolve("_rapido").toString()));
+    st = new StaleTempFiles(link.toString(), skip);
     st.mark();
     assertEquals(Collections.singletonList(stale), st.find(Collections.emptyList()));
 
@@ -413,7 +414,7 @@ class StaleTempFilesTest {
     Path svg = Files.write(link.resolve("sample.svg"), new byte[] {'s'});
     st.saveTemplateWrites();
     tick();
-    st = new StaleTempFiles(link.toString(), Collections.singletonList(link.resolve("_rapido").toString()));
+    st = new StaleTempFiles(link.toString(), skip);
     st.mark();
     assertEquals(Collections.singletonList(svg), st.findTemplateLeftovers());
   }

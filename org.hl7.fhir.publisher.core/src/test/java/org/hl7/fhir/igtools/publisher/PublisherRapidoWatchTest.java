@@ -2,6 +2,7 @@ package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.contains;
@@ -346,9 +347,8 @@ class PublisherRapidoWatchTest {
     f.set(o, new HashSet<String>());
   }
 
-  @SuppressWarnings("unchecked")
   private static Set<String> codeSystemsUsed(PublisherFields pf) throws Exception {
-    return (Set<String>) RapidoTracker.readSet(pf.context, "codeSystemsUsed");
+    return RapidoTracker.readSet(pf.context, "codeSystemsUsed");
   }
 
   /** what validateFiles does for -rapido: each resource's validation is reused if it can be, else it's validated */
@@ -468,14 +468,14 @@ class PublisherRapidoWatchTest {
       watch = w;
       PublisherFields pf = build("a", w ? 2 : 0); // a day later: a complete build
       assertTrue(pf.rapido.isCompleteBuild());
-      assertTrue(pf.staleTemp != null);
+      assertNotNull(pf.staleTemp);
       assertFalse(Files.exists(temp("_rapido").resolve("build-start")));
       finish(pf);
       tick();
 
       pf = build("a", w ? 2 : 0);
       assertFalse(pf.rapido.isCompleteBuild(), pf.rapido.getReason());
-      assertTrue(pf.staleTemp != null);
+      assertNotNull(pf.staleTemp);
       assertTrue(Files.exists(temp("_rapido").resolve("build-start")));
       finish(pf);
     }

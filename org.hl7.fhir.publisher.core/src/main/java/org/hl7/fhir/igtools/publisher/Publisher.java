@@ -1295,18 +1295,16 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     pf.staleTemp = staleTemp.isSupported() ? staleTemp : null;
     pf.rapido = new RapidoTracker(pf);
     pf.rapido.analyse(igf, failure);
-    if (!pf.rapido.isCompleteBuild()) {
-      if (pf.staleTemp != null) {
-        pf.staleTemp.mark();
-      } else {
-        log("Rapido Mode: the file system has no status-change times, so what the last build wrote in the temp folder and this one doesn't isn't removed");
-      }
-    }
     if (pf.rapido.isCompleteBuild()) {
       log("Rapido Mode: Complete Build ("+pf.rapido.getReason()+")");
       loader.clearTempFolder();
       pf.rapido.setUuid(HierarchicalTableGenerator.uuid);
     } else {
+      if (pf.staleTemp != null) {
+        pf.staleTemp.mark();
+      } else {
+        log("Rapido Mode: the file system has no status-change times, so what the last build wrote in the temp folder and this one doesn't isn't removed");
+      }
       log("Rapido Mode: Differential Build ("+pf.rapido.countRenderDirty()+" of "+pf.fileList.size()+" files to render, "+pf.rapido.countValidationDirty()+" to validate)");
       for (String s : pf.rapido.listRenderDirty()) {
         System.out.println("  "+s);
