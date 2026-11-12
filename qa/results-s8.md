@@ -1,4 +1,4 @@
-**s8 done: 7 IGs, QA messages equal everywhere apart from P4 (au-fhir-base, intermittent in master too); all watch steps fresh (W2=F2, W6=F6=I1). Int-only output changes: F1 (#48), F2 (#1461), ref-list order; P3 (ndh NPI text, int 2/5 vs master 0/11) follows code layout via core identity-hash order, no single PR. Everything else pre-existing.**
+**s8 done: 7 IGs, QA messages equal everywhere apart from P4 (au-fhir-base, intermittent in master too); all watch steps fresh (W2=F2, W6=F6=I1). Int-only output changes: F1 (#48), F2 (#1461, order only); P3 (ndh NPI text, int 2/5 vs master 0/11) follows code layout via core identity-hash order, no single PR. Everything else pre-existing or run-to-run (ref-list row order).**
 
 # QA results, shard s8
 
