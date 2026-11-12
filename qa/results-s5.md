@@ -17,7 +17,7 @@ Status: in progress (Phase C)
 | HL7/uv-pocd | 8e377d42 | 7600m | 77 | 0/0/4 | 74 | 0/0/4 | 62 | 78, 1.2/28/24/63/58/29 | 71 | 71 | same |
 | hl7-eu/laboratory | 4571ab84 | 7600m | 168 | 5/11/62 | 130 | 5/11/62 | 91 | 136, 3.6/77/65/64/72/61 | 112 | 114 | pending: FINDING-1 being classified (master reruns queued) |
 | HL7/fhir-bfdr | 1f981246 | 7600m | 406 | 291/365/791 | 291 | 291/365/791 | 278 | 297, 7.1/208/185/246/265/212 | 290 | 287 | pending: FINDING-1 family (identifier system display SSN/NPI varies), master rerun queued |
-| HL7/davinci-pdex-plan-net | 8d9037d0 | 9g | 275 | 11/865/8 |  |  |  |  |  |  |  |
+| HL7/davinci-pdex-plan-net | 8d9037d0 | 9g | 275 | 11/865/8 | 104 | 11/865/8 | 90 | 101, 5.6/55/51/76/77/54 | 94 | 117 | pending: FINDING-2 (watch differential build changes a link in package-combined.tgz), master watch rerun queued |
 | aehrc/smart-forms-ig | 95651ff7 | 9g | 309 | 146/294/119 |  |  |  |  |  |  |  |
 | nw-gmsa/nw-gmsa.github.com | 7ec7380b | 9g |  |  |  |  |  |  |  |  |  |
 
@@ -38,6 +38,12 @@ Status: in progress (Phase C)
 - I1, I2, F6 vs R1: same qa counts and messages (4). 143 files differ: timestamps inside binaries (xlsx, packages, packs, spec.internals), fragment-usage-analysis.csv timings, llms.txt page order, and the "used by" order in valueset-ref-list / valueset-ref-all-list (csv, json) and codesystem-ref-all-list.json (same entries, checked with an order-insensitive compare).
 - W2 vs F2, W6 vs F6, W6 vs I1: same qa and messages; the same classes of diffs (used-by order also varies between two int builds).
 - Watch: W1 page rebuild 1.2 s (en/guidance.html), W2 differential (47 of 103 files), W3 differential (70 of 103), W4/W5 complete builds add and remove Patient-QaNewW4; W6 removes all edits.
+
+### plan-net
+- qa counts and messages (884) same in every build and watch step.
+- R1 vs I1 content (R1 output kept this time): all 1246 differing text files and archive entries are the same after masking, except "used by" order in the ref lists and llms.txt page order (intended, see tx-eco).
+- FINDING-2: after each Rapido differential build (W2, W3, W6) package-combined.tgz holds a different StructureDefinition-us-core-location-7.0.0.json and StructureDefinition-us-core-organization-7.0.0.json: the snapshot comment of the address element links "[Location](location.html#)" where every full build (R1, I1, F2, F6) and the complete watch builds (W4, W5) have "[Location](http://hl7.org/fhir/R4/location.html#)". W6 vs F6: everything else same after masking (ref list order only). Classification pending: the same watch sequence with master.jar is queued; if master differs, the PR will be found with single PR head jars after the builds finish.
+- Watch: W1 page rebuild 5.6 s (en/implementation.html; root check fails falsely), W2 and W3 differential, W4/W5 complete builds add and remove Basic-QaNewW4; W6 removes all edits.
 
 ### bfdr
 - qa counts (291/365/791, 7 broken links) and the 1441 messages same in every build and watch step.
