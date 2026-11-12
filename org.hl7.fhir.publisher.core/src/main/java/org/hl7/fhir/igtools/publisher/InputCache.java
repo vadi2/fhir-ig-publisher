@@ -76,7 +76,8 @@ import org.hl7.fhir.validation.instance.utils.CanonicalResourceLookupResult;
  * something the cache doesn't track) is not stored.
  *
  * <p>What a step reads: what every step reads (K0: the code (the publisher's and the core library's jars, and the
- * class path), the build's settings, the packages, and the files that aren't the IG's own; and the IG's set of files and resources, and the publisher's state, as they stand when
+ * class path), the build's settings, the packages (those in the -packages folder and the related IGs' too), and the
+ * files that aren't the IG's own; and the IG's set of files and resources, and the publisher's state, as they stand when
  * the step's phase starts); its own file and resources; each of the IG's other resources it uses, at its content
  * digest (the getters of {@link FetchedResource} and {@link FetchedFile} report reads, as do the worker context's
  * lookups, and the memos the cache watches); the terminology cache entries it looked up; and the warn-once sets it
@@ -370,6 +371,30 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
             d.add(s);
           }
         }
+      }
+    }
+    // the packages loaded from -packages: they're in no cache folder, and a rebuilt one has the same version
+    d.add("packages folder");
+    if (settings.getPackagesFolder() != null) {
+      String[] list = new File(settings.getPackagesFolder()).list();
+      if (list != null) {
+        Arrays.sort(list);
+        for (String s : list) {
+          if (s.endsWith(".tgz")) {
+            d.add(s).bytes(readOrNull(Utilities.path(settings.getPackagesFolder(), s)));
+          }
+        }
+      }
+    }
+    // the related IGs' packages, which are their current builds (#dev)
+    d.add("related");
+    for (RelatedIG rig : pf.relatedIGs) {
+      d.add(rig.getCode()).add(rig.getId()).add(String.valueOf(rig.getMode()));
+      String path = rig.getNpm() == null ? null : rig.getNpm().getPath();
+      if (path == null) {
+        d.add("no folder");
+      } else {
+        hashTree(new File(path), d, Collections.emptySet());
       }
     }
     d.add("settings");
