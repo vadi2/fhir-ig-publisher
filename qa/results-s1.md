@@ -17,7 +17,7 @@ Status: in progress (Phase C)
 | HL7/emedicinal-product-info | 66968b7 | 7600m | 135 | 7/0/0 | 136 | 7/0/0 | 118 | W1 23.0, W2 79.8, W3 82.7, W4 109.5, W5 109.1, W6 85.8 | 119 | 117 | pass; F1 (intended), F3 pre-existing; comparison pages differ only in embedded Java stack traces |
 | hyweb-cdc/niis | b343858 | 7600m | 116 | 0/0/0 | 99 | 0/0/0 | 100 | W1 9.4 MISSING, W2 73.7, W3 72.7, W4 73.3, W5 84.5, W6 68.4 (NOT OK) | 93 | 94 | pass so far; F3 pre-existing; W1 redo queued (first redo hit disk full) |
 | uzinfocom-org/digital-health-ig | 31e406f | 7600m | 748 | 5/268/9446 | 715 | 5/268/9446 | 695 |  |  |  | in progress: R1-I1 only F1+F3; R1-I2 expansion params differ on 2nd build in same folder (master check queued); watch redo queued (disk full) |
-| HL7/US-Core | 3a65397 | 10g | 498 | 7/20/1 |  |  |  |  |  |  | in progress: R1 redone (first attempt hit disk full), Phase C running |
+| HL7/US-Core | 3a65397 | 10g | 498 | 7/20/1 | 408 | 7/20/1 | 271 | W1 24.0, W2 294.7, W3 270.6, W4 269.2, W5 272.6, W6 274.6 | 292 (exit 1) | 310 (exit 1) | in progress: R1/I1/I2 qa equal, watch OK; diffs F3, F4, stack frames, plus package.db provenance-agent-type link (R4 on master, THO on int; master rerun queued). F2/F6 redo queued (my snapshot bug) |
 
 ## Findings
 
@@ -39,6 +39,8 @@ fhir-consent-management: the NPI link in example narratives (Consent, AuditEvent
 fhir-consent-management watch: the first run's W4 used an instance that my spec wrote wrong (missing Consent.identifier and source[x]). SUSHI reported 2 errors, the build failed, the watch kept running, and the test timed out. That run is kept as W-badspec, not counted. Watch redone from scratch with W4 = a copy of ConsentExample.
 
 Disk full at 17:35 (compare extracting large tgz outputs while US-Core R1 loaded packages). Lost: digital-health-ig watch, niis W1 redo, US-Core R1 (exit 1). compare.py now reads tgz in place; all three are rerun from scratch, the failed runs are kept as *-diskfull and not counted.
+
+US-Core: F4 here also hits NamingSystem dui, uri and CLIA links (master R1 npi 6.5.0, int I1 7.5.0, int I2 6.5.0). The comparison-v*/xx-* and ipa/ips comparison pages embed Java stack traces as on emedicinal. First F2/F6 failed in Jekyll (menu.xml missing): my W source snapshot excluded fsh-generated/, which US-Core commits as source (no input/fsh). Test harness bug; snapshot fixed, F2/F6 rebuilt.
 
 ## Compare method notes
 
