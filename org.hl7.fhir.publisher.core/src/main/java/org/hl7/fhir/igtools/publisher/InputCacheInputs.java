@@ -322,11 +322,6 @@ final class InputCacheInputs {
       if (f.isFolder()) {
         d.add("D").add(f.getFiles().toString());
       }
-      if (f.getDependencies() != null) {
-        for (FetchedFile dep : f.getDependencies()) {
-          d.add("d").add(fileLocs.get(dep));
-        }
-      }
       for (FetchedResource r : f.getResources()) {
         d.add("R").add(r.fhirType()).add(r.getId()).add(r.getPath()).add(r.getExampleUri()).add(r.isExample()).add(r.isValidateAsResource())
           .add(r.getNameForErrors()).add(r.getStatedProfiles().toString()).add(r.getTestArtifacts().toString()).add(canonical(r));
