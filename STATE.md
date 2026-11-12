@@ -162,3 +162,5 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   diffs are not the base's own). If still silent at 01:17, read its last assistant events.
 - 00:47 tick: PR #43 (translations-dirty) opened, no checks, clean. Open: #39-#43. native-skip answered the nudge
   (active 00:44, "waiting on b2 to finish"). Remaining: native-skip, summaries-reuse, tail-restart.
+- 01:21 tick (cheap): no new PRs (highest 43), no head moved. native-skip was active at 00:44 (waiting on b2);
+  summaries-reuse active 00:17; tail-restart bench due ~01:10. Check all three at 01:47 if still no PR.
