@@ -189,3 +189,13 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 - Timestamp/cache-busting fix is #48 (watch builds dated at day's first build); waits on upstream #1461.
 - Stale PRs being updated by local subagents: #22 then #25 (one agent; #22 base -> watch-page-rebuild or master, #25 stacked on #22), #38 (other agent). mvn serialized via flock scratchpad/mvn.lock. #29 not for upstream, left alone.
 - 07:55 dedup memory measurement: cloud session session_013FrhV5ftAVi7zgCUs6S7df (opus, own VM), writes memory-dedup.md on notes branch. send_later check at +180 min.
+
+## Real-IG QA (started 08:06 UTC 2026-11-12)
+Plan qa/QA-PLAN.md, shards qa/shards.json (60 latest IGs on build.fhir.org + UTG). Results qa/results-<shard>.md.
+- integration (builds qa/integration, pushes qa/integration-ready): session_013FrhV99pmBbaEtnjGm9L5P
+- utg session_013FrhV6jDd4g6WyEBVikGYY | s1 session_013FrhV9qVE2SjS9uPoM4emT | s2 session_013FrhV5ViEhaxGBUvUCmaRu
+- s3 session_013FrhV7vZGtk2TbrfA4Fdb1 | s4 session_013FrhV8DbT3rro2JppJpPh1 | s5 session_013FrhV6u1V3vbMTf5TE7JaJ
+- s6 session_013FrhV9UGn8zYwJoKHN8bB3 | s7 session_013FrhV5dDRnFVqgPQmdSLtV | s8 session_013FrhV5XFmFr94HmvtjdxyL
+- dedup memory: session_013FrhV5ftAVi7zgCUs6S7df (memory-dedup.md)
+- #22/#25 updated by local agent (heads 9e064e4a, 3ea44bfd). #22 base change refused by GitHub ("part of a stack"): Vadim must unstack in UI, then base -> watch-page-rebuild. #38 local agent still running.
+Watcher: hourly check (get_session per session; nudge only via send_message for fixes; results files).
