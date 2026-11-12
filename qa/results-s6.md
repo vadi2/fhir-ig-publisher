@@ -56,3 +56,27 @@ skip: source not reachable. The qas.json repo path is base64 (MOHW-TWCoreIG / "T
   `hl7.fhir.uv.crmi.en.tgz` (and its copy in full-ig.zip): `package/.index.db` table ResourceList is empty in master,
   filled in int (rows match `.index.json`). With `.index.db` ignored, I1 = R1 (0 differing files). The main
   package.tgz has an empty ResourceList on both jars (129 entries in `.index.json`).
+
+## HL7/fhir-cqm (hl7.fhir.uv.cqm) @ 5b61912
+- heap 7600m. QA 19 / 224 / 381 in every build.
+- times (s): R1 228, I1 142, I2 159; watch first 157, W1 4.5 (Page Rebuild), W2 91 (Differential, 272 of 415),
+  W3 78 (Differential), W4 152 (Complete: input/oids.ini changed), W5 142 (Complete: files added/removed),
+  W6 84 (Differential); F2 137, F6 129. The first watch attempt was lost to a full disk at 13:43; the numbers are
+  from the rerun.
+- every edit reached output/en/.
+- compare masks used here in addition (env NORMTX, NORMANCHOR): identifier-type displays
+  ("United States National Provider Identifier" vs "NPI", "Uniform Resource Identifier (URI)" vs "URI") and
+  CLD anchor pairs `<a name="X"> </a><a name="hcX"> </a>`.
+- I1 vs R1: F-IDX in `hl7.fhir.uv.cqm.en.tgz` (as crmi). package.db and package.tgz/.r4.tgz/.r4b.tgz differ;
+  F2 vs W2, F6 vs W6, W6 vs I1: only package.db (and its copy in full-ig.zip).
+- explained, not jar related:
+  - validation column numbers in qa.html / validation-oo.json (master c174834, int c174843): cqm narratives link
+    to crmi profiles through the shared cache's crmi#dev, which holds `file://` paths of whichever crmi build dir
+    wrote it last (R1.ig vs W/W6.src). QA setup artifact; the paths are masked but shift columns.
+  - identifier-type displays and package.db CodeSystemListRefs (R4 vs THO 7.5.0 links for measure-* value sets)
+    vary between all builds, int full vs int full included (F2 vs F6, I1 vs I2). Terminology/resolution
+    nondeterminism.
+- watch-only, classification pending (master watch queued): CodeSystemListRefs row `subject-type` resolves to R4
+  "Subject type" in W2 and W6 (local "Subject Type Value Set" in all full builds); W6
+  ValueSet-measure-stratifier-type.html has the extra CLD anchor pair (same as lars L2b).
+- verdict: pending master watch.
