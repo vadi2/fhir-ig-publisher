@@ -395,6 +395,25 @@ class PublisherRapidoWatchTest {
     Field sw = BaseValidator.class.getDeclaredField("statusWarnings");
     sw.setAccessible(true);
     sw.set(pf.validator, new HashSet<String>());
+    // and the context's sets that a validation's build state includes (see RapidoTracker.buildState())
+    if (pf.context != null) {
+      setField(pf.context, "unsupportedCodeSystems", new HashSet<String>());
+      setField(pf.context, "codeSystemsUsed", new HashSet<String>());
+    }
+  }
+
+  private static void setField(Object o, String name, Object value) throws Exception {
+    for (Class<?> c = o.getClass(); c != null; c = c.getSuperclass()) {
+      try {
+        Field fd = c.getDeclaredField(name);
+        fd.setAccessible(true);
+        fd.set(o, value);
+        return;
+      } catch (NoSuchFieldException e) {
+        // in a superclass
+      }
+    }
+    throw new NoSuchFieldException(name);
   }
 
   /** Patient/b in the file, with a real element tree (Patient with a name), as loading it again gives */
@@ -535,7 +554,7 @@ class PublisherRapidoWatchTest {
     JsonObject rv = RapidoTracker.readState(state().toFile()).getJsonObject("files").getJsonObject("Patient-b.json").getJsonObject("validation").getJsonObject("0");
     assertEquals("Patient/b", rv.asString("key"));
     assertEquals(List.of(P_URL), rv.getJsonArray("profileUsages").asStrings());
-    assertFalse(rv.has("statusBefore"));
+    assertFalse(rv.has("state"));
 
     // the build after the one that has the edge
     finish(build("a", new Ig()));
@@ -563,7 +582,7 @@ class PublisherRapidoWatchTest {
     PublisherFields pf = withValidator(build("a", new Ig()));
     assertEquals(null, validateB(pf, List.of(saved)));
     finish(pf);
-    assertTrue(recordOfB().has("statusBefore"));
+    assertTrue(recordOfB().has("state"));
 
     pf = withValidator(build("a", new Ig()));
     List<ValidationMessage> reused = validateB(pf, List.of());
@@ -580,7 +599,7 @@ class PublisherRapidoWatchTest {
     pf = withValidator(build("a", renamed));
     assertEquals(null, validateB(pf, List.of(unsaved)));
     finish(pf);
-    assertFalse(recordOfB().has("statusBefore"));
+    assertFalse(recordOfB().has("state"));
     assertEquals("Patient/b", recordOfB().asString("key"));
 
     pf = withValidator(build("a", renamed));
@@ -593,6 +612,10 @@ class PublisherRapidoWatchTest {
     Field fld = BaseValidator.class.getDeclaredField("statusWarnings");
     fld.setAccessible(true);
     fld.set(pf.validator, new HashSet<String>());
+    if (pf.context != null) {
+      setField(pf.context, "unsupportedCodeSystems", new HashSet<String>());
+      setField(pf.context, "codeSystemsUsed", new HashSet<String>());
+    }
     return pf;
   }
 

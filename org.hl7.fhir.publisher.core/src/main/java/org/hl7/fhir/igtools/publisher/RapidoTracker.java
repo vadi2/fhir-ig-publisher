@@ -33,6 +33,7 @@ import java.util.Base64;
 import java.util.Calendar;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.Deque;
 import java.util.HashMap;
@@ -199,8 +200,8 @@ public class RapidoTracker {
   private Recording recording;
   /** the archives of the package step that can be kept from the last build */
   private RapidoArchives archives;
-  /** the validator's statusWarnings before the resource being validated now, or null if they can't be read */
-  private Set<String> statusBefore;
+  /** the build state (see buildState()) before the resource being validated now */
+  private Map<String, Set<String>> stateBefore;
   /** how many of the IG's profiles the resource being validated was known to conform to before it was validated */
   private int profilesBefore;
   /** how many validations were reused, and how many were done, for the log */
@@ -1875,8 +1876,10 @@ public class RapidoTracker {
   public List<ValidationMessage> reuseValidation(FetchedFile f, FetchedResource r) {
     List<ValidationMessage> res = savedValidation(f, r);
     if (res == null) {
-      Set<String> sw = statusWarnings();
-      statusBefore = sw == null ? null : new HashSet<>(sw);
+      stateBefore = new LinkedHashMap<>();
+      for (Map.Entry<String, Set<String>> e : buildState().entrySet()) {
+        stateBefore.put(e.getKey(), e.getValue() == null ? null : new HashSet<>(e.getValue()));
+      }
       profilesBefore = r.getFoundProfiles().size();
     } else {
       validationsReused++;
@@ -1907,10 +1910,11 @@ public class RapidoTracker {
       }
       res.add(vm);
     }
-    // the validator only mentions a deprecated (etc) definition the first time it sees it in a build, so what it says
-    // about this resource depends on what it has seen before it, and what it sees here changes what it says later
-    Set<String> sw = statusWarnings();
-    if (sw == null || !statusHash(sw).equals(rv.asString("statusBefore"))) {
+    // what the validator says about this resource can depend on what it has seen before it, and what it sees here
+    // changes what it says later (see buildState())
+    Map<String, Set<String>> state = buildState();
+    JsonObject saved = rv.getJsonObject("state");
+    if (saved == null || !isReplayable(saved) || !sameStateBefore(state, saved)) {
       return null;
     }
     // validating an example tells the publisher which of the IG's profiles it conforms to (recordProfileUsage), which
@@ -1927,7 +1931,9 @@ public class RapidoTracker {
       source.addFoundExample(r);
       r.getFoundProfiles().add(((CanonicalResource) source.getResource()).getUrl());
     }
-    sw.addAll(rv.forceArray("statusAdded").asStrings());
+    for (Map.Entry<String, Set<String>> e : state.entrySet()) {
+      putBack(e.getValue(), saved.getJsonObject(e.getKey()).forceArray("added"));
+    }
     newFile(f).forceObject("validation").set(ri, rv);
     return res;
   }
@@ -1954,7 +1960,7 @@ public class RapidoTracker {
       }
     }
     // what it was found to conform to is kept for the next build's edges (lastFoundProfiles) even when the rest can't
-    // be: without statusBefore, savedValidation doesn't reuse it
+    // be: without its state, savedValidation doesn't reuse it
     JsonObject rv = new JsonObject();
     rv.add("key", r.fhirType()+"/"+r.getId());
     JsonArray usages = rv.forceArray("profileUsages");
@@ -1962,18 +1968,15 @@ public class RapidoTracker {
       usages.add(url);
     }
     newFile(f).forceObject("validation").set(Integer.toString(f.getResources().indexOf(r)), rv);
-    Set<String> sw = statusWarnings();
-    if (sw == null || statusBefore == null) {
+    if (stateBefore == null) {
+      return;
+    }
+    JsonObject state = stateChange(stateBefore, buildState());
+    if (state == null || !isReplayable(state)) {
       return; // without knowing what the validator had seen, the result can't be reused
     }
     if (profileSources(pf.fileList, usages) == null) {
       return;
-    }
-    JsonArray added = rv.forceArray("statusAdded");
-    for (String s : new TreeSet<>(sw)) {
-      if (!statusBefore.contains(s)) {
-        added.add(s);
-      }
     }
     JsonArray msgs = rv.forceArray("messages");
     for (ValidationMessage vm : errs) {
@@ -1989,7 +1992,7 @@ public class RapidoTracker {
     }
     rv.add("signposts", signposts);
     // last: a record without it isn't reused (savedValidation)
-    rv.add("statusBefore", statusHash(statusBefore));
+    rv.add("state", state);
   }
 
   /**
@@ -2149,19 +2152,89 @@ public class RapidoTracker {
   }
 
   /**
-   * The validator's record of the deprecated, withdrawn, retired and experimental definitions it has already
-   * mentioned in this build (BaseValidator.statusWarnings). null if it can't be read
+   * Whether a validation that changed the build state like this can be reused, with only the state replayed. Not if the
+   * terminology server said it doesn't know a code system: the validator kept the server's answer in its terminology
+   * cache, in memory only, and later codes from that system get that answer from there (with the server's message ids),
+   * not the shorter one the validator gives for a system it knows is unsupported. Replaying the state can't put the
+   * answer back in the cache, so the resource is validated again each build.
+   *
+   * @param state what recordValidation() saves: for each set in buildState(), what it was before and what was added
    */
+  static boolean isReplayable(JsonObject state) {
+    JsonObject s = state.getJsonObject("unsupportedCodeSystems");
+    return s != null && s.forceArray("added").size() == 0;
+  }
+
+  /**
+   * What recordValidation() saves of the build state: for each set in buildState(), a hash of what it was before the
+   * resource was validated, and what validating it added. null if one of the sets can't be read
+   */
+  static JsonObject stateChange(Map<String, Set<String>> before, Map<String, Set<String>> now) {
+    JsonObject res = new JsonObject();
+    for (Map.Entry<String, Set<String>> e : now.entrySet()) {
+      Set<String> b = before.get(e.getKey());
+      if (e.getValue() == null || b == null) {
+        return null;
+      }
+      JsonObject s = res.forceObject(e.getKey());
+      s.add("before", stateHash(b));
+      s.add("added", added(b, e.getValue()));
+    }
+    return res;
+  }
+
+  /**
+   * Whether every set in buildState() is now what it was before the resource was validated in the build that saved the
+   * state. Only then is what was added then what validating it again would add now: e.g. a code system that the
+   * resource uses but that an earlier one had already added to codeSystemsUsed isn't in what was added, so if the
+   * earlier one no longer uses it, replaying the resource wouldn't put it back. And statusWarnings and
+   * unsupportedCodeSystems change what the validator says, not only what the build does after validation. A state
+   * saved without one of the sets (e.g. by an older build) doesn't match
+   */
+  static boolean sameStateBefore(Map<String, Set<String>> now, JsonObject saved) {
+    for (Map.Entry<String, Set<String>> e : now.entrySet()) {
+      JsonObject s = saved.getJsonObject(e.getKey());
+      if (e.getValue() == null || s == null || !stateHash(e.getValue()).equals(s.asString("before"))) {
+        return false;
+      }
+    }
+    return true;
+  }
+
+  /**
+   * What validating a resource adds to and that outlives it, so that it has to be replayed when the validation is
+   * reused (a value is null if it can't be read):
+   * <ul>
+   *   <li>statusWarnings (BaseValidator): the deprecated, withdrawn, retired and experimental definitions the validator
+   *   has already mentioned in this build; it only mentions each one the first time</li>
+   *   <li>unsupportedCodeSystems (BaseWorkerContext): the code systems the terminology server said it doesn't know;
+   *   the first code from one is checked on the server (and its message has a message id), later ones aren't
+   *   (unless the server's answer is in the cache: see isReplayable())</li>
+   *   <li>codeSystemsUsed (BaseWorkerContext): what the IG uses, which the build checks after validation (e.g. for
+   *   SNOMED CT's edition); it doesn't change what the validator says</li>
+   * </ul>
+   * A validation is only reused if each of them is what it was before the resource was validated last time (see
+   * sameStateBefore())
+   */
+  private Map<String, Set<String>> buildState() {
+    Map<String, Set<String>> res = new LinkedHashMap<>();
+    res.put("statusWarnings", readSet(pf.validator, "statusWarnings"));
+    res.put("unsupportedCodeSystems", readSet(pf.context, "unsupportedCodeSystems"));
+    res.put("codeSystemsUsed", readSet(pf.context, "codeSystemsUsed"));
+    return res;
+  }
+
+  /** the set in the (private) field of the object or a superclass; null if it can't be read */
   @SuppressWarnings("unchecked")
-  private Set<String> statusWarnings() {
-    if (pf.validator == null) {
+  static Set<String> readSet(Object o, String field) {
+    if (o == null) {
       return null;
     }
-    for (Class<?> c = pf.validator.getClass(); c != null; c = c.getSuperclass()) {
+    for (Class<?> c = o.getClass(); c != null; c = c.getSuperclass()) {
       try {
-        Field fld = c.getDeclaredField("statusWarnings");
+        Field fld = c.getDeclaredField(field);
         fld.setAccessible(true);
-        Object v = fld.get(pf.validator);
+        Object v = fld.get(o);
         return v instanceof Set ? (Set<String>) v : null;
       } catch (NoSuchFieldException e) {
         // look in the superclass
@@ -2172,10 +2245,42 @@ public class RapidoTracker {
     return null;
   }
 
-  private static String statusHash(Set<String> statusWarnings) {
+  /**
+   * How a null in one of the sets of buildState() is saved: the context adds the system of each code it validates to
+   * codeSystemsUsed, which is null for a code that has none (e.g. a code that isn't one of the codes of a required
+   * binding)
+   */
+  static final String NULL_STATE_VALUE = "\u0000null";
+
+  /** what validating a resource added to a set of buildState() (before is the set before, now after), as saved */
+  static JsonArray added(Set<String> before, Set<String> now) {
+    JsonArray res = new JsonArray();
+    for (String v : sortedState(now)) {
+      if (!before.contains(v)) {
+        res.add(v == null ? NULL_STATE_VALUE : v);
+      }
+    }
+    return res;
+  }
+
+  /** adds what added() saved to the set, as validating the resource again would */
+  static void putBack(Set<String> set, JsonArray added) {
+    for (String v : added.asStrings()) {
+      set.add(NULL_STATE_VALUE.equals(v) ? null : v);
+    }
+  }
+
+  /** the values of a set of buildState(), sorted, with null (which a TreeSet can't hold) first */
+  static List<String> sortedState(Set<String> values) {
+    List<String> res = new ArrayList<>(values);
+    res.sort(Comparator.nullsFirst(Comparator.naturalOrder()));
+    return res;
+  }
+
+  static String stateHash(Set<String> values) {
     Hasher h = new Hasher();
-    for (String s : new TreeSet<>(statusWarnings)) {
-      h.add(s);
+    for (String s : sortedState(values)) {
+      h.add(s == null ? NULL_STATE_VALUE : s);
     }
     return h.finish();
   }

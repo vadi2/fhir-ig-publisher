@@ -492,7 +492,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       }
     }
     if (pages == null) {
-      log("Rapido Mode: Complete Build (" + reason.get(0) + ")");
+      log("Rapido Mode: Not a Page Rebuild (" + reason.get(0) + ")");
       carriedOver = state.carryOver();
       state.discard();
       return false;
@@ -1517,8 +1517,26 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     buildTracker.setBooleanProperty("status", "started", true, null);
     buildTracker.save();
 
+    // in watch mode, each build saves what it claims in the temp folder; in a differential build, what the last build
+    // claimed and this one neither writes nor claims is deleted before Jekyll runs (see
+    // PublisherGenerator.deleteStaleTempFiles()). The output staging folder is the output, not what Jekyll reads (see
+    // PublisherIGLoader.setUpWatchOutput())
+    StaleTempFiles staleTemp = new StaleTempFiles(pf.tempDir, Arrays.asList(Utilities.path(pf.tempDir, "_rapido"),
+        Utilities.path(pf.tempDir, PublisherIGLoader.WATCH_OUTPUT_STAGING)));
+    if (!settings.isWatchMode()) {
+      // this build won't save what it claims, nor clean up after the last build
+      staleTemp.forget();
+    }
     pf.rapido = new RapidoTracker(pf);
     pf.rapido.analyse(igf, failure);
+    // without status-change times (Windows), what the last build left can't be told from what this one wrote, so nothing
+    // is deleted; nor is anything after a build that didn't save what it claimed (StaleTempFiles.find() finds nothing)
+    if (settings.isWatchMode() && StaleTempFiles.isSupported(pf.tempDir)) {
+      pf.staleTemp = staleTemp;
+      if (!pf.rapido.isCompleteBuild()) {
+        staleTemp.mark();
+      }
+    }
     if (pf.rapido.isCompleteBuild()) {
       log("Rapido Mode: Complete Build ("+pf.rapido.getReason()+")");
       loader.clearTempFolder();
