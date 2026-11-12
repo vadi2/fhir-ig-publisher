@@ -18,7 +18,7 @@ Status: in progress (Phase C)
 | hl7-eu/laboratory | 4571ab84 | 7600m | 168 | 5/11/62 | 130 | 5/11/62 | 91 | 136, 3.6/77/65/64/72/61 | 112 | 114 | pending: FINDING-1 being classified (master reruns queued) |
 | HL7/fhir-bfdr | 1f981246 | 7600m | 406 | 291/365/791 | 291 | 291/365/791 | 278 | 297, 7.1/208/185/246/265/212 | 290 | 287 | pending: FINDING-1 family (identifier system display SSN/NPI varies), master rerun queued |
 | HL7/davinci-pdex-plan-net | 8d9037d0 | 9g | 275 | 11/865/8 | 104 | 11/865/8 | 90 | 101, 5.6/55/51/76/77/54 | 94 | 117 | pending: FINDING-2 (watch differential build changes a link in package-combined.tgz), master watch rerun queued |
-| aehrc/smart-forms-ig | 95651ff7 | 9g | 309 | 146/294/119 |  |  |  |  |  |  |  |
+| aehrc/smart-forms-ig | 95651ff7 | 9g | 309 | 146/294/119 | 280 | 146/294/119 | 256 | 267, 4.1/249/235/240/246/248 | 273 | 265 | pending: FINDING-3 (ConceptMap table column order varies between builds), master reruns queued |
 | nw-gmsa/nw-gmsa.github.com | 7ec7380b | 9g |  |  |  |  |  |  |  |  |  |
 
 ## Notes per IG
@@ -38,6 +38,13 @@ Status: in progress (Phase C)
 - I1, I2, F6 vs R1: same qa counts and messages (4). 143 files differ: timestamps inside binaries (xlsx, packages, packs, spec.internals), fragment-usage-analysis.csv timings, llms.txt page order, and the "used by" order in valueset-ref-list / valueset-ref-all-list (csv, json) and codesystem-ref-all-list.json (same entries, checked with an order-insensitive compare).
 - W2 vs F2, W6 vs F6, W6 vs I1: same qa and messages; the same classes of diffs (used-by order also varies between two int builds).
 - Watch: W1 page rebuild 1.2 s (en/guidance.html), W2 differential (47 of 103 files), W3 differential (70 of 103), W4/W5 complete builds add and remove Patient-QaNewW4; W6 removes all edits.
+
+### smart-forms
+- qa counts and messages (559) same in every build and watch step.
+- R1 vs F6 (both outputs kept): 149 differing text files and archive entries; 35 are "used by" order and llms.txt order. The other 114 are ValueSet-administrative-gender and the Questionnaires AboriginalTorresStraitIslanderHealthCheck, AssemblyInstructions and PatientDetails (json/xml/ttl, html, and copies in packages and zips): the narrative table of the AdministrativeGender v3 map has its columns in a different order (same cells).
+- FINDING-3: that order is not stable within int either. Hash of ValueSet-administrative-gender.json: R1 = F2 = W1..W4, I1 = I2 = F6 = W5 = W6. Two more master full builds are queued to see whether master varies too.
+- W6 vs F6: same after masking except ref list order.
+- Watch: W1 page rebuild 4.1 s (en/general-requirements.html; root check fails falsely). W2..W6 are all complete builds because terminology calls fail in each build (by design), so the differential path is not exercised. W4/W5 add and remove Practitioner-QaNewW4; W6 removes all edits.
 
 ### plan-net
 - qa counts and messages (884) same in every build and watch step.
