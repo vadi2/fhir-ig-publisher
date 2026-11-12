@@ -2490,11 +2490,19 @@ public class PublisherIGLoader extends PublisherBase {
     pf.context.getCutils().setLocalFileNames(pageTargets());
 
     loadConformance1(true);
-    for (String s : pf.resourceFactoryDirs) {
-      FileUtilities.clearDirectory(s);
-    }
-    if (!pf.testDataFactories.isEmpty()) {
-      processFactories(pf.testDataFactories);
+    WatchSession.StepWrites factoryWrites = watchSession == null ? null : factoryWrites();
+    try {
+      for (String s : pf.resourceFactoryDirs) {
+        FileUtilities.clearDirectory(s);
+      }
+      if (!pf.testDataFactories.isEmpty()) {
+        processFactories(pf.testDataFactories);
+      }
+    } finally {
+      if (factoryWrites != null) {
+        // what they wrote in the watched folders is the build's, not an edit (also when they failed, what they wrote before)
+        watchSession.stepWrote(factoryWrites);
+      }
     }
     loadResources2(igf);
 
@@ -5226,6 +5234,53 @@ public class PublisherIGLoader extends PublisherBase {
     return parseContent("Entry "+res.getId()+" in "+file.getName(), "xml", parseVersion, bs.toByteArray());
   }
 
+
+  /**
+   * Watch mode: where the test data factories write (see processFactories()). Null if they write nowhere watched
+   */
+  private WatchSession.StepWrites factoryWrites() throws IOException {
+    List<Path> trees = new ArrayList<>();
+    List<Path> folders = new ArrayList<>();
+    factoryOutputs(FileUtilities.getDirectoryForFile(this.settings.getConfigFile()), pf.testDataFactories, pf.resourceFactoryDirs, trees, folders);
+    return watchSession.stepWriting("the test data factories", trees, folders);
+  }
+
+  /**
+   * Where the test data factories write: below the folders of path-factory, which are cleared first, and each factory
+   * source's log folder (trees), and in the folder of each factory's output files (folders; below the part of it that
+   * isn't named by the row's values, if it is)
+   */
+  static void factoryOutputs(String rootFolder, List<String> sources, List<String> factoryDirs, List<Path> trees, List<Path> folders) {
+    Path root = Paths.get(rootFolder).toAbsolutePath().normalize();
+    for (String s : factoryDirs) {
+      trees.add(Paths.get(s.endsWith("*") ? s.substring(0, s.length() - 1) : s).toAbsolutePath().normalize());
+    }
+    for (String f : sources) {
+      Path source = root.resolve(f).normalize();
+      trees.add(source.resolveSibling("log"));
+      try {
+        for (JsonObject fact : org.hl7.fhir.utilities.json.parser.JsonParser.parseObject(source.toFile()).forceArray("factories").asJsonObjects()) {
+          String fn = fact.asString("filename");
+          if (fn != null) {
+            String dir = folderOf(fn);
+            int v = dir.indexOf('$');
+            if (v < 0) {
+              folders.add(root.resolve(dir).normalize());
+            } else {
+              trees.add(root.resolve(folderOf(dir.substring(0, v))).normalize());
+            }
+          }
+        }
+      } catch (Exception e) {
+        // processFactories() says what's wrong with it
+      }
+    }
+  }
+
+  // the folder part of a relative path ("" if none)
+  private static String folderOf(String path) {
+    return path.substring(0, Math.max(0, Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'))));
+  }
 
   private void processFactories(List<String> factories) throws IOException {
     LiquidEngine liquid = new LiquidEngine(pf.context, pf.validator.getExternalHostServices());

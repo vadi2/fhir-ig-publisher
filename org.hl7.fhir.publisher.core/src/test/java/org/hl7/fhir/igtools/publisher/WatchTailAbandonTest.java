@@ -512,6 +512,82 @@ class WatchTailAbandonTest {
     }
   }
 
+  @Test
+  void aBuildWhoseFactoriesWriteInInputRunsToItsEndAndNothingFollowsItButAnEditStillStopsIt() throws Exception {
+    // as ig-guidance: the factories clear input/factories and write other content in it, and their log, on every build
+    Path root = dir.resolve("ig");
+    Path input = root.resolve("input");
+    Path fsh = input.resolve("a.fsh");
+    Path factories = input.resolve("factories");
+    Files.createDirectories(factories);
+    Files.write(fsh, "one".getBytes(StandardCharsets.UTF_8));
+    Files.write(root.resolve("factories.json"), ("{\"factories\": [{\"name\": \"P\", \"filename\": \"input/factories/Patient-$counter$.json\"},"
+        + " {\"name\": \"B\", \"filename\": \"input/tests/Bundle.json\"}, {\"name\": \"C\", \"filename\": \"input/cases/$id$/c.json\"}]}").getBytes(StandardCharsets.UTF_8));
+    List<Path> trees = new ArrayList<>();
+    List<Path> folders = new ArrayList<>();
+    PublisherIGLoader.factoryOutputs(root.toString(), List.of("factories.json"), List.of(factories.toString()), trees, folders);
+    assertEquals(List.of(factories.toAbsolutePath(), root.resolve("log").toAbsolutePath(), input.resolve("cases").toAbsolutePath()), trees);
+    assertEquals(List.of(factories.toAbsolutePath(), input.resolve("tests").toAbsolutePath()), folders);
+
+    Publisher p = publisher(new PublisherFields());
+    WatchSession session = new WatchSession(root, List.of(input));
+    try (FileChangeMonitor monitor = new FileChangeMonitor(List.of(FileChangeMonitor.MonitoredPath.recursive(input)))) {
+      for (int build = 1; build <= 3; build++) {
+        session.startBuild();
+        if (build > 1) {
+          assertTrue(session.changesSincePreviousBuild().isEmpty(), "build " + build);
+        }
+        WatchSession.StepWrites w = session.stepWriting("the test data factories", trees, folders);
+        runFactories(input, build);
+        assertFalse(session.stepWrote(w).isEmpty());
+
+        TailWatch tail = new TailWatch(p.tailChanges(monitor, session, root, new HashSet<>()), false, null, log::add);
+        tail.pagesPublished();
+        for (TailWatch.Step s : TailWatch.Step.values()) {
+          assertFalse(tail.givesWayBefore(s), "build " + build + ", " + s);
+        }
+        tail.close();
+        assertNull(tail.getAbandonedBefore());
+        // and the wait after it has nothing to build for
+        assertTrue(session.changesSinceBuildStart().isEmpty(), session.changesSinceBuildStart().toString());
+      }
+      assertFalse(log.stream().anyMatch(s -> s.contains("File changes detected")), log.toString());
+
+      // a build in which the user saves a file while it runs gives way to it, factories or not
+      session.startBuild();
+      WatchSession.StepWrites w = session.stepWriting("the test data factories", trees, folders);
+      runFactories(input, 4);
+      session.stepWrote(w);
+      Files.write(fsh, "another".getBytes(StandardCharsets.UTF_8));
+      TailWatch tail = new TailWatch(p.tailChanges(monitor, session, root, new HashSet<>()), false, null, log::add);
+      tail.pagesPublished();
+      long giveUp = System.currentTimeMillis() + 20_000;
+      while (!tail.givesWayBefore(TailWatch.Step.PACKAGES)) {
+        assertTrue(System.currentTimeMillis() < giveUp, "the edit wasn't seen");
+        Thread.sleep(20);
+      }
+      tail.close();
+      assertEquals(Set.of(fsh.toAbsolutePath()), tail.getAbandonedFor());
+    }
+  }
+
+  /** What the factories of the test above write: other content on every run, and a file of the last run removed */
+  private static void runFactories(Path input, int run) throws IOException {
+    Path factories = input.resolve("factories");
+    try (java.util.stream.Stream<Path> s = Files.list(factories)) {
+      for (Path f : (Iterable<Path>) s::iterator) {
+        Files.delete(f);
+      }
+    }
+    for (int i = 1; i <= 2 + run % 2; i++) {
+      Files.write(factories.resolve("Patient-" + i + ".json"), ("{\"id\": \"" + run + "-" + i + "\"}").getBytes(StandardCharsets.UTF_8));
+    }
+    Files.createDirectories(input.resolve("tests"));
+    Files.write(input.resolve("tests").resolve("Bundle.json"), ("{\"run\": " + run + "}").getBytes(StandardCharsets.UTF_8));
+    Files.createDirectories(input.getParent().resolve("log"));
+    Files.write(input.getParent().resolve("log").resolve("P.log"), ("run " + run).getBytes(StandardCharsets.UTF_8));
+  }
+
   /** What the source says once the monitor has reported the write */
   private static SourceSnapshot.Changes waitForEvents(FileChangeMonitor monitor, TailWatch.ChangeSource source) throws Exception {
     long giveUp = System.currentTimeMillis() + 20_000;

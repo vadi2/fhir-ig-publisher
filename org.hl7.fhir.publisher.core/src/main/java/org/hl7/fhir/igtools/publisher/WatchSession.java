@@ -313,6 +313,91 @@ public class WatchSession {
   }
 
   /**
+   * The files in the watched folders that a step of the build (e.g. the test data factories) is about to write: see
+   * stepWrote()
+   */
+  public static final class StepWrites {
+    private final String step;
+    private final List<Path> trees;
+    private final List<Path> folders;
+    private final SourceSnapshot before;
+
+    private StepWrites(String step, List<Path> trees, List<Path> folders, SourceSnapshot before) {
+      this.step = step;
+      this.trees = trees;
+      this.folders = folders;
+      this.before = before;
+    }
+
+    private boolean covers(Path p) {
+      for (Path t : trees) {
+        if (p.startsWith(t)) {
+          return true;
+        }
+      }
+      return folders.contains(p.getParent());
+    }
+  }
+
+  /**
+   * A step of the build is about to write in these folders: in trees, any file below them, in folders, only the files
+   * directly in them (a factory's output files may sit next to the user's). Those of them that aren't watched are left
+   * out. Null if none is watched, or before the first build
+   */
+  public StepWrites stepWriting(String step, Collection<Path> trees, Collection<Path> folders) throws IOException {
+    if (buildStart == null) {
+      return null;
+    }
+    List<Path> t = watchedOnly(trees);
+    List<Path> f = watchedOnly(folders);
+    if (t.isEmpty() && f.isEmpty()) {
+      return null;
+    }
+    List<Path> roots = new ArrayList<>(t);
+    roots.addAll(f);
+    return new StepWrites(step, t, f, take(roots, buildStart));
+  }
+
+  private List<Path> watchedOnly(Collection<Path> paths) {
+    List<Path> res = new ArrayList<>();
+    for (Path p : paths) {
+      Path n = p.toAbsolutePath().normalize();
+      if (isWatched(n) && !res.contains(n)) {
+        res.add(n);
+      }
+    }
+    return res;
+  }
+
+  /**
+   * The step has written what it writes (see stepWriting()): what changed in its folders since then is the build's
+   * own, part of its sources as it is now, not a change that needs another build. Without this, a step that writes
+   * other content on every build (the factories' random values) starts a build after every build, and stops each one
+   * as soon as it can (see TailWatch). An edit the user saves in those folders in the seconds the step runs is taken
+   * for the build's, as with a module's writes. Returns those files
+   */
+  public Set<Path> stepWrote(StepWrites writes) throws IOException {
+    if (writes == null || buildStart == null) {
+      return Collections.emptySet();
+    }
+    List<Path> roots = new ArrayList<>(writes.trees);
+    roots.addAll(writes.folders);
+    SourceSnapshot after = take(roots, writes.before);
+    Set<Path> written = new TreeSet<>();
+    for (Path p : after.changesSince(writes.before).all()) {
+      if (writes.covers(p)) {
+        written.add(p);
+      }
+    }
+    if (!written.isEmpty()) {
+      buildStart = buildStart.withFiles(written, after);
+      log.accept("Watch mode: " + (written.size() > 3 ? written.size() + " files" : written.toString()) + " written by "
+          + writes.step + ": not a change");
+    }
+    return written;
+  }
+
+  /**
    * The build failed. It may have failed for a reason outside the sources (a server that couldn't be reached, a
    * timeout), so saving a file, even without changing it, builds again: see savedSinceFailure()
    */

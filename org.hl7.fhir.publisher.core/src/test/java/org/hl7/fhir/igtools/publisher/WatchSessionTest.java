@@ -119,6 +119,50 @@ class WatchSessionTest {
   }
 
   @Test
+  void whatAStepOfTheBuildWroteInItsFoldersIsNotAChange() throws IOException {
+    // the test data factories: they clear their folder, write other content in it on every build, and log
+    WatchSession s = session();
+    write("input/factories/Patient-1.json", "{\"id\": \"a\"}");
+    write("input/factories/old.json", "{}");
+    write("input/examples/mine.json", "{}");
+    write("input/examples/sub/mine.json", "{}");
+    write("input/fsh/b.fsh", "Profile: B");
+    s.startBuild();
+    // saved while the build ran, before the factories
+    write("input/pagecontent/index.md", "# Home, edited");
+    WatchSession.StepWrites w = s.stepWriting("the factories",
+        List.of(dir.resolve("input/factories"), dir.resolve("input/log"), dir.resolve("tests")), List.of(dir.resolve("input/examples")));
+    Files.delete(dir.resolve("input/factories/old.json"));
+    write("input/factories/Patient-1.json", "{\"id\": \"b\"}");
+    write("input/factories/Patient-2.json", "{\"id\": \"c\"}");
+    write("input/log/factory.log", "ran at 10:00");
+    write("input/examples/Bundle.json", "{}");
+    write("tests/Bundle.json", "{}");
+    // not the factories' (in a sub-folder of a folder they write files in, or elsewhere)
+    write("input/examples/sub/mine.json", "{\"edited\": true}");
+    write("input/fsh/b.fsh", "Profile: B2");
+    Path in = dir.resolve("input").toAbsolutePath();
+    assertEquals(new HashSet<>(Arrays.asList(in.resolve("factories/old.json"), in.resolve("factories/Patient-1.json"),
+        in.resolve("factories/Patient-2.json"), in.resolve("log/factory.log"), in.resolve("examples/Bundle.json"))), s.stepWrote(w),
+        "tests isn't watched");
+    assertEquals(new HashSet<>(Arrays.asList(in.resolve("pagecontent/index.md"), in.resolve("examples/sub/mine.json"), in.resolve("fsh/b.fsh"))),
+        s.changesSinceBuildStart().all());
+
+    // nothing of it is a change for the next build either, and the next run of the factories is the build's again
+    s.startBuild();
+    assertEquals(3, s.changesSincePreviousBuild().all().size());
+    w = s.stepWriting("the factories", List.of(dir.resolve("input/factories")), List.of());
+    write("input/factories/Patient-1.json", "{\"id\": \"d\"}");
+    assertEquals(Collections.singleton(in.resolve("factories/Patient-1.json")), s.stepWrote(w));
+    assertTrue(s.changesSinceBuildStart().isEmpty());
+
+    // but an edit of a file there after the step ran is
+    write("input/factories/Patient-1.json", "{\"id\": \"by hand\"}");
+    assertEquals(Collections.singleton(in.resolve("factories/Patient-1.json")), s.changesSinceBuildStart().getModified());
+    assertNull(s.stepWriting("the factories", List.of(dir.resolve("tests")), List.of(dir.resolve("factories"))), "none of it is watched");
+  }
+
+  @Test
   void aSaveAfterAFailedBuildBuildsAgain() throws IOException {
     // the build may have failed for a reason outside the sources (a server down): saving retries
     WatchSession s = session();
