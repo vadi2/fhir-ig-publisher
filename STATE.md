@@ -188,3 +188,4 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
 - #50, #51: merged master (3d0196c2, f41ac1e5), core suite OK except known GitUtilitiesTests[4]. Not re-benchmarked.
 - Timestamp/cache-busting fix is #48 (watch builds dated at day's first build); waits on upstream #1461.
 - Stale PRs being updated by local subagents: #22 then #25 (one agent; #22 base -> watch-page-rebuild or master, #25 stacked on #22), #38 (other agent). mvn serialized via flock scratchpad/mvn.lock. #29 not for upstream, left alone.
+- 07:55 dedup memory measurement: cloud session session_013FrhV5ftAVi7zgCUs6S7df (opus, own VM), writes memory-dedup.md on notes branch. send_later check at +180 min.
