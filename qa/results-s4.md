@@ -1,0 +1,30 @@
+# QA results, shard s4
+
+Status: in progress (Phase C)
+
+- master.jar: origin/master 32046bcdd9b0ec91d93db76f9897b745e406139b
+- int.jar: qa/integration-ready 6c1abf463d8ae87d30871898c6abdaa63c7df673 (sha256 49133bd5ec0f188b73dde7e000bcda234df1db6e26f8d487e98e9a1f87f83890)
+- VM: 4 CPU, 15 GB, 16 GB swap file. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx<heap> -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org`, shared package cache, no -threads.
+- Times in seconds: whole java run for R1/I1/I2/F2; for the watch, first build, then each edit to "Finished @" (one watch session, W1..W6 in order).
+- W1 page text; W2 profile text (description/short); W3 example field; W4 new example; W5 delete it; W6 revert to clean source. Every step's new text was found in output (OK).
+- F6 = I1 (same command on the same clean sources), so W6 is compared to I1 and to R1.
+- Comparison: qa.txt messages and counts; every output file after masking dates, times, UUIDs, run folder; archives entry by entry, sqlite files dumped, JSON parsed.
+
+| IG | commit | heap | R1 | R1 qa e/w/h | I1 | I1 qa | I2 | I2 qa | watch first/W1..W6 | W2 qa | W6 qa | F2 | F2 qa | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| HL7Chile/MHD-CL | 360872e | 7600m | 133 | 0/28/5 | 67 | 0/28/5 | 55 | 0/27/5 | 57 / 3 / 33 / 31 / 34 / 33 / 30 | 0/27/5 | 0/27/5 | 73 | 0/28/5 | REGRESSION: llms.txt page order (HL7 #1461, likely intended); pre-existing diffs: SCT edition warning missing on reused folders, package .index.db rows |
+| hl7-eu/readi | 0dd3e92 | 7600m | 72 | 165/59/55 |  |  |  |  |  |  |  |  |  |  |
+| RIVO-Noord/zorgviewer-ig | aab62e4 | 7600m | 139 | 669/137/128 |  |  |  |  |  |  |  |  |  |  |
+| HL7/davinci-ra | f003bae | 7600m | 188 | 0/0/0 |  |  |  |  |  |  |  |  |  |  |
+| HL7/imaging-service-request-ig | def90dc | 7600m | 111 | 195/225/244 |  |  |  |  |  |  |  |  |  |  |
+| hl7au/au-fhir-core | 3de0d01 | 7600m | 171 | 62/220/47 |  |  |  |  |  |  |  |  |  |  |
+| sfaassn2025-source/base | e11fe94 | 7600m | 354 | 0/3/2 |  |  |  |  |  |  |  |  |  |  |
+
+## Details
+
+### HL7Chile/MHD-CL
+
+- **REGRESSION (order only), HL7 #1461 watch-page-rebuild (e70bb8a)**: `llms.txt`, and `llms.md`/`llms.txt` in `ai.zip` and `full-ig.zip`, list the pages in file name order (index, artifacts, cambios, intercambio, transacciones-mhd) instead of master's `File.listFiles()` order (index, intercambio, cambios, transacciones-mhd, artifacts). Master gives the same order in two fresh builds; I1, I2, W6 and F2 all give the name order. Cause: `AIProcessor.loadPages` now does `Arrays.sort(files)` ("the lists of pages and the zip don't depend on the order the file system lists them in"), added in the merge 46cb7b7 (perf2/ws2-jekyll) on that branch. A jar built from e70bb8a alone gives the name order. Likely intended (deterministic), but it changes output; neither order follows the IG's page order. Repro: full build of HL7Chile/MHD-CL@360872e with master and with e70bb8a, `diff output/llms.txt`.
+- pre-existing: "WARNING: IG: The IG is not for the international realm, and it uses SNOMED CT, so it should fix the SCT edition in the expansion parameters" is missing (28 to 27 warnings) in I2, W2 and W6. Master does the same: a second master full build in the same folder (R2m) and the master watch session both have 27. Fresh folders (R1, I1, F2) have 28.
+- pre-existing: `package.tgz/package/.index.db` (also in full-ig.zip) has an empty ResourceList in R1 but 8 rows in I1, I2, W6 and a second fresh master build (R1b). Master isn't consistent here, so not from the integration.
+- Otherwise identical: W2 output = F2 output, W6 output = I1 output (0 differing files), I1/I2 vs R1 only the above.
