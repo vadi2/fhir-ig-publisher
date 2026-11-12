@@ -178,14 +178,11 @@ class WatchSessionTest {
       s.startBuild();
       if (build == 1) {
         assertFalse(s.canSkipSushi());
+        s.sushiRan();
       } else {
         assertTrue(s.canSkipSushi(), "build " + build + ": only a page changed since SUSHI ran");
       }
       if (build < 3) {
-        // SUSHI runs in the first build, and is skipped in the second
-        if (!s.canSkipSushi()) {
-          s.sushiRan();
-        }
         WatchSession.StepWrites w = s.stepWriting("the factories", List.of(dir.resolve("input/factories")), List.of());
         write("input/factories/Patient-1.json", "{\"id\": \"" + build + "\"}");
         write("input/factories/Patient-" + (build + 1) + ".json", "{}");
