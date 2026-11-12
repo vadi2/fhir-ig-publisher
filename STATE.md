@@ -199,3 +199,4 @@ Plan qa/QA-PLAN.md, shards qa/shards.json (60 latest IGs on build.fhir.org + UTG
 - dedup memory: session_013FrhV5ftAVi7zgCUs6S7df (memory-dedup.md)
 - #22/#25 updated by local agent (heads 9e064e4a, 3ea44bfd). #22 base change refused by GitHub ("part of a stack"): Vadim must unstack in UI, then base -> watch-page-rebuild. #38 local agent still running.
 Watcher: hourly check (get_session per session; nudge only via send_message for fixes; results files).
+- #38 updated (head 352adffb, merged master, ValidationServices binaryFor regression fixed + test). Needs core fork IResourceReadListener (perf2/ws7-read-hook), so tested with a stub; excluded from qa/integration (told integration session). Local agents can't launch review subagents: reviews done by hand.
