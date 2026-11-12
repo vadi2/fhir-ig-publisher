@@ -164,3 +164,7 @@ Commit style: terse, no footers/attribution/model names, no em dashes.
   (active 00:44, "waiting on b2 to finish"). Remaining: native-skip, summaries-reuse, tail-restart.
 - 01:21 tick (cheap): no new PRs (highest 43), no head moved. native-skip was active at 00:44 (waiting on b2);
   summaries-reuse active 00:17; tail-restart bench due ~01:10. Check all three at 01:47 if still no PR.
+- 01:48 tick: no new PRs (highest 43). summaries-reuse: JVM killed in a rebuild, swap restored, rerunning watch
+  session (01:29). native-skip: comparing b2/n2/fresh while n3 runs (01:08). tail-restart: reruns after disk-full
+  failures, ~2.5 h background wait from 01:11 (so ~03:40). All idle-with-background-work, recently active: no nudges.
+  Expect native-skip and summaries-reuse PRs ~02:30-03:00, tail-restart ~04:00+.
