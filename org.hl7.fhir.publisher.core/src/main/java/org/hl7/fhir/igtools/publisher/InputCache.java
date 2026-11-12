@@ -34,6 +34,7 @@ import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.function.BiConsumer;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -420,9 +421,9 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
   }
 
   /** the classes of the publisher and of each of the core library's modules it uses */
-  static final List<Class<?>> CODE = Collections.unmodifiableList(Arrays.asList(InputCache.class, org.hl7.fhir.utilities.Utilities.class,
-    org.hl7.fhir.model.Base.class, IWorkerContext.class, BaseWorkerContext.class, InstanceValidator.class, org.hl7.fhir.r5.model.Resource.class,
-    org.hl7.fhir.convertors.factory.VersionConvertorFactory_40_50.class));
+  static final List<Class<?>> CODE = List.of(InputCache.class, Utilities.class, org.hl7.fhir.model.Base.class, IWorkerContext.class,
+    BaseWorkerContext.class, InstanceValidator.class, org.hl7.fhir.r5.model.Resource.class,
+    org.hl7.fhir.convertors.factory.VersionConvertorFactory_40_50.class);
 
   /**
    * The code the build runs: the jar (or folder of classes) each of the classes came from, and each entry of the class
@@ -1296,7 +1297,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
    * each element of the file's resources, with its key: the resource's index and the element's position in the tree
    * (the same in every build of the same content). The elements aren't reported as read: the step reads them anyway
    */
-  private static void forEachElement(FetchedFile f, java.util.function.BiConsumer<String, Element> action) {
+  private static void forEachElement(FetchedFile f, BiConsumer<String, Element> action) {
     List<FetchedResource> list = f.getResources();
     for (int i = 0; i < list.size(); i++) {
       Element e = list.get(i).getElementQuietly();
@@ -1306,7 +1307,7 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
     }
   }
 
-  private static void forEachElement(String prefix, Element e, int[] n, java.util.function.BiConsumer<String, Element> action) {
+  private static void forEachElement(String prefix, Element e, int[] n, BiConsumer<String, Element> action) {
     action.accept(prefix + (n[0]++), e);
     if (e.hasChildren()) {
       for (Element c : e.getChildList()) {
@@ -1514,19 +1515,18 @@ public class InputCache implements InputCacheTxCache.Listener, InputCacheRecordi
       String v = (String) fValidationContext.get(pf.validator);
       j.add("valctx", null, v == null ? null : bytes(v));
       // the messages the validator gave the elements as well (the signposts the QA page lists by element)
-      List<Object[]> added = new ArrayList<>();
+      Map<String, List<ValidationMessage>> added = new LinkedHashMap<>();
       forEachElement(s.file, (k, e) -> {
         int before = s.elementMessagesBefore.getOrDefault(k, 0);
-        if (e.hasMessages() && e.getMessages().size() > before) {
-          added.add(new Object[] {k, e.getMessages().subList(before, e.getMessages().size())});
-        } else if (before > 0 && (!e.hasMessages() || e.getMessages().size() < before)) {
+        int now = e.hasMessages() ? e.getMessages().size() : 0;
+        if (now > before) {
+          added.put(k, e.getMessages().subList(before, now));
+        } else if (now < before) {
           s.uncacheable("element messages removed");
         }
       });
-      for (Object[] a : added) {
-        @SuppressWarnings("unchecked")
-        List<ValidationMessage> l = (List<ValidationMessage>) a[1];
-        j.messages(s, ELEMENT_MESSAGES + a[0], l, ids);
+      for (Map.Entry<String, List<ValidationMessage>> a : added.entrySet()) {
+        j.messages(s, ELEMENT_MESSAGES + a.getKey(), a.getValue(), ids);
       }
     }
     if ("html".equals(s.kind)) {
