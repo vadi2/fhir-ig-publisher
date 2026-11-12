@@ -216,3 +216,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 11:58 #38 simplified: a5505de4 (pom not committed). Suite 580, only GitUtilities[4]. #38 done pending core hook upstream.
 - 12:05 #45 review round: b872f882 (SUSHI skip fixed; loader wiring already right, now tested; $ folder patterns narrowed). Suite 787, only GitUtilities[4]. s2 told to use b872f882. code-simplifier on 14c0cdb..b872f882 running (fix-45/SIMPLIFY.md).
 - 12:15 #45 simplified: db61068c (test-only change). Suite 787, only GitUtilities[4]. #45 done.
+- 12:12 tick: all in Phase C (s3 7/8, s8 5/7), no new real regressions. memory-dedup.md in: dedup -0.5..0.7 GB live heap (10-14%), same peak RSS at 9g, +3-7% rebuild time; min heap 7g with vs 7500m without. Dedup re-check trigger deleted.
