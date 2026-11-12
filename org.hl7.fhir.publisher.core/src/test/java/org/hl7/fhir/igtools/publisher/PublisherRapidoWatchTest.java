@@ -382,32 +382,116 @@ class PublisherRapidoWatchTest {
     assertEquals(complete, pages.get("Observation-o.json"));
   }
 
+  /**
+   * Anchors are plain ids, so they clash across types and unrelated files: a value set rendered after a code system
+   * with its id has no anchors for it. When the code system gets another id, a complete build gives the value set's
+   * page the anchors, so its html isn't replayed
+   */
+  @Test
+  void aFileIsntReplayedWhenAnAnchorItFoundTakenIsFree() throws Exception {
+    context = r5();
+    Map<String, String> pages = new HashMap<>();
+    PublisherFields pf = build("a");
+    pf.rc = renderingContext(context);
+    Map<String, DomainResource> first = Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x"));
+    rendering = f -> render(pf, f, pages, first);
+    finish(pf);
+    assertFalse(pages.get("Patient-b.json").contains("name=\"x\""), pages.get("Patient-b.json"));
+
+    pages.clear();
+    PublisherFields pf2 = build("a2");
+    pf2.rc = renderingContext(context);
+    Map<String, DomainResource> second = Map.of("Patient-a.json", codeSystem("y"), "Patient-b.json", valueSet("x"));
+    rendering = f -> render(pf2, f, pages, second);
+    finish(pf2);
+
+    assertEquals(List.of(), replayed);
+    assertTrue(pages.get("Patient-b.json").contains("name=\"x\""), pages.get("Patient-b.json"));
+    assertTrue(pages.get("Patient-b.json").contains("name=\"hcx\""), pages.get("Patient-b.json"));
+  }
+
+  /**
+   * The reverse: the value set put the anchors in its page, and the code system before it now has its id. A complete
+   * build gives the anchors to the code system only, so the value set's html isn't replayed
+   */
+  @Test
+  void aFileIsntReplayedWhenAnAnchorItAddedIsTaken() throws Exception {
+    context = r5();
+    Map<String, String> pages = new HashMap<>();
+    PublisherFields pf = build("a");
+    pf.rc = renderingContext(context);
+    Map<String, DomainResource> first = Map.of("Patient-a.json", codeSystem("y"), "Patient-b.json", valueSet("x"));
+    rendering = f -> render(pf, f, pages, first);
+    finish(pf);
+    assertTrue(pages.get("Patient-b.json").contains("name=\"x\""), pages.get("Patient-b.json"));
+
+    pages.clear();
+    PublisherFields pf2 = build("a2");
+    pf2.rc = renderingContext(context);
+    Map<String, DomainResource> second = Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x"));
+    rendering = f -> render(pf2, f, pages, second);
+    finish(pf2);
+
+    assertEquals(List.of(), replayed);
+    assertFalse(pages.get("Patient-b.json").contains("name=\"x\""), pages.get("Patient-b.json"));
+  }
+
+  /** a file that found an anchor taken, and still does, is replayed */
+  @Test
+  void aFileThatFindsTheAnchorsAsTheyWereIsReplayed() throws Exception {
+    context = r5();
+    Map<String, String> pages = new HashMap<>();
+    PublisherFields pf = build("a");
+    pf.rc = renderingContext(context);
+    Map<String, DomainResource> first = Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x"));
+    rendering = f -> render(pf, f, pages, first);
+    finish(pf);
+
+    pages.clear();
+    PublisherFields pf2 = build("a2");
+    pf2.rc = renderingContext(context);
+    Map<String, DomainResource> second = Map.of("Patient-a.json", codeSystem("x"), "Patient-b.json", valueSet("x"));
+    rendering = f -> render(pf2, f, pages, second);
+    finish(pf2);
+
+    assertEquals(List.of("Patient-b.json"), replayed);
+  }
+
   /** Patient/b's page has a code system, and Observation/o's a value set with the same id */
   private static void render(PublisherFields pf, FetchedFile f, Map<String, String> pages) {
-    RenderingContext lrc = pf.rc.copy(true); // as generateHtmlOutputsInner renders a file
-    DomainResource res;
-    if (f.getLoadPath().equals("Patient-b.json")) {
-      CodeSystem cs = new CodeSystem();
-      cs.setId("x");
-      cs.setUrl("http://example.org/ig/CodeSystem/x");
-      cs.setContent(Enumerations.CodeSystemContentMode.COMPLETE);
-      cs.addConcept().setCode("a");
-      res = cs;
-    } else if (f.getLoadPath().equals("Observation-o.json")) {
-      ValueSet vs = new ValueSet();
-      vs.setId("x");
-      vs.setUrl("http://example.org/ig/ValueSet/x");
-      vs.getCompose().addInclude().setSystem("http://example.org/ig/CodeSystem/x");
-      res = vs;
-    } else {
+    render(pf, f, pages, Map.of("Patient-b.json", codeSystem("x"), "Observation-o.json", valueSet("x")));
+  }
+
+  /** renders the resource given for the file, if any, as generateHtmlOutputsInner renders a file */
+  private static void render(PublisherFields pf, FetchedFile f, Map<String, String> pages, Map<String, DomainResource> resources) {
+    DomainResource res = resources.get(f.getLoadPath());
+    if (res == null) {
       return;
     }
+    RenderingContext lrc = pf.rc.copy(true);
     try {
       lrc.getRendererFactory().factory(res, lrc).renderOrError(ResourceWrapper.forResource(lrc, res));
       pages.put(f.getLoadPath(), new XhtmlComposer(XhtmlComposer.HTML).compose(res.getText().getDiv()));
     } catch (Exception e) {
       throw new RuntimeException(e);
     }
+  }
+
+  private static CodeSystem codeSystem(String id) {
+    CodeSystem cs = new CodeSystem();
+    cs.setId(id);
+    cs.setUrl("http://example.org/ig/CodeSystem/"+id);
+    cs.setContent(Enumerations.CodeSystemContentMode.COMPLETE);
+    cs.addConcept().setCode("a");
+    return cs;
+  }
+
+  private static ValueSet valueSet(String id) {
+    ValueSet vs = new ValueSet();
+    vs.setId(id);
+    vs.setUrl("http://example.org/ig/ValueSet/"+id);
+    vs.getCompose().addInclude().setSystem("http://example.org/ig/CodeSystem/"+id);
+    return vs;
   }
 
   private static RenderingContext renderingContext(SimpleWorkerContext context) {

@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.Calendar;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.HashMap;
@@ -34,6 +35,7 @@ import java.util.Set;
 import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
@@ -1440,6 +1442,9 @@ public class RapidoTracker {
         }
       }
     }
+    if (problem == null && PHASE_HTML.equals(phase)) {
+      problem = anchorChange(j);
+    }
     if (problem != null) {
       renderClean.remove(f);
       why.put(f, problem);
@@ -1553,6 +1558,10 @@ public class RapidoTracker {
     private final int expansionsBefore;
     private final Set<String> elementMaps = new TreeSet<>();
     private final Map<String, Set<String>> anchorsBefore = new HashMap<>();
+    /** the anchors the phase found in the build's anchor sets before it, by language (see AnchorSet) */
+    private final Map<String, Set<String>> anchorsTaken = new ConcurrentHashMap<>();
+    /** whether all the build's anchor sets tell the tracker which anchors are found taken */
+    private boolean anchorsWatched = true;
 
     private Recording(FetchedFile file, String phase) {
       this.file = file;
@@ -1575,6 +1584,7 @@ public class RapidoTracker {
         journal.add("messages", messagesHash(file));
         for (Map.Entry<String, Set<String>> e : anchorSets().entrySet()) {
           anchorsBefore.put(e.getKey(), new HashSet<>(e.getValue()));
+          anchorsWatched = anchorsWatched && e.getValue() instanceof AnchorSet;
         }
       }
     }
@@ -1584,22 +1594,123 @@ public class RapidoTracker {
    * The anchors the renderers have put in pages, by language ("" for the default one). A file's html is generated with
    * a RenderingContext that shares its anchor set with the build's (generateHtmlOutputsInner copies it with its
    * anchors), and a renderer doesn't put an anchor that's in that set in a page: when a code system and a value set
-   * have the same id, the one rendered second has no anchors for it in its page. A file whose html is replayed
-   * doesn't render, so the anchors its rendering put in the sets are recorded, and put in them again when it's replayed
+   * have the same id, the one rendered second has no anchors for it in its page. Anchors are plain ids, so this goes
+   * for any two resources with the same id, of any type, in any files. A file whose html is replayed doesn't render,
+   * so the anchors its rendering put in the sets are recorded, and put in them again when it's replayed; and the
+   * anchors it found already there are recorded too. Its pages are what rendering it would give only if, at its place
+   * in the loop, none of the first are in the sets and all of the second are (see anchorChange)
    */
   private Map<String, Set<String>> anchorSets() {
     Map<String, Set<String>> res = new TreeMap<>();
     if (pf.rc != null) {
-      res.put("", pf.rc.getAnchors());
+      res.put("", watch("", pf.rc));
     }
     if (pf.rcLangs != null) {
       for (RenderingContext rc : pf.rcLangs.langValues()) {
         if (rc != pf.rc && rc.getLocale() != null) {
-          res.put(rc.getLocale().toLanguageTag(), rc.getAnchors());
+          String lang = rc.getLocale().toLanguageTag();
+          res.put(lang, watch(lang, rc));
         }
       }
     }
     return res;
+  }
+
+  /**
+   * The context's anchor set, swapped for an AnchorSet with the same anchors the first time. The core has no way to
+   * give a context a set, so the field is set directly. The copies of a context that share its set (copy(true)) are
+   * made for one file's rendering, and anchorSets is only called between files, so none of them is left with the
+   * old set. If the set can't be swapped it's returned as it is, and a file's html isn't recorded (see stopRecording)
+   */
+  private Set<String> watch(String lang, RenderingContext rc) {
+    Set<String> set = rc.getAnchors();
+    if (!(set instanceof AnchorSet)) {
+      try {
+        Field fld = RenderingContext.class.getDeclaredField("anchors");
+        fld.setAccessible(true);
+        AnchorSet as = new AnchorSet(set);
+        fld.set(rc, as);
+        if (rc.getAnchors() != as) {
+          return set;
+        }
+        set = as;
+      } catch (Exception e) {
+        return set;
+      }
+    }
+    ((AnchorSet) set).listener = a -> anchorFound(lang, a);
+    return set;
+  }
+
+  /** a renderer found the anchor in the set for the language */
+  private void anchorFound(String lang, String anchor) {
+    Recording rec = recording;
+    if (rec != null) {
+      Set<String> before = rec.anchorsBefore.get(lang);
+      // one it added itself doesn't count: the file's own rendering puts it back
+      if (before != null && before.contains(anchor)) {
+        rec.anchorsTaken.computeIfAbsent(lang, k -> ConcurrentHashMap.newKeySet()).add(anchor);
+      }
+    }
+  }
+
+  /**
+   * A build's anchor set (see anchorSets) that tells the tracker which anchors a renderer found in it: the core's
+   * renderers ask contains (hasAnchor, stripAnchorsByName) before they put an anchor in a page
+   */
+  static class AnchorSet extends HashSet<String> {
+    private static final long serialVersionUID = 1L;
+    private transient Consumer<String> listener;
+
+    AnchorSet(Collection<String> anchors) {
+      super(anchors);
+    }
+
+    @Override
+    public boolean contains(Object o) {
+      boolean res = super.contains(o);
+      Consumer<String> l = listener;
+      if (res && l != null && o instanceof String s) {
+        l.accept(s);
+      }
+      return res;
+    }
+  }
+
+  /**
+   * Why the file's html can't be replayed at this place in the loop because of the build's anchor sets (see
+   * anchorSets), or null
+   */
+  private String anchorChange(JsonObject j) {
+    Map<String, Set<String>> sets = anchorSets();
+    JsonObject added = j.getJsonObject("anchors");
+    JsonObject taken = j.getJsonObject("anchorsTaken");
+    if (added == null || taken == null) {
+      return "no record of its anchors";
+    }
+    for (String lang : added.getNames()) {
+      Set<String> set = sets.get(lang);
+      if (set == null) {
+        return "it has anchors for a language the build doesn't have: "+lang;
+      }
+      for (String a : added.getJsonArray(lang).asStrings()) {
+        if (set.contains(a)) {
+          return "an anchor it put in its pages is taken: "+a;
+        }
+      }
+    }
+    for (String lang : taken.getNames()) {
+      Set<String> set = sets.get(lang);
+      if (set == null) {
+        return "it has anchors for a language the build doesn't have: "+lang;
+      }
+      for (String a : taken.getJsonArray(lang).asStrings()) {
+        if (!set.contains(a)) {
+          return "an anchor it found taken is free: "+a;
+        }
+      }
+    }
+    return null;
   }
 
   /** what a replayed file's rendering did to the build's anchor sets (see anchorSets) */
@@ -1687,6 +1798,9 @@ public class RapidoTracker {
         return;
       }
     }
+    if (!rec.anchorsWatched) {
+      return;
+    }
     JsonArray em = j.forceArray("elementMaps");
     for (String s : rec.elementMaps) {
       em.add(s);
@@ -1705,6 +1819,13 @@ public class RapidoTracker {
         for (String s : added) {
           a.add(s);
         }
+      }
+    }
+    JsonObject at = j.forceObject("anchorsTaken");
+    for (Map.Entry<String, Set<String>> e : new TreeMap<>(rec.anchorsTaken).entrySet()) {
+      JsonArray a = at.forceArray(e.getKey());
+      for (String s : new TreeSet<>(e.getValue())) {
+        a.add(s);
       }
     }
     newFile(f).set(rec.phase, j);
