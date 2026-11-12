@@ -20,20 +20,27 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Calendar;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import java.util.function.Consumer;
 
 import org.hl7.fhir.exceptions.FHIRException;
 import org.hl7.fhir.igtools.templates.Template;
 import org.hl7.fhir.model.ModelContext;
+import org.hl7.fhir.model.core.CodeSystem;
+import org.hl7.fhir.model.core.DomainResource;
 import org.hl7.fhir.model.core.ElementDefinition;
+import org.hl7.fhir.model.core.Enumerations;
 import org.hl7.fhir.model.core.StructureDefinition;
 import org.hl7.fhir.model.core.StructureDefinition.TypeDerivationRule;
+import org.hl7.fhir.model.core.ValueSet;
 import org.hl7.fhir.services.elementmodel.Element;
 import org.hl7.fhir.services.renderers.RendererFactory;
 import org.hl7.fhir.services.renderers.utils.RenderingContext;
+import org.hl7.fhir.services.renderers.utils.ResourceWrapper;
 import org.hl7.fhir.standalone.context.SimpleWorkerContext;
 import org.hl7.fhir.utilities.IniFile;
 import org.hl7.fhir.utilities.MarkDownProcessor;
@@ -48,6 +55,7 @@ import org.hl7.fhir.utilities.validation.ValidationMessage.IssueType;
 import org.hl7.fhir.utilities.validation.ValidationMessage.Source;
 import org.hl7.fhir.utilities.validation.ValidationOptions;
 import org.hl7.fhir.utilities.xhtml.HierarchicalTableGenerator;
+import org.hl7.fhir.utilities.xhtml.XhtmlComposer;
 import org.hl7.fhir.validation.BaseValidator;
 import org.hl7.fhir.validation.instance.InstanceValidator;
 import org.junit.jupiter.api.AfterEach;
@@ -348,6 +356,66 @@ class PublisherRapidoWatchTest {
     assertTrue(b.getErrors().get(0).getMessage().contains(BASE), b.getErrors().get(0).getMessage());
   }
 
+  /**
+   * A file's html is rendered with the build's anchor set, and a renderer doesn't put an anchor that's in it in a page:
+   * a value set rendered after a code system with the same id has no anchors for the id. When the code system's file
+   * is replayed, the value set's page comes out as it does from a complete build, without them
+   */
+  @Test
+  void aReplayedFilePutsItsAnchorsInTheBuildsAnchorSet() throws Exception {
+    context = r5();
+    Map<String, String> pages = new HashMap<>();
+    PublisherFields pf = build("a");
+    pf.rc = renderingContext(context);
+    rendering = f -> render(pf, f, pages);
+    finish(pf);
+    String complete = pages.get("Observation-o.json");
+    assertFalse(complete.contains("name=\"x\""), complete);
+
+    pages.clear();
+    PublisherFields pf2 = build("a2");
+    pf2.rc = renderingContext(context);
+    rendering = f -> render(pf2, f, pages);
+    finish(pf2);
+
+    assertEquals(List.of("Patient-b.json"), replayed);
+    assertEquals(complete, pages.get("Observation-o.json"));
+  }
+
+  /** Patient/b's page has a code system, and Observation/o's a value set with the same id */
+  private static void render(PublisherFields pf, FetchedFile f, Map<String, String> pages) {
+    RenderingContext lrc = pf.rc.copy(true); // as generateHtmlOutputsInner renders a file
+    DomainResource res;
+    if (f.getLoadPath().equals("Patient-b.json")) {
+      CodeSystem cs = new CodeSystem();
+      cs.setId("x");
+      cs.setUrl("http://example.org/ig/CodeSystem/x");
+      cs.setContent(Enumerations.CodeSystemContentMode.COMPLETE);
+      cs.addConcept().setCode("a");
+      res = cs;
+    } else if (f.getLoadPath().equals("Observation-o.json")) {
+      ValueSet vs = new ValueSet();
+      vs.setId("x");
+      vs.setUrl("http://example.org/ig/ValueSet/x");
+      vs.getCompose().addInclude().setSystem("http://example.org/ig/CodeSystem/x");
+      res = vs;
+    } else {
+      return;
+    }
+    try {
+      lrc.getRendererFactory().factory(res, lrc).renderOrError(ResourceWrapper.forResource(lrc, res));
+      pages.put(f.getLoadPath(), new XhtmlComposer(XhtmlComposer.HTML).compose(res.getText().getDiv()));
+    } catch (Exception e) {
+      throw new RuntimeException(e);
+    }
+  }
+
+  private static RenderingContext renderingContext(SimpleWorkerContext context) {
+    return new RenderingContext(context, new RendererFactory(), new MarkDownProcessor(MarkDownProcessor.Dialect.COMMON_MARK),
+        ValidationOptions.defaults(), "http://hl7.org/fhir/R5/", "", null, RenderingContext.ResourceRendererMode.TECHNICAL,
+        RenderingContext.GenerationRules.IG_PUBLISHER);
+  }
+
   private static PublisherGenerator generator(PublisherFields pf) {
     PublisherGenerator generator = new PublisherGenerator(new PublisherSettings());
     generator.setPf(pf);
@@ -391,9 +459,7 @@ class PublisherRapidoWatchTest {
     ed.setComment(RELATIVE);
     sd.setUserData(UserDataNames.render_webroot, "http://example.org/dep/");
     context.cacheResource(sd);
-    pf.rc = new RenderingContext(context, new RendererFactory(), new MarkDownProcessor(MarkDownProcessor.Dialect.COMMON_MARK),
-        ValidationOptions.defaults(), "http://hl7.org/fhir/R5/", "", null, RenderingContext.ResourceRendererMode.TECHNICAL,
-        RenderingContext.GenerationRules.IG_PUBLISHER);
+    pf.rc = renderingContext(context);
     return sd;
   }
 
@@ -534,9 +600,12 @@ class PublisherRapidoWatchTest {
     replayed.clear();
     for (FetchedFile f : pf.fileList) {
       if (pf.rapido.canReplay(f, RapidoTracker.PHASE_HTML) && pf.rapido.canReplay(f, RapidoTracker.PHASE_SHEETS)) {
-        // as replayGeneration does
         replayed.add(f.getLoadPath());
-        f.getOutputNames().addAll(pf.rapido.replay(f, RapidoTracker.PHASE_HTML).outputs);
+        if (context != null) {
+          generator(pf).replayGeneration(f, RapidoTracker.PHASE_HTML);
+        } else { // as replayGeneration does
+          f.getOutputNames().addAll(pf.rapido.replay(f, RapidoTracker.PHASE_HTML).outputs);
+        }
         f.getOutputNames().addAll(pf.rapido.replay(f, RapidoTracker.PHASE_SHEETS).outputs);
         continue;
       }

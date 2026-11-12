@@ -2170,6 +2170,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       frag.record(j.fragUseNumbers.get(i)[0], j.fragUseNumbers.get(i)[1]);
     }
     redoElementMaps(f, j.elementMaps);
+    pf.rapido.redoAnchors(j);
   }
 
   /**

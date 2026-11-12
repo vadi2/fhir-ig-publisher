@@ -56,6 +56,7 @@ import org.hl7.fhir.services.client.EFhirClientException;
 import org.hl7.fhir.services.client.ITerminologyClientFactoryN;
 import org.hl7.fhir.services.client.ITerminologyClientN;
 import org.hl7.fhir.services.elementmodel.Element;
+import org.hl7.fhir.services.renderers.utils.RenderingContext;
 import org.hl7.fhir.standalone.terminology.client.TerminologyClientManager;
 import org.hl7.fhir.utilities.FileUtilities;
 import org.hl7.fhir.utilities.ToolingClientLogger;
@@ -96,7 +97,7 @@ public class RapidoTracker {
   public static final String PHASE_HTML = "html";
   public static final String PHASE_SHEETS = "sheets";
 
-  private static final int STATE_VERSION = 5;
+  private static final int STATE_VERSION = 6;
 
   private final PublisherFields pf;
   private final String stateFile;
@@ -1485,6 +1486,8 @@ public class RapidoTracker {
     public final List<String> fragUseKeys = new ArrayList<>();
     /** the profiles whose elements the phase looked up in the shared element map cache (see ElementMapCache) */
     public final List<String> elementMaps = new ArrayList<>();
+    /** the anchors the phase put in the build's anchor sets, by language (see anchorSets) */
+    public final Map<String, List<String>> anchors = new TreeMap<>();
   }
 
   /**
@@ -1549,6 +1552,7 @@ public class RapidoTracker {
     private final boolean[] umlBefore;
     private final int expansionsBefore;
     private final Set<String> elementMaps = new TreeSet<>();
+    private final Map<String, Set<String>> anchorsBefore = new HashMap<>();
 
     private Recording(FetchedFile file, String phase) {
       this.file = file;
@@ -1569,6 +1573,42 @@ public class RapidoTracker {
       expansionsBefore = pf.expansions.size();
       if (PHASE_HTML.equals(phase)) {
         journal.add("messages", messagesHash(file));
+        for (Map.Entry<String, Set<String>> e : anchorSets().entrySet()) {
+          anchorsBefore.put(e.getKey(), new HashSet<>(e.getValue()));
+        }
+      }
+    }
+  }
+
+  /**
+   * The anchors the renderers have put in pages, by language ("" for the default one). A file's html is generated with
+   * a RenderingContext that shares its anchor set with the build's (generateHtmlOutputsInner copies it with its
+   * anchors), and a renderer doesn't put an anchor that's in that set in a page: when a code system and a value set
+   * have the same id, the one rendered second has no anchors for it in its page. A file whose html is replayed
+   * doesn't render, so the anchors its rendering put in the sets are recorded, and put in them again when it's replayed
+   */
+  private Map<String, Set<String>> anchorSets() {
+    Map<String, Set<String>> res = new TreeMap<>();
+    if (pf.rc != null) {
+      res.put("", pf.rc.getAnchors());
+    }
+    if (pf.rcLangs != null) {
+      for (RenderingContext rc : pf.rcLangs.langValues()) {
+        if (rc != pf.rc && rc.getLocale() != null) {
+          res.put(rc.getLocale().toLanguageTag(), rc.getAnchors());
+        }
+      }
+    }
+    return res;
+  }
+
+  /** what a replayed file's rendering did to the build's anchor sets (see anchorSets) */
+  public void redoAnchors(Journal j) {
+    Map<String, Set<String>> sets = anchorSets();
+    for (Map.Entry<String, List<String>> e : j.anchors.entrySet()) {
+      Set<String> set = sets.get(e.getKey());
+      if (set != null) {
+        set.addAll(e.getValue());
       }
     }
   }
@@ -1650,6 +1690,22 @@ public class RapidoTracker {
     JsonArray em = j.forceArray("elementMaps");
     for (String s : rec.elementMaps) {
       em.add(s);
+    }
+    JsonObject an = j.forceObject("anchors");
+    for (Map.Entry<String, Set<String>> e : anchorSets().entrySet()) {
+      Set<String> before = rec.anchorsBefore.get(e.getKey());
+      if (before != null && before.size() != e.getValue().size()) { // the sets only grow
+        Set<String> added = new TreeSet<>();
+        for (String s : e.getValue()) {
+          if (!before.contains(s)) {
+            added.add(s);
+          }
+        }
+        JsonArray a = an.forceArray(e.getKey());
+        for (String s : added) {
+          a.add(s);
+        }
+      }
     }
     newFile(f).set(rec.phase, j);
   }
@@ -1757,6 +1813,10 @@ public class RapidoTracker {
       res.fragUseNumbers.add(new long[] {Long.parseLong(a.get(1)), Long.parseLong(a.get(2))});
     }
     res.elementMaps.addAll(j.forceArray("elementMaps").asStrings());
+    JsonObject an = j.forceObject("anchors");
+    for (String k : an.getNames()) {
+      res.anchors.put(k, an.getJsonArray(k).asStrings());
+    }
     return res;
   }
 
