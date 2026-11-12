@@ -14,7 +14,7 @@ Status: in progress (Phase C)
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | HL7/fhir-tx-ecosystem-ig | 29546b35 | 7600m | 92 | 0/6/15 | 40 | 0/6/15 | 36 | 37, 2.4/26/-/33/33/24 | 42 | 40 | same |
 | HL7/cds-hooks-library | 8afbe0fe | 7600m | 91 | 7/0/0 | 43 | 7/0/0 | 34 | 39, 1.0/21/-/27/25/20 | 43 | 39 | same |
-| HL7/uv-pocd | 8e377d42 | 7600m | 77 | 0/0/4 |  |  |  |  |  |  |  |
+| HL7/uv-pocd | 8e377d42 | 7600m | 77 | 0/0/4 | 74 | 0/0/4 | 62 | 78, 1.2/28/24/63/58/29 | 71 | 71 | same |
 | hl7-eu/laboratory | 4571ab84 | 7600m | 168 | 5/11/62 |  |  |  |  |  |  |  |
 | HL7/fhir-bfdr | 1f981246 | 7600m | 406 | 291/365/791 |  |  |  |  |  |  |  |
 | HL7/davinci-pdex-plan-net | 8d9037d0 | 9g | 275 | 11/865/8 |  |  |  |  |  |  |  |
@@ -33,3 +33,8 @@ Status: in progress (Phase C)
 - I1, I2, F6 vs R1: same qa counts and messages (7). 55 files differ: build timestamps inside binaries (xlsx, packages, spec.internals, packs, package.db), fragment-usage-analysis.csv timings, and llms.txt / en/llms.txt / ai.zip page order (same entries, name order as in tx-eco).
 - W2 vs F2, W6 vs F6, W6 vs I1: same qa and messages; 46 files differ, timestamps and timings only.
 - Watch: W1 page rebuild 1.0 s (edit in en/patient-view.html), W2 differential build (28 of 35 files), W4/W5 complete builds add and remove Basic-QaNewW4; W6 removes both edits.
+
+### pocd
+- I1, I2, F6 vs R1: same qa counts and messages (4). 143 files differ: timestamps inside binaries (xlsx, packages, packs, spec.internals), fragment-usage-analysis.csv timings, llms.txt page order, and the "used by" order in valueset-ref-list / valueset-ref-all-list (csv, json) and codesystem-ref-all-list.json (same entries, checked with an order-insensitive compare).
+- W2 vs F2, W6 vs F6, W6 vs I1: same qa and messages; the same classes of diffs (used-by order also varies between two int builds).
+- Watch: W1 page rebuild 1.2 s (en/guidance.html), W2 differential (47 of 103 files), W3 differential (70 of 103), W4/W5 complete builds add and remove Patient-QaNewW4; W6 removes all edits.
