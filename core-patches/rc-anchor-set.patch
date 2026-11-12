@@ -1,4 +1,4 @@
-From f83ae3dd7708ec80db0da183baab2d352a2b907d Mon Sep 17 00:00:00 2001
+From 03297b4a6f56ae9acab838f2b7afe0c181b50ebe Mon Sep 17 00:00:00 2001
 From: Claude <noreply@anthropic.com>
 Date: Thu, 12 Nov 2026 19:06:08 +0000
 Subject: [PATCH] Add a setter for the rendering context's anchor set
@@ -10,16 +10,16 @@ same again. RenderingContext.setAnchors lets it give the context a set
 it tracks. copy(true) shares the set as before, and copy(false) still
 starts an empty one.
 ---
- .../r5/renderers/utils/RenderingContext.java  | 10 ++++
+ .../renderers/utils/RenderingContext.java     | 10 ++++
  .../RenderingContextAnchorsTest.java          | 57 +++++++++++++++++++
  2 files changed, 67 insertions(+)
- create mode 100644 org.hl7.fhir.r5/src/test/java/org/hl7/fhir/r5/test/rendering/RenderingContextAnchorsTest.java
+ create mode 100644 org.hl7.fhir.services/src/test/java/org/hl7/fhir/services/renderers/RenderingContextAnchorsTest.java
 
-diff --git a/org.hl7.fhir.r5/src/main/java/org/hl7/fhir/r5/renderers/utils/RenderingContext.java b/org.hl7.fhir.r5/src/main/java/org/hl7/fhir/r5/renderers/utils/RenderingContext.java
-index 4cb79a67..252b49a5 100644
---- a/org.hl7.fhir.r5/src/main/java/org/hl7/fhir/r5/renderers/utils/RenderingContext.java
-+++ b/org.hl7.fhir.r5/src/main/java/org/hl7/fhir/r5/renderers/utils/RenderingContext.java
-@@ -1170,6 +1170,16 @@ public class RenderingContext extends RenderingI18nContext {
+diff --git a/org.hl7.fhir.services/src/main/java/org/hl7/fhir/services/renderers/utils/RenderingContext.java b/org.hl7.fhir.services/src/main/java/org/hl7/fhir/services/renderers/utils/RenderingContext.java
+index c398b6ff..58fc29dc 100644
+--- a/org.hl7.fhir.services/src/main/java/org/hl7/fhir/services/renderers/utils/RenderingContext.java
++++ b/org.hl7.fhir.services/src/main/java/org/hl7/fhir/services/renderers/utils/RenderingContext.java
+@@ -1166,6 +1166,16 @@ public class RenderingContext extends RenderingI18nContext {
      return anchors;
    }
  
@@ -36,13 +36,13 @@ index 4cb79a67..252b49a5 100644
    public void clearAnchors() {
      anchors.clear();
    }
-diff --git a/org.hl7.fhir.r5/src/test/java/org/hl7/fhir/r5/test/rendering/RenderingContextAnchorsTest.java b/org.hl7.fhir.r5/src/test/java/org/hl7/fhir/r5/test/rendering/RenderingContextAnchorsTest.java
+diff --git a/org.hl7.fhir.services/src/test/java/org/hl7/fhir/services/renderers/RenderingContextAnchorsTest.java b/org.hl7.fhir.services/src/test/java/org/hl7/fhir/services/renderers/RenderingContextAnchorsTest.java
 new file mode 100644
-index 00000000..c9b09e6f
+index 00000000..c0aad558
 --- /dev/null
-+++ b/org.hl7.fhir.r5/src/test/java/org/hl7/fhir/r5/test/rendering/RenderingContextAnchorsTest.java
++++ b/org.hl7.fhir.services/src/test/java/org/hl7/fhir/services/renderers/RenderingContextAnchorsTest.java
 @@ -0,0 +1,57 @@
-+package org.hl7.fhir.r5.test.rendering;
++package org.hl7.fhir.services.renderers;
 +
 +import static org.junit.jupiter.api.Assertions.assertFalse;
 +import static org.junit.jupiter.api.Assertions.assertNotSame;
@@ -53,9 +53,9 @@ index 00000000..c9b09e6f
 +import java.util.Locale;
 +import java.util.Set;
 +
-+import org.hl7.fhir.r5.renderers.utils.RenderingContext;
-+import org.hl7.fhir.r5.renderers.utils.RenderingContext.GenerationRules;
-+import org.hl7.fhir.r5.renderers.utils.RenderingContext.ResourceRendererMode;
++import org.hl7.fhir.services.renderers.utils.RenderingContext;
++import org.hl7.fhir.services.renderers.utils.RenderingContext.GenerationRules;
++import org.hl7.fhir.services.renderers.utils.RenderingContext.ResourceRendererMode;
 +import org.junit.jupiter.api.Test;
 +
 +public class RenderingContextAnchorsTest {
