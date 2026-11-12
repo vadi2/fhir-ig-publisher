@@ -13,7 +13,7 @@ Status: in progress (Phase C)
 | IG | commit | heap | R1 | R1 qa e/w/h | I1 | I1 qa | I2 | I2 qa | watch first/W1..W6 | W2 qa | W6 qa | F2 | F2 qa | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | HL7Chile/MHD-CL | 360872e | 7600m | 133 | 0/28/5 | 67 | 0/28/5 | 55 | 0/27/5 | 57 / 3 / 33 / 31 / 34 / 33 / 30 | 0/27/5 | 0/27/5 | 73 | 0/28/5 | REGRESSION: llms.txt page order (HL7 #1461, likely intended); pre-existing diffs: SCT edition warning missing on reused folders, package .index.db rows |
-| hl7-eu/readi | 0dd3e92 | 7600m | 72 | 165/59/55 |  |  |  |  |  |  |  |  |  |  |
+| hl7-eu/readi | 0dd3e92 | 7600m | 72 | 165/59/55 | 54 | 165/59/55 | 50 | 165/59/55 | 55 / 2 / 30 / 27 / 40 / 34 / 27 | 165/59/55 | 165/59/55 | 51 | 165/59/55 | REGRESSION: spec.internals drops the .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version in narrative links |
 | RIVO-Noord/zorgviewer-ig | aab62e4 | 7600m | 139 | 669/137/128 |  |  |  |  |  |  |  |  |  |  |
 | HL7/davinci-ra | f003bae | 7600m | 188 | 0/0/0 |  |  |  |  |  |  |  |  |  |  |
 | HL7/imaging-service-request-ig | def90dc | 7600m | 111 | 195/225/244 |  |  |  |  |  |  |  |  |  |  |
@@ -28,3 +28,10 @@ Status: in progress (Phase C)
 - pre-existing: "WARNING: IG: The IG is not for the international realm, and it uses SNOMED CT, so it should fix the SCT edition in the expansion parameters" is missing (28 to 27 warnings) in I2, W2 and W6. Master does the same: a second master full build in the same folder (R2m) and the master watch session both have 27. Fresh folders (R1, I1, F2) have 28.
 - pre-existing: `package.tgz/package/.index.db` (also in full-ig.zip) has an empty ResourceList in R1 but 8 rows in I1, I2, W6 and a second fresh master build (R1b). Master isn't consistent here, so not from the integration.
 - Otherwise identical: W2 output = F2 output, W6 output = I1 output (0 differing files), I1/I2 vs R1 only the above.
+
+### hl7-eu/readi
+
+- **REGRESSION (intended), #48 perf/watch-fsh-tail (9614fa3), commit 349fc124 "spec.internals doesn't list the ai pages the AI step removes"**: `spec.internals` in definitions.{json,xml,ttl}.zip, package.tgz, hl7.eu.fhir.readi.en.tgz, validator.pack, validator-hl7.eu.fhir.readi.pack and full-ig.zip no longer lists the `*.ai.html` targets (StructureDefinition-researchStudy-readi.ai.html etc.). Master lists them although they aren't in its output (0 `.ai.html` files in R1). A jar from 9614fa3 alone gives the same spec.internals as int.jar. Repro: full build of hl7-eu/readi@0dd3e92 with master and 9614fa3, compare `package/other/spec.internals` in output/package.tgz.
+- **REGRESSION (order only), HL7 #1461**: llms.txt, en/llms.txt and en/ai.zip page order, as for MHD-CL.
+- pre-existing: the narrative of Bundle-readi-sample-1-r4 (json/xml/ttl, its html pages, examples.*.zip, package.db, packages) links NamingSystem-uri to terminology.hl7.org 7.5.0 in some builds and 7.1.0 in others, for master too (R1 and a second fresh master build: 7.5.0; a second master build in the same folder: 7.1.0). int.jar: I1 7.5.0, I2 7.1.0, F2 7.1.0, W2 7.1.0, W6 7.5.0. Not tied to the folder or the jar.
+- QA identical everywhere (165/59/55, 3 broken links, same 282 messages). W2 output = F2, W6 output = I1. No 502s.
