@@ -16,7 +16,7 @@ Status: in progress (Phase C)
 | hl7-eu/readi | 0dd3e92 | 7600m | 72 | 165/59/55 | 54 | 165/59/55 | 50 | 165/59/55 | 55 / 2 / 30 / 27 / 40 / 34 / 27 | 165/59/55 | 165/59/55 | 51 | 165/59/55 | REGRESSION: spec.internals drops the .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version in narrative links |
 | RIVO-Noord/zorgviewer-ig | aab62e4 | 7600m | 139 | 669/137/128 | 126 | 669/137/128 | 92 | 669/137/128 | 131 / 6 / 90 / 72 / 72 / 69 / 71 | 669/137/128 | 669/137/128 | 115 | 669/137/128 | REGRESSION: llms.txt page order (HL7 #1461) only; pre-existing diffs: watch QA paths under temp/pages/.watch-output, "used by" csv order |
 | HL7/davinci-ra | f003bae | 7600m | 188 | 0/0/0 | 96 | 0/0/0 | 86 | 0/0/0 | 93 / 10 / 60 / 50 / 67 / 68 / 61 | 0/0/0 | 0/0/0 | 98 | 0/0/0 | REGRESSION: spec.internals drops .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version and identifier display in narratives |
-| HL7/imaging-service-request-ig | def90dc | 7600m | 111 | 195/225/244 |  |  |  |  |  |  |  |  |  |  |
+| HL7/imaging-service-request-ig | def90dc | 7600m | 111 | 195/225/244 | 83 | 195/225/244 | 79 | 195/225/244 | 96 / 2 / 48 / 38 / 68 / 69 / 41 | 195/225/244 | 195/225/244 | 83 | 195/225/244 | REGRESSION: spec.internals drops .ai.html targets (#48, intended); llms.txt page order (HL7 #1461); pre-existing diffs: THO version and identifier display in narratives |
 | hl7au/au-fhir-core | 3de0d01 | 7600m | 171 | 62/220/47 |  |  |  |  |  |  |  |  |  |  |
 | sfaassn2025-source/base | e11fe94 | 7600m | 354 | 0/3/2 |  |  |  |  |  |  |  |  |  |  |
 
@@ -53,3 +53,12 @@ Status: in progress (Phase C)
 - noise: comparison-v2.0.0/xx-79-... and comparison-v2.1.0/xx-128-ra-parameters-cc-remark-patch... show a Java stack trace (an exception in the comparison, master too); the frames differ with the code and the call path (watch: `completeBuild`).
 - masked: "used by" order in valueset-ref-all-list.csv / csvs.zip.
 - QA identical everywhere (0/0/0, same suppressed counts). No 502s.
+
+### HL7/imaging-service-request-ig
+
+- **REGRESSION (intended), #48**: spec.internals in definitions.{json,ttl,xml}.zip, package.tgz, hl7.fhir.uv.imaging-service-request-ig.en.tgz, validator*.pack, full-ig.zip no longer lists the `*.ai.html` targets, as for readi.
+- **REGRESSION (order only), HL7 #1461**: llms.txt, en/llms.txt, en/ai.zip page order.
+- pre-existing: Bundle-example-order-bundle and ImagingStudy-example-requested-procedure-imaging-study (json/ttl/xml, en/*.html, .md, examples.*.zip, packages) differ only in the NamingSystem-dui narrative link: `terminology.hl7.org/7.5.0` vs `5.0.0` and display `DICOM Unique Id` vs `DUI`. Same mechanism as davinci-ra, where master varies the same way.
+- pre-existing: package.db nondeterministic content, as for the other IGs.
+- masked: "used by" order in valueset-ref-all-list.csv, codesystem-ref-all-list.csv, csvs.zip.
+- QA identical everywhere (195/225/244, 669 messages). No 502s.
