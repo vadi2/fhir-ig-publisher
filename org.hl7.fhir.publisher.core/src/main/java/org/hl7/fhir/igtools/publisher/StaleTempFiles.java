@@ -159,7 +159,8 @@ public class StaleTempFiles {
       return "no record of what the last build claimed in the temp folder";
     }
     String last = new String(Files.readAllBytes(claimsEncoding), StandardCharsets.UTF_8);
-    return last.equals(fileNameEncoding()) ? null : "the last build read the temp folder's file names as " + last + ", this one reads them as " + fileNameEncoding();
+    String current = fileNameEncoding();
+    return last.equals(current) ? null : "the last build read the temp folder's file names as " + last + ", this one reads them as " + current;
   }
 
   /** The claimed paths (in this build, so far) that name no file, so aren't compared or saved */
