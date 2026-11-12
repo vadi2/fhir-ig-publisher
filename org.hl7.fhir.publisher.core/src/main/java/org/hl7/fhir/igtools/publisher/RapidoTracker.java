@@ -176,6 +176,10 @@ public class RapidoTracker {
       // a reused file's outputs are what it wrote in the temp folder in the last build (see RapidoOutputs)
       reason = "what the last build wrote in the temp folder isn't all there";
     }
+    if (reason == null && pf.staleTemp != null && !pf.staleTemp.hasClaims()) {
+      // what the last build left in the temp folder that this one won't write can't be told (see StaleTempFiles)
+      reason = "no record of what the last build claimed in the temp folder";
+    }
     complete = reason != null;
     if (complete) {
       return;
@@ -1213,31 +1217,48 @@ public class RapidoTracker {
    */
   private Map<String, Set<String>> buildState() {
     Map<String, Set<String>> res = new LinkedHashMap<>();
-    res.put("statusWarnings", readSet(pf.validator, "statusWarnings"));
-    res.put("unsupportedCodeSystems", readSet(pf.context, "unsupportedCodeSystems"));
-    res.put("codeSystemsUsed", readSet(pf.context, "codeSystemsUsed"));
+    res.put("statusWarnings", readState(pf.validator, "statusWarnings"));
+    res.put("unsupportedCodeSystems", readState(pf.context, "unsupportedCodeSystems"));
+    res.put("codeSystemsUsed", readState(pf.context, "codeSystemsUsed"));
     return res;
   }
 
-  /** the set in the (private) field of the object or a superclass; null if it can't be read */
+  // the sets of buildState() that couldn't be read (each is logged once)
+  private final Set<String> unreadableState = new HashSet<>();
+
+  /** a set of buildState(); null if it can't be read, and then no validation is reused */
+  private Set<String> readState(Object o, String field) {
+    try {
+      return readSet(o, field);
+    } catch (ReflectiveOperationException | RuntimeException e) {
+      if (unreadableState.add(field)) {
+        pf.logger.logMessage("Rapido Mode: validations aren't reused, as what validating does to " + field + " can't be read (" + e + ")");
+      }
+      return null;
+    }
+  }
+
+  /** the set in the (private) field of the object or a superclass; null if there's no object */
   @SuppressWarnings("unchecked")
-  static Set<String> readSet(Object o, String field) {
+  static Set<String> readSet(Object o, String field) throws ReflectiveOperationException {
     if (o == null) {
       return null;
     }
     for (Class<?> c = o.getClass(); c != null; c = c.getSuperclass()) {
+      Field fld;
       try {
-        Field fld = c.getDeclaredField(field);
-        fld.setAccessible(true);
-        Object v = fld.get(o);
-        return v instanceof Set ? (Set<String>) v : null;
+        fld = c.getDeclaredField(field);
       } catch (NoSuchFieldException e) {
-        // look in the superclass
-      } catch (Exception e) {
-        return null;
+        continue; // look in the superclass
       }
+      fld.setAccessible(true);
+      Object v = fld.get(o);
+      if (v instanceof Set) {
+        return (Set<String>) v;
+      }
+      throw new NoSuchFieldException(c.getName() + "." + field + " is " + (v == null ? "null" : "a " + v.getClass().getName()) + ", not a set");
     }
-    return null;
+    throw new NoSuchFieldException(o.getClass().getName() + " has no field " + field);
   }
 
   /**

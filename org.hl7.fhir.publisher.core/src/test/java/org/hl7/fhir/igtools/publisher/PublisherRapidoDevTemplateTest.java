@@ -9,6 +9,7 @@ import static org.mockito.Mockito.when;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.List;
 
 import org.hl7.fhir.igtools.templates.Template;
 import org.hl7.fhir.utilities.IniFile;
@@ -64,9 +65,10 @@ class PublisherRapidoDevTemplateTest {
     assertTrue(first.isCompleteBuild());
     first.setUuid("the-last-build");
     first.save();
-    // and the record of what it wrote in the temp folder (nothing)
+    // and the records of what it wrote and claimed in the temp folder (nothing)
     Files.createDirectories(Path.of(pf.vsCache));
     Files.writeString(Path.of(pf.vsCache, ".build-outputs.json"), "{}");
+    new StaleTempFiles(pf.tempDir, List.of()).save(List.of());
 
     // the template hasn't changed: a differential build
     Publisher publisher = new Publisher();
