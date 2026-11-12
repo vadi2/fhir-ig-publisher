@@ -34,3 +34,6 @@ Poll `git ls-remote origin refs/heads/qa/integration-ready` every 5 min (a plain
 ## Reporting
 - Results file: `qa/results-<shard>.md` on the notes branch `claude/ig-publisher-perf-41aejs-notes` (fetch + rebase on that branch before each push; plain push, never force; terse commit messages, no footers, no model names, no em dashes). Update it after each IG: IG, commit, heap, R1/I1/I2/W*/F* times, QA counts, verdict (`same`, `pre-existing diffs: ...`, `REGRESSION: ...`, `skip: ...`), and for each regression the PR and a reproduction.
 - Don't fix code, don't open PRs, don't comment on GitHub, never touch HL7/* or hapifhir/* repos (cloning public IG repos read-only is fine). Don't message other sessions. When your shard is done, write a final summary line at the top of your results file and stop.
+
+## Survive context compaction
+Auto-compaction is on. Keep `/home/user/qa/PROGRESS.md` current after every step (phase, current IG and step, jar paths and shas, heap per IG, paths of logs/snapshots, what's done, what's next, open findings), and re-read it (plus this plan) whenever you're unsure where you are. Push the results file after each IG so nothing lives only in your context.
