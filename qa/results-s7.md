@@ -19,7 +19,7 @@ Status: in progress (Phase C)
 | ahdis/ch-ekm | cb48773900 | 7600m | 315 | 794/8352/4461 | 292 | 210 | 284, 8/218/222/230/232/229 (all edits seen) | 270 | 258 | 794/8352/4461 | pending master M1/M2: mapping column order, NamingSystem version links. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48 |
 | HL7/phd | 565d3336a2 | 7600m | 100 | 0/0/2 | 100 | 88 | 108, 1/42/36/72/75/40 (all edits seen) | 101 | 95 | 0/0/2 | pending master M1/M2: child-profile and used-by list order. REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48. pre-existing: package .index.db rows |
 | TWNHIFHIR/empd | 988d8dbbaf | 7600m | 209 | 0/0/0 | 228 | 216 | 212, 9/148/146/187/183/137 (all edits seen) | 208 | 198 | 0/0/0 | REGRESSION (order only, looks intended): llms.txt/llms.md page order, HL7 #1461 (as dis). pre-existing: used-by list order |
-| hl7-eu/eps | 3314660fc5 | 7600m | 188 | 0/51/15 | | | | | | | |
+| hl7-eu/eps | 3314660fc5 | 7600m | 188 | 0/51/15 | 183 | 147 | 181, 2/98/76/124/131/93 (all edits seen) | 176 | 197 | 0/51/15 | pending master watch: comparison error pages in watch builds have 2 extra stack frames (as formulary). REGRESSION (looks intended): spec.internals drops .ai.html targets, PR #48; llms.txt/llms.md page order, HL7 #1461. pre-existing: used-by list order |
 
 ## Notes per IG
 
@@ -51,6 +51,11 @@ Status: in progress (Phase C)
 - QA SAME (0/0/0) in every build. No content difference in any comparison (differ=0 everywhere).
 - I1, I2 vs R1: order only, llms.txt/llms.md page order (#1461) and used-by lists in *-ref-*list.csv/json.
 - W2 = F2, W6 = F6, W6 = I1: order only, used-by lists and the order of a list in package-combined.tgz StructureDefinition-Observation-vitalSigns-twcore-0.3.2.json (same kind of run-to-run list order as phd).
+
+### eps
+- QA SAME (0/51/15) in every build.
+- I1, I2 vs R1: spec.internals only (547 targets with master, 482 with int; every missing one is a `*.ai.html` page, none added), PR #48. Order only: llms.txt/llms.md (#1461), used-by lists.
+- W2 vs F2, W6 vs F6, W6 vs I1: 16 comparison error pages (comparison-v1.0.0-ballot, ips-comparison-v2.0.1, and their full-ig.zip copies) print a stack trace, and in watch builds it has two extra frames, `Publisher.completeBuild` and `Publisher.lambda$execute$0`. Nothing else. Same as formulary; checked against the formulary master watch.
 
 ### formulary
 - QA counts and messages equal in every build.
