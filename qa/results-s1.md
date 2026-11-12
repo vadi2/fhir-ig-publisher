@@ -12,8 +12,8 @@ Status: in progress (Phase C)
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | ChitSR/sample-ig | 0701fa3 | 7600m | 78 | 1/6/3 | 35 | 1/6/3 | 32 | W1 5.7, W2 20.0, W3 20.2, W4 24.0, W5 22.0, W6 18.2 | 36 | 36 | pass; F1 (intended), F2 pre-existing |
 | HL7/demo-collect | 0cd5dc5 | 7600m | 107 | 0/0/0 | 48 | 0/0/0 | 51 | W1 1.5, W2 26.7, W3 26.9, W4 39.2, W5 30.4, W6 29.8 | 53 | 54 | pass; only diff vs master = F1 (intended, #48) |
-| costateixeira/spenser | 63c79e0 | 7600m | 63 | 58/20/139 |  |  |  |  |  |  |  |
-| HL7/fhir-consent-management | aad3563 | 7600m | 75 | 2/0/0 |  |  |  |  |  |  |  |
+| costateixeira/spenser | 63c79e0 | 7600m | 63 | 58/20/139 | 58 | 58/20/139 | 51 | W1 1.7, W2 27.5, W3 21.9, W4 53.8, W5 50.7, W6 30.6 | 49 | 56 | pass; F1 (intended), F3 pre-existing |
+| HL7/fhir-consent-management | aad3563 | 7600m | 75 | 2/0/0 | 76 | 2/0/0 | 75 |  |  |  |  |
 | HL7/emedicinal-product-info | 66968b7 | 7600m | 135 | 7/0/0 |  |  |  |  |  |  |  |
 | hyweb-cdc/niis | b343858 | 7600m | 116 | 0/0/0 |  |  |  |  |  |  |  |
 | uzinfocom-org/digital-health-ig | 31e406f | 7600m | 748 | 5/268/9446 |  |  |  |  |  |  |  |
@@ -29,7 +29,7 @@ Shows up in every archive that holds spec.internals: definitions.*.zip, package*
 **F2. In watch mode, html-check messages in qa.txt name `temp/pages/.watch-output/...` instead of `output/...` (pre-existing).**
 sample-ig: the W2/W6 qa.txt has `ERROR: <dir>/temp/pages/.watch-output/en/StructureDefinition-myobservation.html: The page skips a heading level` where the full build F2/F6 has `<dir>/output/en/...`. The master watch (sample-ig, same edits) shows the same paths, so it is not caused by the integration branch. Same message set and counts otherwise.
 
-**F3. master R1 of sample-ig: `.index.db` in hl7.fhir.au.sample.myig.en.tgz had 0 ResourceList rows (pre-existing, master flake).** A second master build (R1b) and every int build have 2 rows. Not seen with int.
+**F3. `package/.index.db` ResourceList rows in the package tgz files are filled in some runs and empty in others (pre-existing, master flake).** sample-ig: master R1 0 rows, master R1b 2 rows, every int build 2. spenser: jct.fhir.spenser.fr.tgz has 0 rows with master R1 and 13 with int I1, while en/nl/pt/package.tgz have 0 with both. Master varies between its own two runs, so not caused by the integration branch.
 
 Master watch on sample-ig for reference (same spec): W1 22.2 s on master vs 5.7 s on int.
 
