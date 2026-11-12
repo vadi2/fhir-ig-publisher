@@ -1147,6 +1147,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     if (!settings.isRapidoMode()) {
       buildTracker.setStringProperty("status", "uuid", HierarchicalTableGenerator.uuid, null);
       buildTracker.save();
+      scrubTxCache(true);
       return;
     }
     pf.hasCheckedDependencies = true;
@@ -1172,6 +1173,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       }
       HierarchicalTableGenerator.uuid = pf.rapido.getUuid();
     }
+    scrubTxCache(true);
   }
 
   private boolean bool(JsonObject obj, String name) throws Exception {

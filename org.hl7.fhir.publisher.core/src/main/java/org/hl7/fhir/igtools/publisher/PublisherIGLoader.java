@@ -1098,7 +1098,7 @@ public class PublisherIGLoader extends PublisherBase {
       FileUtilities.clearDirectory(pf.vsCache);
     } else if (settings.getMode() == PublisherUtils.IGBuildMode.AUTOBUILD) {
       log("Terminology Cache is at "+ pf.vsCache +". Trimming now");
-      FileUtilities.clearDirectory(pf.vsCache, "snomed.cache", "loinc.cache", "ucum.cache");
+      FileUtilities.clearDirectory(pf.vsCache, RapidoTracker.keepWithTxCacheRecords(pf.vsCache, "snomed.cache", "loinc.cache", "ucum.cache"));
     } else if (settings.getCacheOption() == PublisherUtils.CacheOption.CLEAR_ERRORS) {
       log("Terminology Cache is at "+ pf.vsCache +". Clearing Errors now");
       logDebugMessage(LogCategory.INIT, "Deleted "+Integer.toString(clearErrors(pf.vsCache))+" files");
@@ -4811,7 +4811,7 @@ public class PublisherIGLoader extends PublisherBase {
   }
 
 
-  private void loadConformance1(boolean first) throws Exception {
+  void loadConformance1(boolean first) throws Exception {
     boolean any = false;
     for (FetchedFile f : pf.fileList) {
       if (!f.isLoaded()) {
@@ -4828,6 +4828,7 @@ public class PublisherIGLoader extends PublisherBase {
         Parameters pp = (Parameters) new ObjectConverter(pf.context).convert(r.getElement());
         pf.context.getManager().setExpansionParameters(pp);
       }
+      scrubTxCache(false);
       log("Generating Snapshots");
       generateSnapshots();
       for (FetchedFile f : pf.fileList) {
@@ -4837,7 +4838,7 @@ public class PublisherIGLoader extends PublisherBase {
   }
 
 
-  private void load(String type, boolean isMandatory) throws Exception {
+  void load(String type, boolean isMandatory) throws Exception {
     for (FetchedFile f : pf.fileList) {
       if (!f.isLoaded()) {
         f.start("load");

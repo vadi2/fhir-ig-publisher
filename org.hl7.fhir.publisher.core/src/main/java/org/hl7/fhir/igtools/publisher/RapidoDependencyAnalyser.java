@@ -50,6 +50,7 @@ public class RapidoDependencyAnalyser {
     private String name;
     private String title;
     private String baseDefinition;
+    private String supplements;
     private String contentHash = "";
     private final Set<String> strings = new LinkedHashSet<>();
     private final Set<String> references = new LinkedHashSet<>();
@@ -96,6 +97,12 @@ public class RapidoDependencyAnalyser {
       return this;
     }
 
+    /** for a CodeSystem supplement: the code system it adds to */
+    public ResourceNode setSupplements(String supplements) {
+      this.supplements = supplements;
+      return this;
+    }
+
     public ResourceNode setContentHash(String contentHash) {
       this.contentHash = contentHash;
       return this;
@@ -103,6 +110,10 @@ public class RapidoDependencyAnalyser {
 
     public String getContentHash() {
       return contentHash;
+    }
+
+    Set<String> getStrings() {
+      return strings;
     }
 
     /** a string value found anywhere in the resource (primitive, markdown, narrative, ...). */
@@ -211,6 +222,14 @@ public class RapidoDependencyAnalyser {
   private final Map<String, List<ResourceNode>> byLabel = new HashMap<>();
   private final Map<ResourceNode, String> fileOf = new HashMap<>();
   private final Map<ResourceNode, Set<ResourceNode>> direct = new HashMap<>();
+  /** the supplements of the IG by the code system they add to (without its version) */
+  private final Map<String, List<ResourceNode>> supplementsOf = new HashMap<>();
+  /**
+   * the supplements of the code systems a resource names. Core sends every supplement it has for a code system with
+   * an expansion or validation that uses the code system, so what the resource's validation (and a ValueSet's
+   * expansion) says depends on them. They aren't usages: a supplement's page doesn't list who uses its code system
+   */
+  private final Map<ResourceNode, Set<ResourceNode>> implied = new HashMap<>();
   private final Set<ResourceNode> unresolved = new HashSet<>();
 
   /**
@@ -284,6 +303,17 @@ public class RapidoDependencyAnalyser {
         }
         targets.remove(r);
         direct.put(r, targets);
+        Set<ResourceNode> supps = new LinkedHashSet<>();
+        for (String s : r.strings) {
+          addSupplements(s, supps);
+        }
+        for (String s : r.references) {
+          addSupplements(s, supps);
+        }
+        supps.remove(r);
+        if (!supps.isEmpty()) {
+          implied.put(r, supps);
+        }
         if (!ok) {
           unresolved.add(r);
         }
@@ -363,6 +393,9 @@ public class RapidoDependencyAnalyser {
     }
     addTo(byLabel, r.getKey(), r);
     addTo(byLabel, r.id, r);
+    if (r.supplements != null) {
+      addTo(supplementsOf, refPath(r.supplements), r);
+    }
     if (r.name != null) {
       addTo(byLabel, r.name, r);
     }
@@ -416,6 +449,17 @@ public class RapidoDependencyAnalyser {
     return ok;
   }
 
+  /**
+   * a string that is a code system's url (any version), or one of its implicit value sets (url?fhir_vs...), depends on
+   * the IG's supplements to that code system
+   */
+  private void addSupplements(String s, Set<ResourceNode> supps) {
+    if (!supplementsOf.isEmpty() && s.length() <= MAX_REF_LENGTH && !containsWhitespace(s)) {
+      int implicit = s.indexOf("?fhir_vs");
+      addAll(supps, supplementsOf.get(refPath(implicit < 0 ? s : s.substring(0, implicit))));
+    }
+  }
+
   private static boolean containsWhitespace(String s) {
     for (int i = 0; i < s.length(); i++) {
       if (Character.isWhitespace(s.charAt(i))) {
@@ -433,6 +477,11 @@ public class RapidoDependencyAnalyser {
   }
 
   private boolean resolveReference(String s, Set<ResourceNode> targets) {
+    int implicit = s.indexOf("?fhir_vs");
+    if (implicit > 0) {
+      // an implicit value set of a code system (cs?fhir_vs...) depends on the code system
+      return resolveReference(s.substring(0, implicit), targets);
+    }
     // what this string finds, apart from what the strings before it found (it can find the same resource again)
     Set<ResourceNode> found = new HashSet<>();
     resolveInto(s, found);
@@ -537,7 +586,9 @@ public class RapidoDependencyAnalyser {
     todo.push(r);
     while (!todo.isEmpty()) {
       ResourceNode n = todo.pop();
-      for (ResourceNode t : direct.getOrDefault(n, new HashSet<>())) {
+      List<ResourceNode> edges = new ArrayList<>(direct.getOrDefault(n, Set.of()));
+      edges.addAll(implied.getOrDefault(n, Set.of()));
+      for (ResourceNode t : edges) {
         if (res.add(t)) {
           Set<ResourceNode> known = memo.get(t);
           if (known != null) {

@@ -106,6 +106,14 @@ public class RapidoTracker {
   private Map<String, FileResult> results = new HashMap<>();
   private final Map<FetchedFile, FileNode> nodes = new IdentityHashMap<>();
   private JsonObject oldFiles;
+  /** what to record next to the tx cache once it is scrubbed (see txCacheUrlsToScrub) */
+  private JsonArray txCacheRecord;
+  private boolean txCacheRecordRead;
+  private Map<String, RecordedTerminology> recordedTerminology;
+  /** the ValueSets and CodeSystems of the IG that txCacheUrlsToScrub has looked at, so each is hashed once */
+  private final Map<FetchedResource, TerminologyResource> terminology = new IdentityHashMap<>();
+  /** the urls txCacheUrlsToScrub has returned in this build */
+  private final Set<String> txCacheScrubbed = new HashSet<>();
   private final JsonObject newFiles = new JsonObject();
   private final Map<String, String> global = new TreeMap<>();
   /** path (relative to the IG folder) to content hash, for the files behind global "other-files" */
@@ -334,6 +342,297 @@ public class RapidoTracker {
     return res;
   }
 
+  /**
+   * The ValueSet and CodeSystem urls whose answers in the terminology cache this build mustn't use and that haven't
+   * been scrubbed yet in this build. The cache keys a ValueSet that has a version by url|version, and a ValueSet of the
+   * IG keeps its version while it is edited, so an answer can be from before the last edit of the ValueSet or of
+   * something it uses.
+   *
+   * <p>The urls of the IG's ValueSets and CodeSystems that changed since the cache was last scrubbed, and of those
+   * that name one of them (an included ValueSet or code system, an implicit value set, a supplement), the code systems
+   * that a changed supplement adds to (now and when it was recorded), and once every resource is loaded, the urls the
+   * IG had then and doesn't now (deleted, or the url changed). Every one of the IG's, and what their supplements add
+   * to, if nothing was recorded. What each has now is recorded next to the cache by saveTxCacheRecord(), so a build
+   * with no changes keeps every answer.
+   *
+   * @param allLoaded false for a call before every resource is loaded: a recorded url that isn't loaded yet isn't
+   *   taken as deleted
+   */
+  public Set<String> txCacheUrlsToScrub(boolean allLoaded) throws IOException {
+    Map<String, String> hashes = new TreeMap<>();
+    Map<String, Set<String>> names = new HashMap<>();
+    Map<String, String> supplements = new HashMap<>();
+    for (FetchedFile f : pf.fileList) {
+      for (FetchedResource r : f.getResources()) {
+        TerminologyResource t = terminologyResource(r);
+        if (t != null) {
+          hashes.merge(t.url, t.hash, String::concat);
+          names.computeIfAbsent(t.url, k -> new HashSet<>()).addAll(t.named);
+          if (t.supplements != null) {
+            supplements.put(t.url, t.supplements);
+          }
+        }
+      }
+    }
+    if (allLoaded) {
+      txCacheRecord = new JsonArray();
+      for (Map.Entry<String, String> e : hashes.entrySet()) {
+        txCacheRecord.add(recordEntry(e.getKey(), e.getValue(), supplements.get(e.getKey())));
+      }
+    }
+    if (!txCacheRecordRead) {
+      recordedTerminology = readTxCacheRecord();
+      txCacheRecordRead = true;
+    }
+    Set<String> res = new TreeSet<>();
+    if (recordedTerminology == null) {
+      res.addAll(hashes.keySet());
+    } else {
+      for (Map.Entry<String, String> e : hashes.entrySet()) {
+        RecordedTerminology rec = recordedTerminology.get(e.getKey());
+        if (rec == null || !e.getValue().equals(rec.hash)) {
+          res.add(e.getKey());
+        }
+      }
+      if (allLoaded) {
+        for (String u : recordedTerminology.keySet()) {
+          if (!hashes.containsKey(u)) {
+            res.add(u);
+          }
+        }
+      }
+      for (Map.Entry<String, RecordedTerminology> e : recordedTerminology.entrySet()) {
+        if (e.getValue().supplements != null && res.contains(e.getKey())) {
+          res.add(e.getValue().supplements);
+        }
+      }
+    }
+    boolean grew = !res.isEmpty();
+    while (grew) {
+      grew = false;
+      for (Map.Entry<String, String> e : supplements.entrySet()) {
+        if (res.contains(e.getKey()) && res.add(e.getValue())) {
+          grew = true;
+        }
+      }
+      for (Map.Entry<String, Set<String>> e : names.entrySet()) {
+        if (!res.contains(e.getKey()) && !Collections.disjoint(e.getValue(), res)) {
+          res.add(e.getKey());
+          grew = true;
+        }
+      }
+    }
+    res.removeAll(txCacheScrubbed);
+    txCacheScrubbed.addAll(res);
+    return res;
+  }
+
+  /**
+   * Called before the cache is scrubbed for urls: marks them in the record as being scrubbed, so if this build stops
+   * before saveTxCacheRecord(), with answers from content the record doesn't describe in the cache, the next build
+   * scrubs them again even if their content is back to what was recorded, or they are gone by then.
+   *
+   * @return a warning if the record couldn't be marked, or null
+   */
+  public String startTxCacheScrub(Set<String> urls) throws IOException {
+    if (recordedTerminology == null) {
+      if (txCacheStaleFile().exists()) {
+        // the next build ignores the record and scrubs everything anyway
+        return null;
+      }
+      // nothing readable is recorded: a record of just the marks still has the next build scrub every url it doesn't name
+      recordedTerminology = new HashMap<>();
+    }
+    boolean marked = false;
+    for (String u : urls) {
+      RecordedTerminology rec = recordedTerminology.get(u);
+      if (rec == null || !SCRUB_STARTED.equals(rec.hash)) {
+        recordedTerminology.put(u, new RecordedTerminology(SCRUB_STARTED, rec == null ? null : rec.supplements));
+        marked = true;
+      }
+    }
+    if (!marked) {
+      return null;
+    }
+    JsonArray record = new JsonArray();
+    for (Map.Entry<String, RecordedTerminology> e : new TreeMap<>(recordedTerminology).entrySet()) {
+      record.add(recordEntry(e.getKey(), e.getValue().hash, e.getValue().supplements));
+    }
+    File f = txCacheRecordFile();
+    try {
+      writeTxCacheRecord(record);
+      return null;
+    } catch (IOException e) {
+      if (deleteTxCacheRecord()) {
+        return "could not update "+f+" ("+e.getMessage()+"), so there is no record and the next build scrubs every ValueSet and CodeSystem of the IG";
+      }
+      try {
+        FileUtilities.stringToFile("", txCacheStaleFile());
+        return "could not update or delete "+f+" ("+e.getMessage()+"), so the next build ignores it and scrubs every ValueSet and CodeSystem of the IG";
+      } catch (IOException e2) {
+        return "could not update, delete or mark as stale "+f+" ("+e.getMessage()+"): delete it by hand, or later builds may use answers from the content this build has for "+String.join(", ", urls);
+      }
+    }
+  }
+
+  /** records what txCacheUrlsToScrub(true) found, now that the cache holds nothing older for what changed */
+  public void saveTxCacheRecord() throws IOException {
+    writeTxCacheRecord(txCacheRecord);
+    if (!txCacheStaleFile().delete() && txCacheStaleFile().exists()) {
+      throw new IOException("could not delete "+txCacheStaleFile());
+    }
+  }
+
+  void writeTxCacheRecord(JsonArray record) throws IOException {
+    // written in place: a write that fails after the file is opened leaves a record that can't be read, which is safe
+    FileUtilities.stringToFile(org.hl7.fhir.utilities.json.parser.JsonParser.compose(new JsonObject().add("terminology", record), false), txCacheRecordFile());
+  }
+
+  /** @return false if there is a record that couldn't be deleted */
+  boolean deleteTxCacheRecord() {
+    try {
+      return Files.deleteIfExists(txCacheRecordFile().toPath()) || !txCacheRecordFile().exists();
+    } catch (IOException e) {
+      return false;
+    }
+  }
+
+  private static JsonObject recordEntry(String url, String hash, String supplements) {
+    JsonObject o = new JsonObject().add("url", url).add("hash", hash);
+    if (supplements != null) {
+      o.add("supplements", supplements);
+    }
+    return o;
+  }
+
+  /** the record's name starts with this, then the IG's package id: IGs can share a cache folder */
+  static final String TX_CACHE_RECORD = ".tx-cache-scrub";
+  /** no content hashes to this, so an entry being scrubbed is scrubbed again until a record is saved */
+  private static final String SCRUB_STARTED = "";
+
+  private File txCacheRecordFile() throws IOException {
+    String name = pf.npmName == null ? TX_CACHE_RECORD : TX_CACHE_RECORD+"-"+pf.npmName.replaceAll("[^A-Za-z0-9._-]", "_");
+    return new File(Utilities.path(pf.vsCache, name+".json"));
+  }
+
+  /** when this exists, the record next to it can't be trusted (it couldn't be updated or deleted) */
+  private File txCacheStaleFile() throws IOException {
+    return new File(txCacheRecordFile().getPath()+".stale");
+  }
+
+  /** the files to keep when the cache folder is trimmed: keep, and the records of what was scrubbed from what is kept */
+  static String[] keepWithTxCacheRecords(String folder, String... keep) {
+    List<String> res = new ArrayList<>(List.of(keep));
+    String[] files = new File(folder).list();
+    if (files != null) {
+      for (String f : files) {
+        if (f.startsWith(TX_CACHE_RECORD)) {
+          res.add(f);
+        }
+      }
+    }
+    return res.toArray(new String[0]);
+  }
+
+  private static class RecordedTerminology {
+    final String hash;
+    final String supplements;
+
+    RecordedTerminology(String hash, String supplements) {
+      this.hash = hash;
+      this.supplements = supplements;
+    }
+  }
+
+  /** url to what was recorded, or null if there is no record or it can't be read (so everything is scrubbed) */
+  private Map<String, RecordedTerminology> readTxCacheRecord() throws IOException {
+    File f = txCacheRecordFile();
+    if (!f.exists()) {
+      return null;
+    }
+    if (txCacheStaleFile().exists()) {
+      pf.logger.logMessage("Terminology cache: "+f+" is marked stale, so every ValueSet and CodeSystem of the IG is scrubbed");
+      return null;
+    }
+    try {
+      Map<String, RecordedTerminology> res = new HashMap<>();
+      for (JsonObject o : readState(f).getJsonArray("terminology").asJsonObjects()) {
+        String url = o.asString("url");
+        String hash = o.asString("hash");
+        String supplements = o.asString("supplements");
+        if (url == null || hash == null || (supplements == null && o.has("supplements"))) {
+          throw new IOException("an entry has no url or hash, or isn't as written: "+o);
+        }
+        res.put(url, new RecordedTerminology(hash, supplements));
+      }
+      return res;
+    } catch (Exception e) {
+      pf.logger.logMessage("Terminology cache: can't read "+f+" ("+e.getMessage()+"), so every ValueSet and CodeSystem of the IG is scrubbed");
+      return null;
+    }
+  }
+
+  private static class TerminologyResource {
+    final String url;
+    final String hash;
+    /** the urls it names, without |version or ?fhir_vs..., apart from its own */
+    final Set<String> named = new HashSet<>();
+    /** for a supplement, the code system it adds to, without |version */
+    final String supplements;
+
+    TerminologyResource(String url, String hash, String supplements) {
+      this.url = url;
+      this.hash = hash;
+      this.supplements = supplements;
+    }
+  }
+
+  /**
+   * null if it isn't a ValueSet or CodeSystem with a url. Hashed once, as loaded (the loader sets a missing url and
+   * may pin versions): it is asked for before each snapshot generation and once everything is loaded
+   */
+  private TerminologyResource terminologyResource(FetchedResource r) {
+    if (!terminology.containsKey(r)) {
+      terminology.put(r, makeTerminologyResource(r));
+    }
+    return terminology.get(r);
+  }
+
+  private TerminologyResource makeTerminologyResource(FetchedResource r) {
+    if (!Utilities.existsInList(r.fhirType(), "ValueSet", "CodeSystem")) {
+      return null;
+    }
+    Element e = r.getElement();
+    if (e == null) {
+      if (!(r.getResource() instanceof CanonicalResource) || ((CanonicalResource) r.getResource()).getUrl() == null) {
+        return null;
+      }
+      // nothing to compare, so assume it changed (as fileNode does)
+      return new TerminologyResource(((CanonicalResource) r.getResource()).getUrl(), UUID.randomUUID().toString(), null);
+    }
+    String url = singleValue(e, "url");
+    if (url == null && r.getResource() instanceof CanonicalResource) {
+      url = ((CanonicalResource) r.getResource()).getUrl();
+    }
+    if (url == null) {
+      return null;
+    }
+    ResourceNode n = resourceNode(r);
+    String supplemented = "CodeSystem".equals(r.fhirType()) ? singleValue(e, "supplements") : null;
+    TerminologyResource t = new TerminologyResource(url, n.getContentHash(), supplemented == null ? null : withoutVersion(supplemented));
+    for (String s : n.getStrings()) {
+      int i = s.indexOf("?fhir_vs");
+      t.named.add(withoutVersion(i < 0 ? s : s.substring(0, i)));
+    }
+    t.named.remove(url);
+    return t;
+  }
+
+  private static String withoutVersion(String url) {
+    int i = url.indexOf('|');
+    return i < 0 ? url : url.substring(0, i);
+  }
+
   private FileNode fileNode(FetchedFile f) {
     Hasher h = new Hasher();
     h.add(f.getPath()).add(Integer.toString(f.getProcessMode())).add(f.getLogical()).add(f.getContentType());
@@ -405,6 +704,9 @@ public class RapidoTracker {
       n.setTitle(singleValue(e, "title"));
       if ("StructureDefinition".equals(r.fhirType())) {
         n.setBaseDefinition(e.getNamedChildValue("baseDefinition"));
+      }
+      if ("CodeSystem".equals(r.fhirType())) {
+        n.setSupplements(singleValue(e, "supplements"));
       }
       h.add("(").add(e.getName()).add(e.fhirType());
       for (String c : e.getComments()) {

@@ -56,7 +56,7 @@ class RapidoDependencyAnalyserTest {
       for (Map.Entry<String, List<Res>> e : files.entrySet()) {
         FileNode fn = new FileNode(e.getKey(), "src:"+e.getKey());
         for (Res r : e.getValue()) {
-          ResourceNode n = new ResourceNode(r.type, r.id).setUrl(r.url).setVersion(r.version).setName(r.name).setTitle(r.title).setBaseDefinition(r.base);
+          ResourceNode n = new ResourceNode(r.type, r.id).setUrl(r.url).setVersion(r.version).setName(r.name).setTitle(r.title).setBaseDefinition(r.base).setSupplements(r.supplements);
           StringBuilder content = new StringBuilder();
           for (String s : r.strings) {
             n.addString(s);
@@ -83,6 +83,7 @@ class RapidoDependencyAnalyserTest {
     String name;
     String title;
     String base;
+    String supplements;
     final List<String> strings = new ArrayList<>();
     final List<String> refs = new ArrayList<>();
 
@@ -110,6 +111,12 @@ class RapidoDependencyAnalyserTest {
 
     Res str(String s) {
       strings.add(s);
+      return this;
+    }
+
+    Res supplements(String cs) {
+      this.supplements = cs;
+      strings.add(cs);
       return this;
     }
   }
@@ -156,6 +163,46 @@ class RapidoDependencyAnalyserTest {
     // from base, and the example claims derived
     assertEquals(List.of("cs-a", "vs-a", "vs-b", "base", "derived", "ex1"), o.validate);
     assertFalse(o.render.contains("other"));
+  }
+
+  private static Ig supplementIg() {
+    Ig ig = new Ig();
+    ig.add("supp", "CodeSystem", "supp").url(B+"/CodeSystem/supp").supplements("http://snomed.info/sct|http://snomed.info/sct/900000000000207008").str("uz display");
+    ig.add("vs-sct", "ValueSet", "vs-sct").url(B+"/ValueSet/vs-sct").str("http://snomed.info/sct");
+    ig.add("vs-named", "ValueSet", "vs-named").url(B+"/ValueSet/vs-named").str(B+"/CodeSystem/supp").str("http://loinc.org");
+    ig.add("vs-loinc", "ValueSet", "vs-loinc").url(B+"/ValueSet/vs-loinc").str("http://loinc.org");
+    ig.add("profile", "StructureDefinition", "profile").url(B+"/StructureDefinition/profile").base("http://hl7.org/fhir/StructureDefinition/Condition").str(B+"/ValueSet/vs-sct");
+    ig.add("ex", "Condition", "ex").str(B+"/StructureDefinition/profile").str("http://snomed.info/sct").str("1234");
+    // bound to an implicit value set of SNOMED CT
+    ig.add("bound", "StructureDefinition", "bound").url(B+"/StructureDefinition/bound").base("http://hl7.org/fhir/StructureDefinition/Condition").str("http://snomed.info/sct?fhir_vs=isa/404684003");
+    return ig;
+  }
+
+  @Test
+  void supplementChangeReachesWhatUsesItsCodeSystem() {
+    Outcome o = edit(supplementIg(), ig -> ig.get("supp").strings.set(1, "new uz display"));
+    // core sends a code system's supplements with every expansion and validation that uses the code system, at any
+    // version (bound uses it through an implicit value set); vs-named names the supplement
+    assertEquals(List.of("supp", "vs-sct", "vs-named", "profile", "ex", "bound"), o.validate);
+    assertFalse(o.render.contains("vs-loinc"));
+  }
+
+  @Test
+  void codeSystemChangeReachesAValueSetOnItsImplicitValueSet() {
+    Ig ig0 = new Ig();
+    ig0.add("cs-a", "CodeSystem", "cs-a").url(B+"/CodeSystem/cs-a").str("a1");
+    ig0.add("vs-implicit", "ValueSet", "vs-implicit").url(B+"/ValueSet/vs-implicit").str(B+"/CodeSystem/cs-a?fhir_vs=isa/a1");
+    ig0.add("vs-other", "ValueSet", "vs-other").url(B+"/ValueSet/vs-other").str("http://loinc.org");
+    Outcome o = edit(ig0, ig -> ig.get("cs-a").strings.set(1, "a1-changed"));
+    assertEquals(List.of("cs-a", "vs-implicit"), o.validate);
+  }
+
+  @Test
+  void usingASupplementedCodeSystemIsntAUsageOfTheSupplement() {
+    // the supplement's page doesn't list what uses its code system
+    Outcome o = edit(supplementIg(), ig -> ig.get("ex").str("5678"));
+    assertEquals(List.of("ex"), o.validate);
+    assertFalse(o.render.contains("supp"));
   }
 
   @Test
