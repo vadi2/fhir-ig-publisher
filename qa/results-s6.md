@@ -76,10 +76,13 @@ skip: source not reachable. The qas.json repo path is base64 (MOHW-TWCoreIG / "T
   - identifier-type displays and package.db CodeSystemListRefs (R4 vs THO 7.5.0 links for measure-* value sets)
     vary between all builds, int full vs int full included (F2 vs F6, I1 vs I2). Terminology/resolution
     nondeterminism.
-- watch-only, classification pending (master watch queued): CodeSystemListRefs row `subject-type` resolves to R4
-  "Subject type" in W2 and W6 (local "Subject Type Value Set" in all full builds); W6
-  ValueSet-measure-stratifier-type.html has the extra CLD anchor pair (same as lars L2b).
-- verdict: pending master watch.
+- watch-only, pre-existing (master watch, all 6 steps, run the same way: W1 Differential 93s, W2 105, W3 106,
+  W4 217 Complete, W5 128 Complete, W6 107): the CodeSystemListRefs row `subject-type` resolves to R4
+  "Subject type" (int W2 and W6, master W6), while every full build has the local "Subject Type Value Set".
+  ValueSet-measure-stratifier-type.html gets the extra CLD anchor pair in Differential Builds on both jars
+  (int W2 and W6, master W2 and W6), and in no full build.
+- verdict: **F-IDX only**. The other differences are pre-existing: watch Differential Build artifacts that master
+  shows too, terminology nondeterminism, and the crmi#dev path artifact.
 
 ## HL7/cqf-recommendations (hl7.fhir.uv.cpg) @ e2fb413
 - heap 7600m. QA 51 / 179 / 440 in every build, same message set.
@@ -106,8 +109,11 @@ skip: source not reachable. The qas.json repo path is base64 (MOHW-TWCoreIG / "T
     `(http://hl7.org/fhir/R4/observation.html)`. genCombinedPackage serializes dependency SDs from the live context
     (PublisherGenerator ~1167-1190), so the SD looks rewritten in place by an earlier render and reused.
   - b. ValueSet-lars-specimen-type-values.html: the CLD gains `<a name="lars-specimen-type-values"> </a><a
-    name="hclars-specimen-type-values"> </a>`. Not in F2 or master W2. Same artifact in cqm W6.
+    name="hclars-specimen-type-values"> </a>`. Not in F2 or master W2. Master's own Differential Builds of cqm add
+    the same anchor pair, so b is a pre-existing Differential Build defect that #1466 exposes for this edit.
+    Master never ran a Differential Build for lars, so a is not shown to be pre-existing.
   W3 and W6 (also Differential) are clean, and W6 = I1. QA counts and messages are equal.
 - L3 (pre-existing): the column order in organization-lars-mappings.html (LabMonthly vs LabDaily) varies by build
   (R1, I1, W6 Monthly first; F2, F6, W2 and master W2 Daily first). This explains F6 vs W6.
-- verdict: **REGRESSION L2 (#1466 exposes the differential path for this edit) + F-IDX**.
+- verdict: **REGRESSION L2a (watch only; #1466 exposes the differential path for this edit) + F-IDX**. L2b is
+  pre-existing.
