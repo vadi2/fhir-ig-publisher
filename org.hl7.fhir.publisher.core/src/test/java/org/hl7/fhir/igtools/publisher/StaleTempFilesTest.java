@@ -2,10 +2,15 @@ package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
+import java.io.File;
+import java.io.FileOutputStream;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
@@ -15,6 +20,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -164,6 +170,63 @@ class StaleTempFilesTest {
     st = tracker();
     st.mark();
     assertEquals(Collections.singletonList(svg2.toAbsolutePath().normalize()), st.findTemplateLeftovers());
+  }
+
+  /**
+   * A claimed name that isn't a valid Path (any non-ASCII name under a POSIX locale: run the tests with LC_ALL=POSIX to
+   * see it) is the file java.io wrote for it, not an InvalidPathException that stops the build
+   */
+  @Test
+  void aClaimedNameThatIsNoPathIsTheFileJavaIoWroteForIt() throws Exception {
+    File pages = temp.resolve("pages").toFile();
+    pages.mkdirs();
+    File cyrillic = new File(pages, "\u0441\u0442\u0440.html");
+    try (OutputStream o = new FileOutputStream(cyrillic)) {
+      o.write('a');
+    }
+    Path old = write("pages/old.html", "old");
+    StaleTempFiles st = tracker();
+    st.save(Arrays.asList(cyrillic.getAbsolutePath(), old.toString()));
+    tick();
+
+    st = tracker();
+    st.mark();
+    tick();
+    assertEquals(Collections.singletonList(old.toAbsolutePath().normalize()), st.find(Collections.singletonList(cyrillic.getAbsolutePath())));
+    // and when this build doesn't claim it, it's found
+    List<Path> found = st.find(Collections.emptyList());
+    assertEquals(2, found.size());
+    st.delete(found);
+    assertFalse(cyrillic.exists());
+
+    assertNull(StaleTempFiles.path("a\0b.html"));
+  }
+
+  /**
+   * The template's onGenerate script writes a file whose name isn't in the file system encoding (any non-ASCII name
+   * under a POSIX locale; here, under any locale, a name that isn't UTF-8 either). The next build used to fail before
+   * the script ran again ("Malformed input or input contains unmappable characters")
+   */
+  @Test
+  void theTemplatesWritesAreFoundWhateverTheirNames() throws Exception {
+    assumeTrue(StaleTempFiles.isSupported(temp.toString()));
+    StaleTempFiles st = tracker();
+    st.markTemplate();
+    // a name java can't write: the shell's, from octal escapes
+    Files.createDirectories(temp.resolve("pages"));
+    assertEquals(0, new ProcessBuilder("sh", "-c", "printf s > \"$(printf 'pages/\\321\\201\\377.svg')\"")
+        .directory(temp.toFile()).start().waitFor());
+    st.saveTemplateWrites();
+    tick();
+
+    st = tracker();
+    st.mark();
+    List<Path> left = st.findTemplateLeftovers();
+    assertEquals(1, left.size());
+    st.delete(left);
+    try (Stream<Path> files = Files.list(temp.resolve("pages"))) {
+      assertEquals(0, files.count());
+    }
   }
 
   /**

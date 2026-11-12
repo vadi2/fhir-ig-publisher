@@ -247,6 +247,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       watchSession = session;
 
       boolean first = true;
+      String failure = null;
       do {
         if (session == null) {
           build(rootDir);
@@ -254,6 +255,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           watchBuildStarted = System.nanoTime();
           session.startBuild();
           tailChanges = tailChanges(monitor, session, watchRoot, moduleOutputs);
+          failure = null;
           try {
             // a page rebuild goes on from where the last build was, so the state it left is kept for it
             if (!rebuildPages(session)) {
@@ -269,6 +271,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
               throw e;
             }
             // keep watching: the next save may fix it
+            failure = e.getMessage() == null ? e.getClass().getName() : e.getMessage();
             log("Publishing Content Failed: " + e.getMessage());
             log("");
             log("Stack Dump (for debugging):");
@@ -301,7 +304,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
             monitor = new FileChangeMonitor(watched);
           }
         }
-      } while (session != null && (takeTailGaveWay() || waitForChanges(monitor, session, buildOutputs(watchRoot), moduleWrites(watchRoot, moduleOutputs))));
+      } while (session != null && (takeTailGaveWay() || waitForChanges(monitor, session, buildOutputs(watchRoot), moduleWrites(watchRoot, moduleOutputs), failure)));
     } finally {
       discardPageRebuild();
       if (jekyllDriver != null) {
@@ -649,13 +652,19 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
   /**
    * Waits until the content of a watched file is different from what the last build started with. Files that were
    * saved without being changed, and files the build itself wrote, don't count
+   *
+   * @param failure why the last build failed, or null if it didn't: said again here, so that the end of the log doesn't
+   *   look like that of a build that finished
    */
   private boolean waitForChanges(FileChangeMonitor monitor, WatchSession session, List<Path> buildOutputs,
-      FileChangeMonitor.FolderWrites moduleWrites) throws InterruptedException, IOException {
+      FileChangeMonitor.FolderWrites moduleWrites, String failure) throws InterruptedException, IOException {
     // monitoring is started before looking for changes made while the build ran, so that nothing is missed in between
     monitor.startMonitoring(buildOutputs, moduleWrites);
     try {
       SourceSnapshot.Changes changes = session.changesSinceBuildStart();
+      if (failure != null) {
+        System.out.println("=== Build Failed: " + failure + " (the output is incomplete) ===");
+      }
       if (changes.isEmpty()) {
         System.out.println("Watching for changes (Cascais:Rapido mode)");
       }
