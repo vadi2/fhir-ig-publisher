@@ -16,7 +16,9 @@ import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
@@ -45,6 +47,15 @@ class StaleTempFilesTest {
 
   private StaleTempFiles tracker() {
     return new StaleTempFiles(temp.toString(), Collections.singletonList(temp.resolve("_rapido").toString()));
+  }
+
+  /**
+   * Writes a file whose name java can't write, by the shell (the name has octal escapes for its bytes). False if the
+   * file system refuses the name (e.g. on macOS, a name that isn't UTF-8)
+   */
+  private static boolean writeByShell(Path folder, String name) throws Exception {
+    return new ProcessBuilder("sh", "-c", "printf s > \"$(printf '" + name + "')\"").directory(folder.toFile())
+        .redirectError(ProcessBuilder.Redirect.DISCARD).start().waitFor() == 0;
   }
 
   private static List<String> names(Path... paths) {
@@ -213,10 +224,8 @@ class StaleTempFilesTest {
     assumeTrue(tracker().isSupported());
     StaleTempFiles st = tracker();
     st.markTemplate();
-    // a name java can't write: the shell's, from octal escapes
     Files.createDirectories(temp.resolve("pages"));
-    assertEquals(0, new ProcessBuilder("sh", "-c", "printf s > \"$(printf 'pages/\\321\\201\\377.svg')\"")
-        .directory(temp.toFile()).start().waitFor());
+    assumeTrue(writeByShell(temp, "pages/\\321\\201\\377.svg"), "the file system takes only UTF-8 names");
     st.saveTemplateWrites();
     tick();
 
@@ -227,6 +236,116 @@ class StaleTempFilesTest {
     st.delete(left);
     try (Stream<Path> files = Files.list(temp.resolve("pages"))) {
       assertEquals(0, files.count());
+    }
+  }
+
+  /**
+   * The temp folder moved between builds (e.g. the IG's folder was renamed): what the template wrote is still found,
+   * whatever the names
+   */
+  @Test
+  void theTemplatesWritesAreFoundAfterTheTempFolderMoved() throws Exception {
+    Path a = Files.createDirectories(temp.resolve("a").resolve("pages")).getParent();
+    StaleTempFiles st = new StaleTempFiles(a.toString(), Collections.singletonList(a.resolve("_rapido").toString()));
+    assumeTrue(st.isSupported());
+    st.markTemplate();
+    assumeTrue(writeByShell(a, "pages/\\321\\201\\377.svg"), "the file system takes only UTF-8 names");
+    st.saveTemplateWrites();
+    tick();
+
+    Path b = Files.move(a, temp.resolve("b"));
+    st = new StaleTempFiles(b.toString(), Collections.singletonList(b.resolve("_rapido").toString()));
+    st.mark();
+    assertEquals(1, st.findTemplateLeftovers().size());
+  }
+
+  /** a line of the record of what the template wrote that names no file in the temp folder is counted, for the log */
+  @Test
+  void aRecordOfTheTemplatesWritesThatNamesNoFileIsCounted() throws Exception {
+    Path svg = write("pages/_includes/a.svg", "svg");
+    write("_rapido/template-written.txt", "pages/_includes/a.svg\n%zz\n../outside.svg\n");
+    tick();
+
+    StaleTempFiles st = tracker();
+    st.mark();
+    assertEquals(Collections.singletonList(svg.toAbsolutePath().normalize()), st.findTemplateLeftovers());
+    assertEquals(2, st.unreadableTemplateWrites());
+  }
+
+  /**
+   * Without the file system encoding (the property is missing, or names no charset), a claimed name that isn't a
+   * valid Path still names the file java.io wrote for it (it used to name none: the claim was dropped, and a file this
+   * build claims again was taken for stale)
+   */
+  @Test
+  void aClaimedNameIsAFileWithoutTheEncodingProperty() throws Exception {
+    Path pages = temp.resolve("pages").toAbsolutePath().normalize();
+    // a lone surrogate is in no encoding: what can't be encoded is '?'
+    String name = pages + File.separator + "\uD800.html";
+    String jnu = System.getProperty("sun.jnu.encoding");
+    try {
+      for (String cs : new String[] {null, "x-no-such-charset"}) {
+        if (cs == null) {
+          System.clearProperty("sun.jnu.encoding");
+        } else {
+          System.setProperty("sun.jnu.encoding", cs);
+        }
+        assertEquals(pages.resolve("?.html"), StaleTempFiles.path(name), "with sun.jnu.encoding " + cs);
+      }
+    } finally {
+      System.setProperty("sun.jnu.encoding", jnu);
+    }
+  }
+
+  /** a claimed name that names no file (it has a NUL) is counted, for the log */
+  @Test
+  void aClaimedNameThatNamesNoFileIsCounted() throws Exception {
+    Path p = write("pages/a.html", "a");
+    StaleTempFiles st = tracker();
+    st.save(Arrays.asList(p.toString(), p.getParent() + "/a\0b.html"));
+    assertEquals(Collections.singleton(p.getParent() + "/a\0b.html"), st.unnamedClaims());
+  }
+
+  /**
+   * The last build ran with another file system encoding (another locale): the names it claimed may not be the names
+   * this one reads, so what's stale can't be told, and the build has to be a complete one
+   */
+  @Test
+  void aBuildUnderAnotherFileSystemEncodingHasNoClaims() throws Exception {
+    assumeTrue(tracker().isSupported());
+    Path pages = Files.createDirectories(temp.resolve("pages"));
+    assumeTrue(writeByShell(temp, "pages/\\321\\201.html"), "no shell");
+    Path page;
+    try (Stream<Path> files = Files.list(pages)) {
+      page = files.findFirst().get().toAbsolutePath().normalize();
+    }
+    String jnu = System.getProperty("sun.jnu.encoding");
+    ProcessBuilder pb = new ProcessBuilder(Paths.get(System.getProperty("java.home"), "bin", "java").toString(), "-cp",
+        System.getProperty("java.class.path"), SaveClaims.class.getName(), temp.toString());
+    pb.environment().put("LC_ALL", "UTF-8".equals(jnu) ? "POSIX" : "C.UTF-8");
+    pb.redirectError(ProcessBuilder.Redirect.DISCARD);
+    Process proc = pb.start();
+    String other = new String(proc.getInputStream().readAllBytes(), StandardCharsets.UTF_8);
+    assertEquals(0, proc.waitFor());
+    assumeTrue(!other.equals(jnu), "the other locale has the same file system encoding");
+    tick();
+
+    // this build doesn't claim the page: either it's found, or the build is a complete one
+    StaleTempFiles st = tracker();
+    st.mark();
+    assertTrue(!st.hasClaims() || st.find(Collections.emptyList()).contains(page));
+  }
+
+  /** the last build, under another locale: claims what's in the temp folder's pages folder */
+  static class SaveClaims {
+    public static void main(String[] args) throws IOException {
+      Path temp = Paths.get(args[0]);
+      List<String> claimed = new ArrayList<>();
+      try (Stream<Path> files = Files.list(temp.resolve("pages"))) {
+        files.forEach(p -> claimed.add(p.toString()));
+      }
+      new StaleTempFiles(temp.toString(), Collections.singletonList(temp.resolve("_rapido").toString())).save(claimed);
+      System.out.print(System.getProperty("sun.jnu.encoding"));
     }
   }
 

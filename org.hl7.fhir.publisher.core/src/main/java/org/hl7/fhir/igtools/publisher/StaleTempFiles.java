@@ -15,6 +15,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashSet;
 import java.util.List;
@@ -43,6 +44,7 @@ public class StaleTempFiles {
   private final Path temp;
   private final Path marker;
   private final Path claims;
+  private final Path claimsEncoding;
   private final Path templateMarker;
   private final Path templateWrites;
   private final Set<Path> skip = new HashSet<>();
@@ -52,6 +54,10 @@ public class StaleTempFiles {
   // if the script's writes can't be told this build (see markTemplate())
   private Set<Path> beforeTemplate;
   private Set<Path> lastTemplateWrites;
+  // the lines of the record of what the last build's onGenerate script wrote that name no file in the temp folder
+  private int unreadableTemplateWrites;
+  // the claimed paths that name no file
+  private final Set<String> unnamedClaims = new TreeSet<>();
 
   /**
    * @param skip folders (or files) under temp that are left alone (e.g. Rapido's own state)
@@ -65,6 +71,7 @@ public class StaleTempFiles {
     this.temp = temp.toAbsolutePath().normalize();
     this.marker = this.temp.resolve("_rapido").resolve("build-start");
     this.claims = this.temp.resolve("_rapido").resolve("claimed.txt");
+    this.claimsEncoding = this.temp.resolve("_rapido").resolve("claimed-encoding.txt");
     this.templateMarker = this.temp.resolve("_rapido").resolve("template-start");
     this.templateWrites = this.temp.resolve("_rapido").resolve("template-written.txt");
     for (Path s : skip) {
@@ -72,6 +79,7 @@ public class StaleTempFiles {
     }
     this.skip.add(marker);
     this.skip.add(claims);
+    this.skip.add(claimsEncoding);
     this.skip.add(templateMarker);
     this.skip.add(templateWrites);
   }
@@ -112,7 +120,7 @@ public class StaleTempFiles {
    */
   public List<Path> find(Collection<String> claimed) throws IOException {
     List<Path> res = new ArrayList<>();
-    if (!Files.exists(claims) || !Files.exists(marker)) {
+    if (!hasClaims() || !Files.exists(marker)) {
       return res;
     }
     Set<String> before = new HashSet<>(Files.readAllLines(claims, StandardCharsets.UTF_8));
@@ -134,11 +142,29 @@ public class StaleTempFiles {
   public void save(Collection<String> claimed) throws IOException {
     Files.createDirectories(claims.getParent());
     Files.write(claims, new TreeSet<>(keys(claimed)), StandardCharsets.UTF_8);
+    Files.write(claimsEncoding, fileNameEncoding().getBytes(StandardCharsets.UTF_8));
   }
 
-  /** Whether the last build saved what it claimed */
-  public boolean hasClaims() {
-    return Files.exists(claims);
+  /** Whether the last build saved what it claimed, in names this build reads the same way (see whyNoClaims()) */
+  public boolean hasClaims() throws IOException {
+    return whyNoClaims() == null;
+  }
+
+  /**
+   * Why what the last build claimed can't be compared with what this one does: it didn't save it, or it read file names
+   * in another encoding (it ran under another locale), so the same file may have had another name. Null if it can be
+   */
+  public String whyNoClaims() throws IOException {
+    if (!Files.exists(claims) || !Files.exists(claimsEncoding)) {
+      return "no record of what the last build claimed in the temp folder";
+    }
+    String last = new String(Files.readAllBytes(claimsEncoding), StandardCharsets.UTF_8);
+    return last.equals(fileNameEncoding()) ? null : "the last build read the temp folder's file names as " + last + ", this one reads them as " + fileNameEncoding();
+  }
+
+  /** The claimed paths (in this build, so far) that name no file, so aren't compared or saved */
+  public Set<String> unnamedClaims() {
+    return Collections.unmodifiableSet(unnamedClaims);
   }
 
   /*
@@ -203,18 +229,32 @@ public class StaleTempFiles {
     Files.write(templateWrites, res, StandardCharsets.UTF_8);
   }
 
-  /** the files (absolute paths) in the temp folder that saveTemplateWrites() recorded; none if there's no record */
+  /**
+   * the files (absolute paths) in the temp folder that saveTemplateWrites() recorded; none if there's no record. Counts
+   * the lines that name no file there (see unreadableTemplateWrites())
+   */
   private Set<Path> readTemplateWrites() throws IOException {
     Set<Path> res = new HashSet<>();
+    unreadableTemplateWrites = 0;
     if (Files.exists(templateWrites)) {
       for (String s : Files.readAllLines(templateWrites, StandardCharsets.UTF_8)) {
         Path p = templateWrite(s);
-        if (p != null && p.startsWith(temp) && !skip.contains(p)) {
+        if (p == null || !p.startsWith(temp)) {
+          unreadableTemplateWrites++;
+        } else if (!skip.contains(p)) {
           res.add(p);
         }
       }
     }
     return res;
+  }
+
+  /**
+   * How many lines of the record of what the last build's onGenerate script wrote, read by findTemplateLeftovers(), name
+   * no file in the temp folder: what they named isn't deleted
+   */
+  public int unreadableTemplateWrites() {
+    return unreadableTemplateWrites;
   }
 
   /**
@@ -237,23 +277,28 @@ public class StaleTempFiles {
   }
 
   /**
-   * How saveTemplateWrites() records a file: its path in the temp folder, or, where that doesn't name the file (a name
-   * that isn't in the file system encoding, e.g. any non-ASCII name under a POSIX locale), its file URI, which keeps
-   * the name's bytes
+   * How saveTemplateWrites() records a file: the path of its file URI relative to the temp folder's. That keeps the
+   * name's bytes, whatever the file system encoding (a name that isn't in it, e.g. any non-ASCII name under a POSIX
+   * locale, has no path java can name it by), and still names the file if the temp folder moves
    */
   private String templateWrite(Path file) {
-    String res = temp.relativize(file).toString();
-    return file.equals(templateWrite(res)) ? res : file.toUri().toString();
+    return tempUri().relativize(file.toUri()).getRawPath();
   }
 
   /** The file a line saveTemplateWrites() wrote names; null if none */
   private Path templateWrite(String s) {
     try {
-      return s.isEmpty() ? null : s.startsWith("file:") ? Paths.get(URI.create(s)) : temp.resolve(s).normalize();
+      return Paths.get(URI.create(tempUri() + s).normalize());
     } catch (IllegalArgumentException e) {
-      // InvalidPathException is an IllegalArgumentException
+      // a line that isn't a URI path; InvalidPathException is an IllegalArgumentException too
       return null;
     }
+  }
+
+  /** the temp folder's file URI, as a folder (ending in '/') */
+  private URI tempUri() {
+    String res = temp.toUri().toString();
+    return URI.create(res.endsWith("/") ? res : res + "/");
   }
 
   private interface FileAction {
@@ -308,6 +353,8 @@ public class StaleTempFiles {
       Path p = path(s);
       if (p != null) {
         res.add(key(p));
+      } else {
+        unnamedClaims.add(s);
       }
     }
     return res;
@@ -316,19 +363,37 @@ public class StaleTempFiles {
   /**
    * The file a path (as the publisher keeps it) names. A name that isn't a valid Path (any non-ASCII name under a POSIX
    * locale) names the file java.io writes for it: the name in the file system encoding, what can't be encoded replaced
-   * (by '?'). Null if it names no file at all
+   * (by '?'). Null if it names no file at all (e.g. it has a NUL)
    */
   static Path path(String s) {
     try {
       return Paths.get(s);
     } catch (InvalidPathException e) {
+      // without the file system encoding (the property is missing, or names no charset), the default one; and if the
+      // name still isn't a valid Path, the name in ASCII, which any file system encoding has
+      List<Charset> charsets = new ArrayList<>();
       try {
-        Charset cs = Charset.forName(System.getProperty("sun.jnu.encoding"));
-        return Paths.get(new String(s.getBytes(cs), cs));
+        charsets.add(Charset.forName(System.getProperty("sun.jnu.encoding")));
       } catch (IllegalArgumentException e2) {
-        return null;
+        // no charset by that name
       }
+      charsets.add(Charset.defaultCharset());
+      charsets.add(StandardCharsets.US_ASCII);
+      for (Charset cs : charsets) {
+        try {
+          return Paths.get(new String(s.getBytes(cs), cs));
+        } catch (InvalidPathException e2) {
+          // try the next one
+        }
+      }
+      return null;
     }
+  }
+
+  /** the encoding of the file system's names (the locale's), as it was when the JVM started */
+  private static String fileNameEncoding() {
+    String res = System.getProperty("sun.jnu.encoding");
+    return res == null ? Charset.defaultCharset().name() : res;
   }
 
   private static boolean isTableImage(Path p) {
