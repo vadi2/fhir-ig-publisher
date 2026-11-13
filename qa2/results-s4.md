@@ -1,6 +1,6 @@
 # QA round 2 results, shard s4
 
-**Status: Phase C in progress (6/7 IGs done).**
+**Status: Phase C 6/7 IGs done; base rerunning its watch sequence after a container restart at ~21:10 (I1/I2 done). Phase D queued after it.**
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (sha256 56b2e4adb4af80ef5b495b3013b726df254243b5437eb500b2c7c6a5ae5b238f)
 - VM: 4 CPU, 15 GB, 8 GB swap. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx7600m -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org -package-cache-folder /home/user/qa/pcf`, fresh `cp -a` of the clone, no -threads.
