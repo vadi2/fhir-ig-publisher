@@ -1,6 +1,6 @@
 # QA round 2 results, shard s2
 
-Status: Phase A (master reference builds) in progress; int.jar not yet available (qa/page-only-ready not pushed).
+Status: Phase A done (all 6 R1 builds). Waiting for qa/page-only-ready (Phase B).
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951
 - int.jar: (pending)
@@ -11,11 +11,12 @@ Status: Phase A (master reference builds) in progress; int.jar not yet available
 | HL7/aitransparency-ig | 6d0a39f | 7600m | 134 | 0/0/0 | | | | | | | |
 | FHIR/ig-guidance | a9d8a94 | 7600m | 81 | 77/53/40 | | | | | | | |
 | hl7-be/medication | 6b4450d | 7600m | 114 | 4/39/93 | | | | | | | |
-| hl7au/au-fhir-ps | 4d0b69d | 7600m | | | | | | | | | |
-| KIP-infrastructure/implementation-guide | 5b5773c | 7600m | | | | | | | | | |
-| uzinfocom-org/digital-health-integration | 4ff5446 | 7600m | | | | | | | | | |
+| hl7au/au-fhir-ps | 4d0b69d | 7600m | 348 | 1928/346/2244 | | | | | | | |
+| KIP-infrastructure/implementation-guide | 5b5773c | 7600m | 262 | 40/2349/3539 | | | | | | | |
+| uzinfocom-org/digital-health-integration | 4ff5446 | 7600m | 1262 | 25/363/7650 | | | | | | | |
 | sfaassn2025-source/VFS-IG | f5e0831 | | | | | | | | | | skip: SUSHI errors at HEAD in round 1 (4afd1fe); not re-run |
 | sfaassn2025-source/CRA-IG | 90942c7 | | | | | | | | | | skip: SUSHI errors at HEAD in round 1 (7dc650f); not re-run |
 
 ## Notes
 - Building master with mvn here: Maven Central downloads through the proxy fail at random ("Could not find artifact" with an empty error, cached in *.lastUpdated). Worked with `-Daether.connector.basic.threads=1` after deleting ~/.m2/repository/**/*.lastUpdated.
+- au-ps R1: first attempt failed at start (tx.fhir.org capability statement timeout, 19 s), as did one retry; the next clean run passed. A third attempt was invalid (my own cleanup deleted its work folder) and is not counted.
