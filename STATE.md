@@ -248,3 +248,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 05:08 tick: s1 US-Core PASS (F3, F4 only). DHP master watch rerun running (decides F5). Only s1 left.
 - 06:08 tick: s1 DHP master watch attempt 3 running (F5 open). Only s1 left.
 - 06:30 Vadim OK'd pushing core: vadi2/org.hl7.fhir.core perf3/rc-anchor-set (03297b4a, setter for #54) pushed; perf2/ws7-read-hook (13744e48, #38) was already there. All work is now on remotes except the intentional uncommitted #54 pom core_version and throwaway test merges.
+- 07:05 core PRs in vadi2/org.hl7.fhir.core: #25 perf3/rc-anchor-set (setAnchors, for publisher #54; 1 commit, subscribed); perf2/ws7-read-hook already has open PR #22 (for publisher #38).
