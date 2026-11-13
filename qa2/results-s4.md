@@ -13,7 +13,6 @@
 | IG | commit | heap | R1 | R1 qa | verdict |
 |---|---|---|---|---|---|
 | HL7Chile/MHD-CL | 360872e | 7600m | 157 | 0/28/5 (0 broken links) | pending int.jar |
-| hl7-eu/readi | 58 | 165/58/39 | 55 | 165/58/39 | 57 / 57 | 165/58/39 each | 55; 24 32 37 35 36 34 41 40 40 (no W1b, W1c) | 60; 24 35 39 40 40 43 44 40 42 | same (pre-existing diffs only) |
 | hl7-eu/readi | 1928b88 | 7600m | 86 | 165/58/39 (3 broken links) | pending int.jar |
 | RIVO-Noord/zorgviewer-ig | 43e4dab | 7600m | 185 | 669/137/128 (43 broken links) | pending int.jar |
 | HL7/davinci-ra | e3d2d69 | 7600m | 413 | 0/0/0 (0 broken links) | pending int.jar |
@@ -26,6 +25,7 @@
 | IG | I1 | I1 qa | I2 | I2 qa | F1 / F2 | W1f / W2 / W6 qa | IW first, W1a..W6 | MW first, W1a..W6 | verdict |
 |---|---|---|---|---|---|---|---|---|---|
 | HL7Chile/MHD-CL | 73 | 0/28/5 | 54 | 0/27/5 | 55 / 57 | 0/27/5 each | 58; 27 26 30 38 37 40 32 37 33 35 (no W1b) | 59; 27 27 30 36 37 36 34 36 38 35 | same (pre-existing diffs only) |
+| hl7-eu/readi | 58 | 165/58/39 | 55 | 165/58/39 | 57 / 57 | 165/58/39 each | 55; 24 32 37 35 36 34 41 40 40 (no W1b, W1c) | 60; 24 35 39 40 40 43 44 40 42 | same (pre-existing diffs only) |
 
 ### HL7Chile/MHD-CL
 - Template: local hl7chile-ig-template on hl7.fhir.template (ant/onCheck scripts, no script-inputs): every int.jar watch step logged "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then ran master's Rapido path (Differential for W1a/W1c/W3, Complete for the rest), same modes and times as master. Page-only rebuild never used here, as intended.
