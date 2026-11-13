@@ -4904,6 +4904,19 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /**
+   * As PublisherBase.givesWayBefore(), and if the build gives way, the copy of the pages (which let it: see
+   * publishPages()) has ended when it does
+   */
+  @Override
+  boolean givesWayBefore(TailWatch.Step next) {
+    if (!super.givesWayBefore(next)) {
+      return false;
+    }
+    awaitEarlyPublish();
+    return true;
+  }
+
   /** runs the copy of the pages on a thread of its own: see awaitEarlyPublish() */
   void startEarlyPublish(Runnable copy) {
     PublisherFields fields = pf;
@@ -4928,25 +4941,26 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     try {
       r = OutputFolderSync.publish(staged, target, files, leftOut, earlyPages, asOf);
     } catch (IOException e) {
-      log("Unable to put the pages in " + target + " yet (it is updated when the build has finished): " + e);
+      fields.logger.logMessage("Unable to put the pages in " + target + " yet (it is updated when the build has finished): " + e);
       earlyPages.clear();
       return;
     }
     if (r.getWritten() > 0) {
       fields.watchPagesPublished = true;
     }
-    if (fields.watchTail != null && r.getFailures().isEmpty()) {
-      // the author has the pages: what's left of the build can give way to the next change
-      fields.watchTail.pagesPublished();
-    }
+    // (through this build's logger: once the build has given way, the next one has its own fields)
     for (String s : r.getFailures()) {
-      log("  " + s);
+      fields.logger.logMessage("  " + s);
     }
     long now = System.nanoTime();
-    log("The pages are up in " + target + ", " + DurationUtil.presentDuration(now - fields.watchBuildStarted) + " after the build started: "
+    fields.logger.logMessage("The pages are up in " + target + ", " + DurationUtil.presentDuration(now - fields.watchBuildStarted) + " after the build started: "
         + r.getWritten() + " written, " + r.getUnchanged() + " unchanged"
         + (r.getFailures().isEmpty() ? "" : ", " + r.getFailures().size() + " failed")
         + " (" + DurationUtil.presentDuration(now - start) + "). They are as Jekyll rendered them: the html checks, the packages and the qa pages follow");
+    if (fields.watchTail != null && r.getFailures().isEmpty()) {
+      // the author has the pages: what's left of the build can give way to the next change (last: the copy is done)
+      fields.watchTail.pagesPublished();
+    }
   }
 
   /**

@@ -10,6 +10,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -467,6 +468,33 @@ class WatchCompleteBuildJekyllTest {
       public void stop() {
       }
     }, false, null, s -> { });
+  }
+
+  @Test
+  void theBuildGivesWayOnlyOnceTheCopyHasFinished() throws Exception {
+    write("temp/.watch-output/a.html", "a2");
+    write("output/a.html", "a");
+    pf.watchTail = tailWithAChange();
+    // the copy's last line waits
+    CountDownLatch logged = new CountDownLatch(1);
+    doAnswer(inv -> {
+      logged.await();
+      return null;
+    }).when(pf.logger).logMessage(startsWith("The pages are up in "));
+    PublisherGenerator g = generator(null);
+    g.publishPagesEarly(null);
+    try {
+      long end = System.nanoTime() + 300_000_000L;
+      while (System.nanoTime() < end) {
+        // (what the copy does after, the next build mustn't share)
+        assertFalse(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES), "the build gave way while the copy was running");
+        Thread.sleep(10);
+      }
+    } finally {
+      logged.countDown();
+    }
+    g.awaitEarlyPublish();
+    assertTrue(pf.watchTail.givesWayBefore(TailWatch.Step.PACKAGES));
   }
 
   @Test
