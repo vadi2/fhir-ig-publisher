@@ -17,6 +17,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.Set;
 import java.util.function.Function;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 import org.apache.commons.io.FileUtils;
@@ -31,8 +32,8 @@ import org.apache.commons.io.FileUtils;
  * {@code .jekyll-metadata}), or when the page's output file is missing. It doesn't follow {@code _data},
  * {@code _config.yml}, which pages and files exist ({@code site.pages} and the like) or plugins. So a build is
  * incremental only when Jekyll's last run in this session succeeded, everything that has been added, changed or
- * deleted in Jekyll's source folder since then is in {@code _includes}, the site can't have plugins (no
- * {@code _plugins}, Gemfile or BUNDLE_GEMFILE), and the configuration has none of the settings in UNSAFE_CONFIG. Any other build
+ * deleted in Jekyll's source folder since then is in {@code _includes}, and the site can't have plugins (no
+ * {@code _plugins}, Gemfile or BUNDLE_GEMFILE; the configuration has only the settings in KNOWN_CONFIG). Any other build
  * deletes {@code .jekyll-metadata}, and Jekyll renders every page, as it does without the option.
  *
  * <p>The publisher writes most of the source folder again in every build, mostly with the same content. A file whose
@@ -60,13 +61,16 @@ public class IncrementalJekyll {
 
   /** the folders that Jekyll reads although their names start with an underscore */
   private static final Set<String> JEKYLL_FOLDERS = Set.of("_includes", "_layouts", "_data", "_plugins", "_sass", "_posts", "_drafts");
-  /** keep_files: what Jekyll leaves in its destination, which copySite() doesn't follow (see writesToSite) */
-  private static final Pattern KEEP_FILES = Pattern.compile("^keep_files\\s*[:=]", Pattern.MULTILINE);
   /**
-   * settings in Jekyll's configuration that load plugins, or make Jekyll read other folders that start with an
-   * underscore (a folder that it doesn't read, such as _rapido, isn't followed here)
+   * the settings in Jekyll's configuration that only change how every page is rendered or which files are pages, so
+   * that the incremental build follows them (the IG templates set only kramdown). Others can load plugins (plugins,
+   * theme), make Jekyll read folders this doesn't follow (collections, includes_dir...) or keep files in its
+   * destination that copySite() would delete (keep_files)
    */
-  private static final Pattern UNSAFE_CONFIG = Pattern.compile("^(plugins|gems|plugins_dir|whitelist|collections|include|includes_dir|layouts_dir|data_dir|source|theme)\\s*[:=]", Pattern.MULTILINE);
+  private static final Set<String> KNOWN_CONFIG = Set.of("kramdown", "markdown", "highlighter", "encoding", "liquid", "exclude", "title", "description", "url", "baseurl");
+  private static final Pattern YAML_KEY = Pattern.compile("([A-Za-z_][A-Za-z0-9_-]*)\\s*:(\\s.*)?");
+  private static final Pattern TOML_KEY = Pattern.compile("([A-Za-z_][A-Za-z0-9_-]*)\\s*=.*");
+  private static final Pattern TOML_TABLE = Pattern.compile("\\[([A-Za-z_][A-Za-z0-9_-]*)(\\.[^\\]]*)?\\]\\s*");
 
   /**
    * A file in the source folder. A file that hasn't changed since the last run keeps the same instance, so a changed
@@ -244,9 +248,6 @@ public class IncrementalJekyll {
     if (Files.exists(source.resolve("_plugins")) || Files.exists(source.resolve("Gemfile")) || env.apply("BUNDLE_GEMFILE") != null) {
       return "the site can have plugins";
     }
-    if (UNSAFE_CONFIG.matcher(config(source)).find()) {
-      return "Jekyll's configuration has settings that its incremental build doesn't follow";
-    }
     for (Map.Entry<String, Source> e : now.entrySet()) {
       if (e.getValue() != sources.get(e.getKey())) {
         if (!e.getKey().startsWith("_includes/")) {
@@ -276,22 +277,40 @@ public class IncrementalJekyll {
   }
 
   /**
-   * Whether Jekyll can write to {@link #SITE}: not when _config.yml sets keep_files (what Jekyll leaves in its
-   * destination), which copySite() doesn't follow. Jekyll then writes to the staging folder, without --incremental
+   * Whether this can be used: null if Jekyll's configuration (the first of the files it reads by default that is
+   * there) has only settings in KNOWN_CONFIG, or the line that isn't one. Anything this doesn't recognise as one of
+   * them (a quoted key, a byte order mark, flow style...) counts as another setting. Otherwise Jekyll writes to the
+   * staging folder and renders every page, as it does without -watch
    */
-  public static boolean writesToSite(Path source) throws IOException {
-    return !KEEP_FILES.matcher(config(source)).find();
-  }
-
-  /** Jekyll's configuration: the first of the files it reads by default that is there */
-  private static String config(Path source) throws IOException {
+  public static String unknownConfig(Path source) throws IOException {
     for (String name : new String[] {"_config.yml", "_config.yaml", "_config.toml"}) {
       Path config = source.resolve(name);
       if (Files.isRegularFile(config)) {
-        return new String(Files.readAllBytes(config), StandardCharsets.ISO_8859_1);
+        boolean toml = name.endsWith(".toml");
+        // in TOML, the lines after a table's header are its keys
+        boolean inKnownTable = false;
+        for (String line : new String(Files.readAllBytes(config), StandardCharsets.UTF_8).split("\\r?\\n")) {
+          if (line.isBlank() || line.startsWith("#") || line.startsWith(" ") || line.startsWith("\t") || (!toml && line.equals("---"))) {
+            continue;
+          }
+          if (toml && line.startsWith("[")) {
+            Matcher m = TOML_TABLE.matcher(line);
+            inKnownTable = m.matches() && KNOWN_CONFIG.contains(m.group(1));
+            if (inKnownTable) {
+              continue;
+            }
+          } else {
+            Matcher m = (toml ? TOML_KEY : YAML_KEY).matcher(line);
+            if (inKnownTable || m.matches() && KNOWN_CONFIG.contains(m.group(1))) {
+              continue;
+            }
+          }
+          return name + ": " + line;
+        }
+        return null;
       }
     }
-    return "";
+    return null;
   }
 
   /**
@@ -358,7 +377,7 @@ public class IncrementalJekyll {
     return count;
   }
 
-  /** Jekyll's default keep_files (.git and .svn): what it leaves in its destination (see writesToSite) */
+  /** Jekyll's default keep_files (.git and .svn): what it leaves in its destination (see KNOWN_CONFIG) */
   private static boolean keptByJekyll(String rel) {
     return rel.startsWith(".git") || rel.startsWith(".svn");
   }

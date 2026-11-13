@@ -4660,8 +4660,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * works out which, before Jekyll runs
    */
   private void prepareJekyll() throws IOException {
+    if (settings.isSimplifierMode() || settings.isGenerationOff()) {
+      return;
+    }
+    String unknown = watchJekyll() ? IncrementalJekyll.unknownConfig(Paths.get(pf.tempDir)) : null;
+    if (unknown != null) {
+      log("Jekyll: renders every page, in the staging folder (a setting that the incremental build isn't known to follow: " + unknown + ")");
+    }
     IncrementalJekyll incremental = incrementalJekyll();
-    if (incremental != null && !settings.isSimplifierMode() && !settings.isGenerationOff()) {
+    if (incremental != null) {
       Path source = Paths.get(pf.tempDir);
       String why;
       try {
@@ -4681,9 +4688,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   private IncrementalJekyll incrementalJekyll() throws IOException {
+    return watchJekyll() && IncrementalJekyll.unknownConfig(Paths.get(pf.tempDir)) == null ? pf.incrementalJekyll : null;
+  }
+
+  private boolean watchJekyll() {
     // (a command other than jekyll, such as bundle exec jekyll, can load plugins)
-    return pf.watchOutputDir != null && pf.incrementalJekyll != null && "jekyll".equals(settings.getJekyllCommand())
-        && IncrementalJekyll.writesToSite(Paths.get(pf.tempDir)) ? pf.incrementalJekyll : null;
+    return pf.watchOutputDir != null && pf.incrementalJekyll != null && "jekyll".equals(settings.getJekyllCommand());
   }
 
   private boolean runJekyll() throws IOException, InterruptedException {

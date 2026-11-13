@@ -207,15 +207,29 @@ class IncrementalJekyllTest {
   }
 
   @Test
-  void configThatJekyllsIncrementalBuildDoesntFollow() throws IOException {
-    for (String key : new String[] {"gems", "plugins_dir", "whitelist", "include", "includes_dir", "layouts_dir", "data_dir", "source"}) {
-      IncrementalJekyll j = new IncrementalJekyll(env::get);
-      write("_config.yml", key + ": x\n");
-      assertEquals("no earlier Jekyll run in this session", j.prepare(temp));
-      write(IncrementalJekyll.METADATA, "jekyll's record");
-      write(IncrementalJekyll.SITE + "/index.html", "rendered");
-      j.succeeded(temp);
-      assertEquals("Jekyll's configuration has settings that its incremental build doesn't follow", j.prepare(temp), key);
+  void onlyConfigThatJekyllsIncrementalBuildFollows() throws IOException {
+    assertNull(IncrementalJekyll.unknownConfig(temp));
+    write("_config.yml", "---\n# the template's\nkramdown:\n  toc_levels: 1..3\n\nexclude: [x]\r\ntitle: An IG\n");
+    assertNull(IncrementalJekyll.unknownConfig(temp));
+    for (String config : new String[] {"plugins:\n  - jekyll-sitemap\n", "theme: minima\n", "collections:\n  rapido:\n    output: true\n",
+        "keep_files: [.git, extra]\n", "includes_dir: x\n", "gems: [x]\n", "\"plugins\": [x]\n", "'theme': x\n", "\uFEFFplugins: [x]\n",
+        "{plugins: [x]}\n", "kramdown:\n  toc_levels: 1..3\nplugins_dir: x\n"}) {
+      write("_config.yml", config);
+      assertNotNull(IncrementalJekyll.unknownConfig(temp), config);
+    }
+  }
+
+  @Test
+  void theConfigCanBeYamlOrToml() throws IOException {
+    Files.delete(temp.resolve("_config.yml"));
+    write("_config.yaml", "theme: minima\n");
+    assertEquals("_config.yaml: theme: minima", IncrementalJekyll.unknownConfig(temp));
+    Files.delete(temp.resolve("_config.yaml"));
+    write("_config.toml", "title = \"An IG\"\n[kramdown]\ntoc_levels = \"1..3\"\n");
+    assertNull(IncrementalJekyll.unknownConfig(temp));
+    for (String config : new String[] {"keep_files = [\"x\"]\n", "[collections.rapido]\noutput = true\n", "[kramdown]\n[[plugins]]\n"}) {
+      write("_config.toml", config);
+      assertNotNull(IncrementalJekyll.unknownConfig(temp), config);
     }
   }
 
@@ -234,17 +248,6 @@ class IncrementalJekyllTest {
     ran();
     Files.delete(temp.resolve("_includes/link.md"));
     assertEquals("no earlier Jekyll run in this session", jekyll.prepare(temp));
-  }
-
-  @Test
-  void theConfigCanBeYamlOrToml() throws IOException {
-    Files.delete(temp.resolve("_config.yml"));
-    write("_config.yaml", "theme: minima\n");
-    ranOnce();
-    assertEquals("Jekyll's configuration has settings that its incremental build doesn't follow", jekyll.prepare(temp));
-    Files.delete(temp.resolve("_config.yaml"));
-    write("_config.toml", "keep_files = [\"x\"]\n");
-    assertFalse(IncrementalJekyll.writesToSite(temp));
   }
 
   @Test
@@ -271,13 +274,6 @@ class IncrementalJekyllTest {
   }
 
   @Test
-  void keepFilesMeansJekyllWritesToTheStagingFolder() throws IOException {
-    assertTrue(IncrementalJekyll.writesToSite(temp));
-    write("_config.yml", "keep_files: [.git, extra]\n");
-    assertFalse(IncrementalJekyll.writesToSite(temp));
-  }
-
-  @Test
   void whenJekyllSucceeds() throws IOException {
     ranOnce();
     assertNull(jekyll.prepare(temp));
@@ -300,20 +296,6 @@ class IncrementalJekyllTest {
     assertFalse(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
     assertFalse(Files.exists(temp.resolve(IncrementalJekyll.STATE).resolve(IncrementalJekyll.METADATA)));
     assertEquals("no earlier Jekyll run in this session", jekyll.prepare(temp));
-  }
-
-  @Test
-  void configThatLoadsPluginsMakesEveryRunComplete() throws IOException {
-    write("_config.yml", "plugins:\n  - jekyll-sitemap\n");
-    ranOnce();
-    assertEquals("Jekyll's configuration has settings that its incremental build doesn't follow", jekyll.prepare(temp));
-  }
-
-  @Test
-  void collectionsMakeEveryRunComplete() throws IOException {
-    write("_config.yml", "collections:\n  rapido:\n    output: true\n");
-    ranOnce();
-    assertEquals("Jekyll's configuration has settings that its incremental build doesn't follow", jekyll.prepare(temp));
   }
 
   @Test
