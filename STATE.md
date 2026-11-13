@@ -265,3 +265,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - Loop: QA regression -> send_message to dev session (fix + review loop + simplifier, moves ready ref) -> tell shard to rerun the step.
 - 15:18 Jekyll research done (qa2/jekyll-research.md): no supported partial render; upstream unlikely 6-12 mo; options: reduced staging site, or drive --incremental from publisher. Asked Vadim.
 - 16:21 fix-1466 DONE: rapido-ig-entry-text 929b703 -> 8c5377c (endsWith checks e689acc; watch test asserts artifacts page + example list; real builds sample-ig/consent-mgmt: nothing stale; 5 review rounds, simplifier). Draft reply in qa2/fix-1466.md for Vadim.
+- 16:33 Vadim posted the #1466 reply himself (app can't comment on HL7: 403). #1466 has merge conflicts with HL7 master; asked whether to merge master in.
