@@ -83,3 +83,22 @@ page or an intro file. F1/F2/F6 = int full builds of a pristine copy with the ed
   StructureDefinition-organization-lars-mappings.html (watch: LabMonthlyReportModel first; full builds:
   LabDailyReportModel first). Master's watch W6 differs from R1 the same way: round 1's L3, pre-existing.
 - verdict: **same** (pre-existing diffs: F3 .index.db, L3 mappings column order in watch builds).
+
+## HL7/fhir-cqm @ 5b61912
+- heap 7600m. QA 19 / 224 / 381 in every build. Template hl7.fhir.template (no script-inputs).
+- times (s): R1 224, I1 149, I2 140, F1 128, F2 127, F6 139.
+  Watch int: first 142, W1a 81.6, W1d 81.7 (Differential, 72 of 415), W1e 129.3, W1f 118.8 (Complete, "changed: ig"),
+  W2 106.3 (Differential, 272 of 415), W3 101.3 (Differential), W4 126.4, W5 126.4 (Complete), W6 103.4 (Differential).
+  Watch master (first run): first 208, W1a 109, W1d 130 (Differential), W1e 162, W1f 143 (Complete), W2 108, W3 106
+  (Differential), W6 100 (Differential). Its W4/W5 are not comparable: my first W4 added the example without an IG
+  entry, and the HL7 template's onGenerate.jira.xslt stops on a resource with an empty name ("Found multiple
+  candidates ... in previous jira-spec-info"; a template behaviour, both jars). W4 now also lists the example in
+  cqm.xml with a name; int ran that version. A master rerun with it is queued for the timings.
+- every edit reached output/en/.
+- I1 vs R1: F3 `.index.db` (hl7.fhir.uv.cqm.en.tgz) and package.db CodeSystemListRefs (R4 vs THO 7.5.0 value set
+  links), which also differ between I1 and I2, F2 and W2, F6 and W6 (round 1: resolution nondeterminism).
+  F2 vs W2 also differed in Bundle-measurereport-bundle-example (narrative "USEIN" vs "United States Employer
+  Identification Number"): the identifier-type display nondeterminism from round 1 (R1 has the long form in 24
+  places); masked with the URI/NPI displays. With it masked: F1 = W1f, F2 = W2, F6 = W6, W6 = I1 = I2 except
+  package.db.
+- verdict: **same** (pre-existing diffs: F3 .index.db, package.db CodeSystemListRefs, identifier-type displays).
