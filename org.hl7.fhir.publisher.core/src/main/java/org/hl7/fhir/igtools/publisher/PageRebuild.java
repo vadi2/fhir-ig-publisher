@@ -644,6 +644,9 @@ public class PageRebuild {
     // when its configuration changed since the last run (e.g. a build without -watch, which writes to another folder),
     // so it is neither what Jekyll saw nor something to remove
     skip.add(temp.resolve(JEKYLL_CACHE).toAbsolutePath().normalize());
+    // what Jekyll's incremental build keeps (see IncrementalJekyll): Jekyll writes it again in each run
+    skip.add(temp.resolve(IncrementalJekyll.SITE).toAbsolutePath().normalize());
+    skip.add(temp.resolve(IncrementalJekyll.STATE).toAbsolutePath().normalize());
     return list(temp, folders, skip);
   }
 

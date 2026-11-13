@@ -752,6 +752,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       if (!settings.isGenerationOff()) {
         templateBeforeJekyll();
       }
+    }
+    // before the temp folder is recorded for a page rebuild: this gives unchanged files their earlier time back
+    prepareJekyll();
+    if (replay == null) {
       keepForPageRebuild(() -> pageRebuild.beforeJekyll());
     }
 
@@ -4649,16 +4653,29 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /**
+   * In watch mode, Jekyll writes to a folder of its own, and builds incrementally when it can (see IncrementalJekyll):
+   * works out which, before Jekyll runs
+   */
+  private void prepareJekyll() throws IOException {
+    if (incrementalJekyll() != null && !settings.isSimplifierMode() && !settings.isGenerationOff()) {
+      String why = incrementalJekyll().prepare(Paths.get(pf.tempDir));
+      log(why == null ? "Jekyll: incremental build ("+incrementalJekyll().getChanged()+" files changed, all in _includes)" : "Jekyll: renders every page ("+why+")");
+    }
+  }
+
+  private IncrementalJekyll incrementalJekyll() {
+    return pf.watchOutputDir != null ? pf.incrementalJekyll : null;
+  }
+
   private boolean runJekyll() throws IOException, InterruptedException {
     TimeTracker.Session tts = pf.tt.start("jekyll");
-    // in watch mode, Jekyll writes to a folder of its own, and builds incrementally when it can (see IncrementalJekyll)
-    IncrementalJekyll incremental = pf.watchOutputDir != null ? pf.incrementalJekyll : null;
+    IncrementalJekyll incremental = incrementalJekyll();
     Path source = Paths.get(pf.tempDir);
     String destination = pf.outputDir;
     String options = "build";
     if (incremental != null) {
-      String why = incremental.prepare(source);
-      log(why == null ? "Jekyll: incremental build ("+incremental.getChanged()+" files changed, all in _includes)" : "Jekyll: renders every page ("+why+")");
+      incremental.beforeRun(source);
       destination = Utilities.path(pf.tempDir, IncrementalJekyll.SITE);
       options = "build --incremental";
     }

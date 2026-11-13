@@ -77,6 +77,7 @@ class IncrementalJekyllTest {
     ranOnce();
     assertNull(jekyll.prepare(temp));
     assertEquals(0, jekyll.getChanged());
+    jekyll.beforeRun(temp);
     assertEquals("jekyll's record", Files.readString(temp.resolve(IncrementalJekyll.METADATA)));
   }
 
@@ -86,7 +87,26 @@ class IncrementalJekyllTest {
     // the build deletes the files at the top of the temp folder that it didn't write
     assertFalse(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
     assertNull(jekyll.prepare(temp));
+    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
+    jekyll.beforeRun(temp);
     assertTrue(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
+  }
+
+  @Test
+  void withoutPrepareJekyllRendersEveryPage() throws IOException {
+    ranOnce();
+    jekyll.beforeRun(temp);
+    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
+    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.STATE).resolve(IncrementalJekyll.METADATA)));
+  }
+
+  @Test
+  void aCompleteRunDeletesJekyllsRecord() throws IOException {
+    ranOnce();
+    rewrite("_data/pages.json", "{\"a\":1}");
+    assertEquals("changed: _data/pages.json", jekyll.prepare(temp));
+    jekyll.beforeRun(temp);
+    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
   }
 
   @Test
@@ -127,7 +147,7 @@ class IncrementalJekyllTest {
     ranOnce();
     rewrite("_data/pages.json", "{\"a\":1}");
     assertEquals("changed: _data/pages.json", jekyll.prepare(temp));
-    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
+    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.STATE).resolve(IncrementalJekyll.METADATA)));
   }
 
   @Test

@@ -40,7 +40,8 @@ import org.apache.commons.io.FileUtils;
  * <p>Jekyll writes to a folder of its own in the temp folder ({@link #SITE}; Jekyll doesn't read names that start
  * with a dot), and the build gets a copy of it in the staging folder: the html check fills in the publish box of the
  * pages there in place, and the pages that Jekyll doesn't render again have to be as Jekyll wrote them. Between
- * runs, .jekyll-metadata is kept in {@link #STATE}.
+ * runs, .jekyll-metadata is kept in {@link #STATE}. Both folders change in every run, so a page rebuild doesn't
+ * compare them with what they were (see PageRebuild).
  */
 public class IncrementalJekyll {
 
@@ -104,10 +105,6 @@ public class IncrementalJekyll {
    * @return null if the run can be incremental, or why it can't
    */
   public String prepare(Path source) throws IOException {
-    Path kept = source.resolve(STATE).resolve(METADATA);
-    if (Files.exists(kept)) {
-      Files.move(kept, source.resolve(METADATA), StandardCopyOption.REPLACE_EXISTING);
-    }
     Map<String, Source> now = new HashMap<>();
     String why = listSources(source, now);
     pending = now;
@@ -116,8 +113,23 @@ public class IncrementalJekyll {
     }
     if (why != null) {
       Files.deleteIfExists(source.resolve(METADATA));
+      Files.deleteIfExists(source.resolve(STATE).resolve(METADATA));
     }
     return why;
+  }
+
+  /**
+   * Just before Jekyll runs: puts .jekyll-metadata where Jekyll reads it, if {@link #prepare} found that this run can
+   * be incremental (without it, Jekyll renders every page)
+   */
+  public void beforeRun(Path source) throws IOException {
+    Path kept = source.resolve(STATE).resolve(METADATA);
+    if (pending == null) {
+      Files.deleteIfExists(kept);
+      Files.deleteIfExists(source.resolve(METADATA));
+    } else if (Files.exists(kept)) {
+      Files.move(kept, source.resolve(METADATA), StandardCopyOption.REPLACE_EXISTING);
+    }
   }
 
   /** how many files the last {@link #prepare} found changed (all in _includes if it was incremental) */
@@ -127,6 +139,7 @@ public class IncrementalJekyll {
 
   /** Jekyll succeeded: the next run compares with what this one saw, and gets what Jekyll recorded */
   public void succeeded(Path source) throws IOException {
+    // (without prepare(), what the next run compares with isn't known)
     sources = pending;
     pending = null;
     Path metadata = source.resolve(METADATA);
@@ -203,7 +216,7 @@ public class IncrementalJekyll {
     if (sources == null) {
       return "no earlier Jekyll run in this session";
     }
-    if (!Files.isRegularFile(source.resolve(METADATA))) {
+    if (!Files.isRegularFile(source.resolve(STATE).resolve(METADATA))) {
       return "no " + METADATA;
     }
     if (!Files.isDirectory(source.resolve(SITE))) {

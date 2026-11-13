@@ -296,6 +296,23 @@ class PageRebuildTest {
   }
 
   @Test
+  void prepareTempLeavesWhatJekyllsIncrementalBuildKeepsAlone() throws IOException {
+    // Jekyll's own output and its record (see IncrementalJekyll): each run of Jekyll writes them again
+    write("temp/" + IncrementalJekyll.SITE + "/index.html", "<html/>");
+    write("temp/" + IncrementalJekyll.STATE + "/" + IncrementalJekyll.METADATA, "old");
+    state.beforeJekyll();
+    write("temp/" + IncrementalJekyll.SITE + "/index.html", "<html>again</html>");
+    Files.setLastModifiedTime(dir.resolve("temp/" + IncrementalJekyll.SITE + "/index.html"), FileTime.fromMillis(System.currentTimeMillis() + 5000));
+    write("temp/" + IncrementalJekyll.SITE + "/new.html", "<html/>");
+    write("temp/" + IncrementalJekyll.STATE + "/" + IncrementalJekyll.METADATA, "new record");
+    Files.setLastModifiedTime(dir.resolve("temp/" + IncrementalJekyll.STATE + "/" + IncrementalJekyll.METADATA), FileTime.fromMillis(System.currentTimeMillis() + 5000));
+    state.prepareTemp(Collections.emptyList());
+    assertEquals("<html>again</html>", read("temp/" + IncrementalJekyll.SITE + "/index.html"));
+    assertEquals("<html/>", read("temp/" + IncrementalJekyll.SITE + "/new.html"));
+    assertEquals("new record", read("temp/" + IncrementalJekyll.STATE + "/" + IncrementalJekyll.METADATA));
+  }
+
+  @Test
   void prepareTempLeavesTheWatchStagingFolderAlone() throws IOException {
     // in watch mode the build writes its output in the temp folder, and the sync moves files out of it
     pf.outputDir = dir.resolve("temp/.watch-output").toString();
