@@ -716,6 +716,25 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   }
 
   /**
+   * Once Jekyll has run: the template's check. In a page rebuild, what it reported in the build is among the messages
+   * put back, so it must report the same; and the package step's files, which Jekyll removed, are put back
+   */
+  void afterJekyll(PageRebuild replay) throws IOException {
+    if (replay != null) {
+      if (pf.template != null) {
+        replay.checkOnCheckMessages(pf.template.onCheckEvent(pf.context, pf.publishedIg));
+      }
+      replay.restorePackageOutputs();
+    } else {
+      if (!settings.isGenerationOff()) {
+        templateOnCheck();
+      }
+      // what the check wrote is written again in a page rebuild: only the package step's files are kept
+      keepForPageRebuild(() -> pageRebuild.afterJekyll());
+    }
+  }
+
+  /**
    * The part of the build that comes after everything has been written to the temp folder: Jekyll, the template's
    * check, the package, the html checks, the final zip. A page-only rebuild (replay != null) has put the temp folder
    * back as it was when Jekyll ran (apart from the changed pages), runs the template's check again, which must report
@@ -731,22 +750,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
 
     boolean jekyllOk = runTool();
-    if (replay != null) {
-      if (!jekyllOk) {
-        throw new IOException("Jekyll failed");
-      }
-      if (pf.template != null) {
-        // what it reported in the build is among the messages put back, so it must report the same
-        replay.checkOnCheckMessages(pf.template.onCheckEvent(pf.context, pf.publishedIg));
-      }
-      replay.restorePackageOutputs();
-    } else if (jekyllOk) {
-      if (!settings.isGenerationOff()) {
-        templateOnCheck();
-      }
-      keepForPageRebuild(() -> pageRebuild.afterJekyll());
+    if (replay != null && !jekyllOk) {
+      throw new IOException("Jekyll failed");
+    }
+    if (jekyllOk) {
+      afterJekyll(replay);
 
-      if (!pf.changeList.isEmpty()) {
+      if (replay == null && !pf.changeList.isEmpty()) {
         File df = makeSpecFile();
         addFileToNpm(NPMPackageGenerator.Category.OTHER, "spec.internals", FileUtilities.fileToBytes(df.getAbsolutePath()));
         addFileToNpm(NPMPackageGenerator.Category.OTHER, "validation-summary.json", validationSummaryJson());
