@@ -24,6 +24,8 @@ import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
 
 import org.hl7.fhir.igtools.templates.Template;
 import org.hl7.fhir.utilities.logging.ILoggingService;
@@ -255,13 +257,65 @@ class WatchCompleteBuildJekyllTest {
     g.startEarlyPublish(() -> {
       throw new IllegalStateException("a bug in the copy");
     });
-    assertThrows(IllegalStateException.class, g::awaitEarlyPublish);
+    RuntimeException e = assertThrows(RuntimeException.class, g::awaitEarlyPublish);
+    assertTrue(e.getCause() instanceof IllegalStateException);
+    assertTrue(e.getMessage().startsWith("Unable to put the pages in "), e.getMessage());
     g.startEarlyPublish(() -> {
       throw new OutOfMemoryError("out of memory in the copy");
     });
     assertThrows(OutOfMemoryError.class, g::awaitEarlyPublish);
     // and it is only thrown once
     g.awaitEarlyPublish();
+  }
+
+  @Test
+  void anInterruptDoesntCutShortTheWaitForTheCopy() throws Exception {
+    PublisherGenerator g = generator(null);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicBoolean copied = new AtomicBoolean();
+    g.startEarlyPublish(() -> {
+      try {
+        release.await();
+      } catch (InterruptedException e) {
+        throw new IllegalStateException(e);
+      }
+      copied.set(true);
+    });
+    new Thread(() -> {
+      try {
+        Thread.sleep(200);
+      } catch (InterruptedException e) {
+        // released at once
+      }
+      release.countDown();
+    }).start();
+    // (as TailWatch, for one, leaves it)
+    Thread.currentThread().interrupt();
+    g.awaitEarlyPublish();
+    assertTrue(copied.get(), "the wait returned while the copy was still running");
+    assertTrue(Thread.interrupted(), "the interrupt is kept");
+  }
+
+  @Test
+  void aCopyThatFailsPartWayCountsAsHavingPutPagesThere() {
+    PublisherGenerator g = generator(null);
+    pf.watchPagesPublished = false;
+    g.startEarlyPublish(() -> {
+      throw new IllegalStateException("after some of the pages");
+    });
+    assertThrows(RuntimeException.class, g::awaitEarlyPublish);
+    assertTrue(pf.watchPagesPublished);
+  }
+
+  @Test
+  void aBuildThatHasFailedGetsWhatFailedTheCopyWithoutItBeingThrown() {
+    PublisherGenerator g = generator(null);
+    IllegalStateException bug = new IllegalStateException("a bug in the copy");
+    g.startEarlyPublish(() -> {
+      throw bug;
+    });
+    assertEquals(bug, g.finishEarlyPublish());
+    assertEquals(null, g.finishEarlyPublish());
   }
 
   /** puts the pages in the output folder, and waits until they are there (the copy runs while the build goes on) */
