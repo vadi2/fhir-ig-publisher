@@ -46,3 +46,13 @@ Poll `git ls-remote https://github.com/vadi2/fhir-ig-publisher refs/heads/qa/pag
 
 ## Survive context compaction
 Auto-compaction is on. Keep `/home/user/qa/PROGRESS.md` current after every step (phase, current IG and step, jar paths and shas, heap per IG, paths of logs/snapshots, what's done, what's next, open findings), and re-read it (plus this plan) whenever you're unsure where you are. Push the results file after each IG so nothing lives only in your context.
+
+## Phase D: page-only path with declared templates (added 18:20)
+Phases B/C never reached the page rebuild: no real template declares `script-inputs`, so int always fell back (correct, but untested path).
+1. Wait for qa2/script-inputs.md (dev session writes it: per base template, the `script-inputs` list and the recipe for a local copy + ig.ini override).
+2. Per IG in the shard (all where a declaration is possible; skip ones whose template can't be declared, say why): use the declared copy for every build below, both jars.
+3. int `-rapido -watch`: first build, then W1a..W1f, then W2 (a non-page edit), W1a again (page edit after a differential build). Log per step: mode (int must log Page Rebuild for W1a/W1b/W1c; W1d edit under a declared path, W1e add, W1f delete: whatever it logs, and why), seconds, edit visible in output.
+4. Master `-rapido -watch` same template copy, same edits, same heap: seconds per step.
+5. F1 = int full build (no watch) of the sources after W1f; F2 after the final W1a. Compare W1f vs F1 and final vs F2 with the round masks: output files and qa.xml issue sets. Any difference not in F1-F6 known lists = REGRESSION (stale page, missing page, wrong menu/toc, QA message lost or added).
+6. Also once per shard: edit a file listed in script-inputs (e.g. menu.xml) and confirm a full build, output correct.
+Results: "## Phase D" section in qa2/results-<shard>.md, one table row per IG plus notes.
