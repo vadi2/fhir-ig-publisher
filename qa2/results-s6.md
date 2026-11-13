@@ -55,3 +55,15 @@ page or an intro file. F1/F2/F6 = int full builds of a pristine copy with the ed
 - I1 = I2 = W6 = F6; F1 = W1f; F2 = W2. I1/I2/W6 vs R1: only `.index.db` ResourceList in
   hl7.fhir.be.ucum-test.en.tgz (R1 0, int 12; master watch W6 also 12): F3, pre-existing.
 - verdict: **same** (pre-existing diffs: F3 .index.db).
+
+## HL7/crmi-ig @ 89c464e
+- heap 7600m. QA 17 / 25 / 235 in every build. Template hl7.fhir.template (hl7.base ant scripts, no script-inputs).
+- times (s): R1 209, I1 180, I2 185, F1 174, F2 180, F6 172.
+  Watch int: first 192, W1a 91.6, W1d 91.6 (Differential, 59 of 264), W1e 163.2, W1f 153.2, W2 156.2 (Complete,
+  "changed: ig"), W3 91.6 (Differential), W4 152.2, W5 155.8, W6 158.3 (Complete).
+  Watch master: first 200, W1a 94.6, W1d 92.1, W1e 163.3, W1f 162.7, W2 164.7, W3 97.2, W4 163.3, W5 161.8, W6 161.3
+  (same build kinds). W1b/W1c n/a.
+- every edit reached output/en/.
+- I1 = I2 = W6 = F6; F1 = W1f; F2 = W2. I1/I2/W6 vs R1: only `.index.db` ResourceList in hl7.fhir.uv.crmi.en.tgz
+  (R1 0, int 129; master watch W6 also 129): F3, pre-existing.
+- verdict: **same** (pre-existing diffs: F3 .index.db).
