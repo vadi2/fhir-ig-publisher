@@ -1,6 +1,6 @@
 # QA round 2 results: shard s3
 
-Status: Phase C running (5 of 8 IGs done).
+Status: Phase C running (7 of 8 IGs done; davinci-pct seeded watch running).
 
 Reference jar: HL7 master 2ccca17946. Integration jar: `qa/page-only-ready` 5111080dd5. Heap 7600m for every IG. VM 15 GB / 4 CPU, swap 12 GB (not 16: the 30 GB disk allowance is shared with outputs).
 
@@ -11,9 +11,9 @@ Reference jar: HL7 master 2ccca17946. Integration jar: `qa/page-only-ready` 5111
 | HL7/us-fhir-ps | c20fdb208c | 7600m | 97 s | 0/7/21 | 61 s, 0/7/21, = R1 | 59 s, 0/7/21, = R1 | int 29/-/27/39/37/36/48/39/41/38/37 s, master 30/-/31/41/38/39/49/44/43/41/43 s; all edits seen | 56 s, = W1f | 58 s, = W2 | 58 s, = W6; W6 = I1 | pre-existing diffs: F4 only (NamingSystem uri/CLIA/us-npi link, title and label from a random terminology.hl7.org version, in R1 vs I1/I2, W1f vs F, W6 vs F; masked) |
 | hl7-eu/phoenix-sact | f9246ccc86 | 7600m | 59 s | 0/2/77 | 58 s, 0/2/77, = R1 | 51 s, 0/2/77, = R1 | int 24/-/-/21/37/35/41/35/42/40/37 s, master 29/-/-/23/48/42/46/35/40/37/37 s; all edits seen | 49 s, = W1f | 51 s, = W2 | 49 s, = W6; W6 = I1 | same |
 | savannahghi/healthy-route-ig | 8de83993a5 | 7600m | 150 s | 4/217/862 | 97 s, 4/217/862, = R1 | 90 s, 4/217/862, = R1 | int 42/-/-/59/58/59/61/49/61/61/61 s, master 40/-/-/63/67/63/64/54/64/62/63 s; all edits seen | 70 s, = W1f | 76 s, = W2 | 78 s, = W6; W6 = I1 | same |
-| TEHIK-EE/ig-ee-vris | ff7c9a820f | 7600m | 164 s (R1b 131 s, equal after masking) | 135/856/212 | | | | | | | pending |
+| TEHIK-EE/ig-ee-vris | ff7c9a820f | 7600m | 164 s (R1b 131 s, equal after masking) | 135/856/212 | 125 s, 135/856/212, = R1 | 113 s, 135/856/212, = R1 | int 76/76/-/87/83/89/95/89/92/89/84 s, master 90/82/-/99/96/103/105/106/104/101/102 s; all edits seen (one int rebuild was "Complete Build (terminology server calls failed)") | 103 s, = W1f | 105 s, = W2 | 97 s, = W6; W6 = I1 | same |
 | HL7/davinci-pct | 7d64232695 | 7600m | 304 s | 0/9/2 | | | | | | | pending |
-| Interop-Sante/hl7.fhir.fr.core | 0e518baa85 | 7600m | 306 s | 165/337/6283 | | | | | | | pending |
+| Interop-Sante/hl7.fhir.fr.core | 0e518baa85 | 7600m | 306 s | 165/337/6283 | 249 s, 165/337/6283, = R1 | 251 s, 165/337/6283, = R1 | int 206/-/186/203/203/217/213/213/208/227/224 s (two rebuilds were "Complete Build (terminology server calls failed)"); all edits seen; master watch timing pending | 201 s, = W1f | 212 s, = W2 | 217 s, = W6; W6 = I1 | same |
 
 ## Notes
 - **Page-only path not exercised in this shard.** No template used here (fhir.base.template 0.8.1/1.0.0/current, fhir2.base, hl7.base, hl7.fhir, hl7.davinci, and the local tehik, phoenix, ig-style, xshare templates built on them) declares `script-inputs`, and all have ant scripts (onLoad/onGenerate, most also onCheck). int.jar therefore logs `Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))` for every W1 page edit and does a full rebuild, as the plan requires. Correctness of the fallback is what the W1 rows test; the page rebuild itself is not reached.
