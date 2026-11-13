@@ -41,3 +41,17 @@ page or an intro file. F1/F2/F6 = int full builds of a pristine copy with the ed
 - I1 = I2 = W6 = F6; F1 = W1f; F2 = W2 (0 differences). I1/I2/W6 vs R1: only `.index.db` ResourceList in
   package.tgz (R1 0 rows, int 6). Master watch W6 also has 6 rows: F3, pre-existing.
 - verdict: **same** (pre-existing diffs: F3 .index.db).
+
+## hl7-be/ucum-test @ af477f6
+- heap 7600m. QA 0 / 33 / 12 in every build. Template hl7.be.fhir.template (ant onCheck, no script-inputs).
+- times (s): R1 80, I1 63, I2 51, F1 52, F2 57, F6 57.
+  Watch int: first 53, W1a 21.5 (Differential), W1d 21.0 (Differential), W1e 32.5, W1f 30.1, W2 29.5 (Complete,
+  "changed: ig"), W3 25.5 (Differential), W4 33.6, W5 32.1, W6 38.1 (Complete).
+  Watch master: first 54, W1a 25.0, W1d 23.0 (Differential), W1e 37.6, W1f 40.1, W2 36.6 (Complete), W3 26.0
+  (Differential), W4 35.5, W5 32.1, W6 33.0 (Complete).
+  int logs "the template doesn't declare what its scripts read" for the page edits and runs a Differential Build
+  instead of a Page Rebuild. W1b/W1c n/a.
+- every edit reached output/en/.
+- I1 = I2 = W6 = F6; F1 = W1f; F2 = W2. I1/I2/W6 vs R1: only `.index.db` ResourceList in
+  hl7.fhir.be.ucum-test.en.tgz (R1 0, int 12; master watch W6 also 12): F3, pre-existing.
+- verdict: **same** (pre-existing diffs: F3 .index.db).
