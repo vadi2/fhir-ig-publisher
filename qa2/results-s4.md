@@ -1,6 +1,6 @@
 # QA round 2 results, shard s4
 
-**Status: Phase C in progress (4/7 IGs done).**
+**Status: Phase C in progress (5/7 IGs done).**
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (sha256 56b2e4adb4af80ef5b495b3013b726df254243b5437eb500b2c7c6a5ae5b238f)
 - VM: 4 CPU, 15 GB, 8 GB swap. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx7600m -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org -package-cache-folder /home/user/qa/pcf`, fresh `cp -a` of the clone, no -threads.
@@ -29,6 +29,7 @@
 | hl7-eu/readi | 58 | 165/58/39 | 55 | 165/58/39 | 57 / 57 | 165/58/39 each | 55; 24 32 37 35 36 34 41 40 40 (no W1b, W1c) | 60; 24 35 39 40 40 43 44 40 42 | same (pre-existing diffs only) |
 | HL7/imaging-service-request-ig | 78 | 195/225/244 | 74 | 195/225/244 | 78 / 78 | 195/225/244 each | 80; 37 65 64 60 60 44 61 60 58 (no W1b, W1d) | 86; 40 70 66 64 64 46 66 67 65 | same (pre-existing diffs only) |
 | RIVO-Noord/zorgviewer-ig | 118 | 669/137/128 | 98 | 669/137/128 | 112 / 109 | 669/137/128 each | 118; 80 80 73 74 72 70 68 72 68 68 (no W1b) | 121; 78 71 71 70 69 72 69 (W4-W6 not run) | same (pre-existing diffs only) |
+| HL7/davinci-ra | 91 | 0/0/0 | 83 | 0/0/0 | 98 / 97 | n/a (watch build fails) | 86; 57 57 58 64 62 63 63 64 65 63 (every build failed) | 87; 62 56 60 65 64 64 68 (every build failed) | same for full builds; watch not comparable (pre-existing failure, both jars) |
 
 ### HL7Chile/MHD-CL
 - Template: local hl7chile-ig-template on hl7.fhir.template (ant/onCheck scripts, no script-inputs): every int.jar watch step logged "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then ran master's Rapido path (Differential for W1a/W1c/W3, Complete for the rest), same modes and times as master. Page-only rebuild never used here, as intended.
@@ -58,3 +59,8 @@
 - Output: 0 differing files in every pair (R1/I1, R1/I2, I1/I2, F1/W1f, F2/W2, I1/W6, R1/W6), with the csv/json "used by" masks.
 - QA counts identical (669/137/128, 977 messages). In the watch builds 11 html-check messages name `temp/pages/.watch-output/<page>.html` instead of `output/<page>.html` (same text otherwise): F2, pre-existing (round 1: master watch the same).
 - The master watch run stopped at W4 because of an edit-script error on my side (fixed), so master W4-W6 times are missing.
+
+### HL7/davinci-ra
+- **pre-existing (both jars): `-rapido -watch` fails on every build, including the first.** The template's onCheck (hl7.davinci.template, `scripts/ant-davinci.xml:45`, target onCheck.davinci.findHomeLinks) copies `${dir.output}/index.html` = `output/en/index.html`, but under -watch Jekyll writes to `temp/pages/.watch-output`, so the file isn't there: "Publishing Content Failed: Warning: Could not find file .../output/en/index.html to copy", and "The build failed, so the pages in output are still those of the last build that succeeded" (none). master.jar (MW) and int.jar (IW) give the same error at the same line for every step; output/ stays empty, so W1f/W2/W6 can't be compared and the marker checks fail on both jars. int.jar logs the fallback ("doesn't declare what its scripts read") then "Complete Build (after failure)", as master. Repro: HL7/davinci-ra@e3d2d69, `-rapido -watch` with master 2ccca179. (Round 1 had watch output for this IG, so this came with a newer master or template.)
+- Edits (applied, but no output): W1a credits.md, W1c ra-patient-group-intro.md, W1d includes/link-list.md, W1e/W1f qa-new.md + sushi-config pages, W2 ra-patient-group description (xml), W3 Patient-ra-patient01 family, W4/W5 Patient copy, W6 revert.
+- Full builds: QA identical (0/0/0). Raw: R1 vs I1 904 files, R1 vs I2 98, I1 vs I2 898: all NamingSystem narrative links/display (THO 5.0.0/7.2.0/7.5.0, NPI vs United States National Provider Identifier, URI vs Uniform Resource Identifier (URI)): F4, pre-existing, as round 1. THO-normalised: I1 vs I2 0; R1 vs I1 and R1 vs I2 6 = .index.db (F3) + comparison-v2.0.0/xx-79-... and comparison-v2.1.0/xx-128-... (full-ig.zip copies too), which show a Java stack trace (master too) whose line numbers differ with the code. Noise.
