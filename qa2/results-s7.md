@@ -15,7 +15,7 @@ Status: Phase C in progress (dis, phd done).
 | ahdis/ch-ekm | ed239c8251 | 7600m | 312 | 799/8363/4466 (98 broken links) | | | | | | | pending |
 | HL7/phd | 565d3336a2 | 7600m | 98 | 0/0/2 | 104 | 89 | int 105, 41/37/36/66/64/55/48/67/68/57; master 106, 42/38/38/71/72/61/51/72/67/58 (W1a,W1c,W1d,W1e,W1f,W2,W3,W4,W5,W6; all edits seen on both) | 104 | 99 | 104 | 0/0/2 in every build, issue sets equal | same; pre-existing diffs: "Child profiles" list order of PhdBaseObservation, F3 .index.db rows, used-by list order |
 | TWNHIFHIR/empd | 988d8dbbaf | 7600m | 260 | 0/0/0 | 226 | 217 | int 227, 131/127/127/211/215/218/181/36/155/212; master 238, 134/132/128/215/205/207/190/40/170/213 (W1a,W1b,W1d,W1e,W1f,W2,W3,W4,W5,W6; W1b and W4 not seen on either jar, see notes) | 224 | 216 | 220 | 0/0/0 in every build, no issues | same; pre-existing diffs: F3 .index.db rows (R1 vs int), used-by list order |
-| hl7-eu/eps | 7392dfb20f | 7600m | 241 | 0/51/15 | | | | | | | pending |
+| hl7-eu/eps | 7392dfb20f | 7600m | 241 | 0/51/15 | 205 | 165 | int 187, 77/73/70/69/128/127/122/100/126/124/125; master: queued (W1a,W1b,W1c,W1d,W1e,W1f,W2,W3,W4,W5,W6; all edits seen) | 178 | 179 | 186 | 0/51/15 in every build, issue sets equal (66) | same; pre-existing diffs: Java stack-trace line numbers in comparison error pages, F3 .index.db rows (R1 vs int) |
 
 ## Notes per IG
 
@@ -42,4 +42,10 @@ Method: one `-rapido -watch` session per jar runs every step without a restart; 
 - Template: local custom-template on fhir.base.template, no script-inputs, so int does a Complete Build for every edit, as master does. Times match master.
 - QA counts and all 4580 issues equal in every comparison.
 - Content: R1 vs I1/I2 differ only in .index.db ResourceList rows (F3). Every int-int comparison: no content diff, order only.
+
+### eps
+- Template: local ig-template on hl7.fhir.template, no script-inputs, so int does a Complete Build for every edit.
+- QA counts and all 66 issues equal in every comparison.
+- Content: 8 comparison pages (comparison-v1.0.0-ballot/xx-12-*, ips-comparison-v2.0.1/xx-57/63/66/83/101/107/110-*, plus full-ig.zip copies) hold a DefinitionException stack trace ("Found a slice at 'Bundle.entry' but there was no definition for the slicing"), present in R1 on master too. Only the Publisher frame line numbers differ: the stack goes through a different call path in watch vs full and in master vs int. Masked with `MASKX='\tat [^\n]*\([A-Za-z]+\.java:\d+\)'`: R1-I1 only F3 .index.db, W6-I1 and W1f-F1 no content diff. I1-I2 no content diff even unmasked.
+- Master watch timings: run after chekm/formulary phase C (queue), filled in later.
 
