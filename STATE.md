@@ -261,5 +261,6 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - fix-1466 (pushes to vadi2 rapido-ig-entry-text, Vadim OK'd; no GitHub comments): session_013FrhV8sTH3b1ajodgAHLEU, notes qa2/fix-1466.md
 - Jekyll research: local background agent -> qa2/jekyll-research.md
 - QA2 shards (plan qa2/QA-PLAN.md, results qa2/results-<shard>.md): utg session_013FrhVA785A6Zz6sVmpRTGg, s1 session_013FrhV68Cx2sZ7CfW2Crcs4, s2 session_013FrhV82F5iSZ9ypNEAJNXY, s3 session_013FrhV7h2vjxzYZ1h565qMh, s4 session_013FrhVA8yT3pxoYyKhXSiL1, s5 session_013FrhV5VZ4C7RApp34frz5j, s6 session_013FrhV7CEaZTwC2gBTf5TYC, s7 session_013FrhV8X1x5zkqLJyPB1NDP, s8 session_013FrhV7cDTyrnjCnJKPPxYq
+- jekyll-blackbox (measure --incremental (b), then reduced staging site (a); branch perf4/jekyll-blackbox stacked on perf4/watch-page-only; notes qa2/jekyll-blackbox.md): session_013FrhV8Pq6wZTHvB7KFzdwk. Watcher should also check it and include it in the final summary; QA2 shards could re-run page edits on it if a PR lands.
 - Loop: QA regression -> send_message to dev session (fix + review loop + simplifier, moves ready ref) -> tell shard to rerun the step.
 - 15:18 Jekyll research done (qa2/jekyll-research.md): no supported partial render; upstream unlikely 6-12 mo; options: reduced staging site, or drive --incremental from publisher. Asked Vadim.
