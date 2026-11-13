@@ -102,3 +102,13 @@ page or an intro file. F1/F2/F6 = int full builds of a pristine copy with the ed
   places); masked with the URI/NPI displays. With it masked: F1 = W1f, F2 = W2, F6 = W6, W6 = I1 = I2 except
   package.db.
 - verdict: **same** (pre-existing diffs: F3 .index.db, package.db CodeSystemListRefs, identifier-type displays).
+
+## HL7/cqf-recommendations (cpg) @ e2fb413
+- heap 7600m. QA 51 / 179 / 440 in every build. Template hl7.fhir.template (no script-inputs).
+- times (s): R1 301, I1 251, I2 251, F1 234, F2 255, F6 272.
+  Watch int: first 238, W1a 130.7, W1c 135.7, W1d 132.7 (Differential, 371 of 986), W1e 247.9, W1f 261.0, W2 272.0,
+  W3 261.0, W4 246.5, W5 253.6, W6 253.6 (Complete, "changed: ig"). W1b n/a.
+  Watch master: first 267 (the first run was stopped after that to build int.jar; the rerun is queued after Phase D).
+- every edit reached output/en/.
+- I1 = I2 = W6 = F6; F1 = W1f; F2 = W2. I1/I2/W6 vs R1: only `.index.db` ResourceList in hl7.fhir.uv.cpg.en.tgz (F3).
+- verdict: **same** (pre-existing diffs: F3 .index.db).
