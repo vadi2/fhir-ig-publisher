@@ -45,8 +45,9 @@ US-Core: F4 here also hits NamingSystem dui, uri and CLIA links (master R1 npi 6
 **F5. digital-health-ig watch: the publisher was killed for memory at W4 (add an example), int, being classified.**
 Heap 7600m, 16 GB machine, 14.3 GB cgroup memory limit, 2 GB swap. At W4 Rapido found 14077 temp files changed (W2 120, W3 151) and handed them to the kept-running Jekyll; java RSS 9.3 GB plus the Jekyll driver 4.4 GB and growing (3.7 GB peak on the first full build) went over the limit and the kernel killed java. The kept-running Jekyll comes from the base branch (e85860f2, ae762436, 26aaf1ac), not master. A master watch on the same IG with the same heap and swap is queued to see whether master gets through W4.
 
-- F6 (pre-existing): a second build in a reused folder (I2, watch W2) writes ValueSet expansions differently from a fresh build (expansion parameters, supplement list in the HTML header) and drops one 'expansion too large' INFO (hints 9446 vs 9445). Master built twice in one folder (MA1, MA2) shows the same 41 files and the same lost INFO; I2 vs MA2 shows only F1 and list order.
+**F6. digital-health-ig: ValueSet expansions written by a build that reuses the folder differ from a fresh build (pre-existing).**
 In definitions.json.zip, validator*.pack, package-combined.tgz and the ValueSet pages, I2 (second build in the I1 folder) and the watch W2 output have `warning-experimental` and lack `used-valueset` / `includeDefinition` that fresh builds (R1, I1, F2) have. I2 also lacks one INFORMATION message (`The value set expansion is too large` on medication-classification-vs), so hints 9445 vs 9446. Master built twice in one folder is queued to see if master does the same.
+Classified: master built twice in one folder (MA1 then MA2) shows the same 41 differing files (expansions, ValueSet pages with the supplement list in the expansion header) and drops the same `expansion too large` INFO (hints 9446 vs 9445). Int I2 vs master MA2 differs only by F1 and list order.
 
 ## Compare method notes
 
