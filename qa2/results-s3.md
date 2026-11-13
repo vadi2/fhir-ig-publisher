@@ -1,6 +1,6 @@
 # QA round 2 results: shard s3
 
-Status: Phase C running (7 of 8 IGs done; davinci-pct seeded watch running).
+Status: Phase C done (8 of 8). Phase D running.
 
 Reference jar: HL7 master 2ccca17946. Integration jar: `qa/page-only-ready` 5111080dd5. Heap 7600m for every IG. VM 15 GB / 4 CPU, swap 12 GB (not 16: the 30 GB disk allowance is shared with outputs).
 
@@ -12,13 +12,15 @@ Reference jar: HL7 master 2ccca17946. Integration jar: `qa/page-only-ready` 5111
 | hl7-eu/phoenix-sact | f9246ccc86 | 7600m | 59 s | 0/2/77 | 58 s, 0/2/77, = R1 | 51 s, 0/2/77, = R1 | int 24/-/-/21/37/35/41/35/42/40/37 s, master 29/-/-/23/48/42/46/35/40/37/37 s; all edits seen | 49 s, = W1f | 51 s, = W2 | 49 s, = W6; W6 = I1 | same |
 | savannahghi/healthy-route-ig | 8de83993a5 | 7600m | 150 s | 4/217/862 | 97 s, 4/217/862, = R1 | 90 s, 4/217/862, = R1 | int 42/-/-/59/58/59/61/49/61/61/61 s, master 40/-/-/63/67/63/64/54/64/62/63 s; all edits seen | 70 s, = W1f | 76 s, = W2 | 78 s, = W6; W6 = I1 | same |
 | TEHIK-EE/ig-ee-vris | ff7c9a820f | 7600m | 164 s (R1b 131 s, equal after masking) | 135/856/212 | 125 s, 135/856/212, = R1 | 113 s, 135/856/212, = R1 | int 76/76/-/87/83/89/95/89/92/89/84 s, master 90/82/-/99/96/103/105/106/104/101/102 s; all edits seen (one int rebuild was "Complete Build (terminology server calls failed)") | 103 s, = W1f | 105 s, = W2 | 97 s, = W6; W6 = I1 | same |
-| HL7/davinci-pct | 7d64232695 | 7600m | 304 s | 0/9/2 | | | | | | | pending |
+| HL7/davinci-pct | 7d64232695 | 7600m | 304 s | 0/9/2 | 183 s, 0/9/2, = R1 (after `.java:N` mask on comparison-page stack traces, pre-existing) | 185 s, 0/9/2, = R1 | seeded watch (see notes): int 86/-/85/152/146/151/153/108/155/146/159 s, master 98/-/92/156/149/142/147/98/152/148/149 s; all edits seen except W3 on both jars (spec flaw: the edited instance Patient-Alex-Morgan is not in the published output, also absent from R1) | 164 s, = W1f | 171 s, = W2 | 175 s, = W6; W6 = R1 | same |
 | Interop-Sante/hl7.fhir.fr.core | 0e518baa85 | 7600m | 306 s | 165/337/6283 | 249 s, 165/337/6283, = R1 | 251 s, 165/337/6283, = R1 | int 206/-/186/203/203/217/213/213/208/227/224 s (two rebuilds were "Complete Build (terminology server calls failed)"); all edits seen; master watch timing pending | 201 s, = W1f | 212 s, = W2 | 217 s, = W6; W6 = I1 | same |
 
 ## Notes
 - **Page-only path not exercised in this shard.** No template used here (fhir.base.template 0.8.1/1.0.0/current, fhir2.base, hl7.base, hl7.fhir, hl7.davinci, and the local tehik, phoenix, ig-style, xshare templates built on them) declares `script-inputs`, and all have ant scripts (onLoad/onGenerate, most also onCheck). int.jar therefore logs `Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))` for every W1 page edit and does a full rebuild, as the plan requires. Correctness of the fallback is what the W1 rows test; the page rebuild itself is not reached.
 - W1a..W6 columns are W1a/W1b/W1c/W1d/W1e/W1f/W2/W3/W4/W5/W6 rebuild seconds (edit to the next "Watching for changes"), `-` = not applicable to the IG. Master times are from a master `-rapido -watch` session with the same edits and heap.
 - Watch is stopped after W1f, W2 and W6 (snapshots of output/ and sources), then restarted on the same folder.
+
+- davinci-pct watch: unseeded, every watch build on both jars fails at publish ("could not find output/en/index.html": the Da Vinci template ant step reads output/ before it exists), pre-existing on master. Watch runs were therefore seeded with an output/ folder from an int full build (F-W6) copied into the source before starting; I1/I2/F builds are unseeded full builds.
 
 ## Method notes
 - fr.core: template `https://github.com/Interop-Sante/ig-style` is not downloadable through the proxy (as in round 1); ig.ini points at a local clone (104d205) for every build, both jars.
