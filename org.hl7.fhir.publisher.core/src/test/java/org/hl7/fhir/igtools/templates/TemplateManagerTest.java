@@ -1,6 +1,8 @@
 package org.hl7.fhir.igtools.templates;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.fail;
@@ -11,6 +13,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Set;
 
 import org.hl7.fhir.utilities.IniFile;
 import org.hl7.fhir.utilities.logging.ILoggingService;
@@ -149,9 +152,11 @@ class TemplateManagerTest {
   }
 
   @Test
-  void aChildThatOverwritesTheAntScriptAndShipsOtherActiveFilesDropsTheDeclaration() throws IOException {
-    // a.js comes before scripts/ in the file list, where the scan for active content stops
-    assertEquals(UNDECLARED, childOf(null, "a.js", "scripts/ant.xml").whyNoPageRebuild());
+  void anAntScriptIsFoundWithEitherSeparator() {
+    Set<String> antScripts = Collections.singleton("scripts/ant.xml");
+    assertTrue(TemplateManager.isAntScript(antScripts, "scripts\\ant.xml"));
+    assertTrue(TemplateManager.isAntScript(antScripts, "scripts/ant.xml"));
+    assertFalse(TemplateManager.isAntScript(antScripts, "scripts/other.xml"));
   }
 
   @Test

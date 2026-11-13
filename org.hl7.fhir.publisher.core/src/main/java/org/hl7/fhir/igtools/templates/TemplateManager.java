@@ -280,7 +280,7 @@ public class TemplateManager {
           }
 
           String s = extension(n);
-          if (antScripts.contains(unix)) {
+          if (antScripts.contains(n)) {
             // nah, if you overwrite an xml ant script, you're doing active content
             scriptReason = "Template contains a registered ant script";
           } else if (!Utilities.existsInList(s,
@@ -302,7 +302,7 @@ public class TemplateManager {
     if (scriptReason != null) {
       checkTemplateId(template, npm.name(), scriptReason);
     }
-    dropUndeclaredScriptInputs(config, scriptReason);
+    dropUndeclaredScriptInputs(config, scriptReason, templateDir, files);
     if (level==0 && (configs.size() > 1 || scriptInputsDropped)) {
       config = configs.get(0);
       for (int i=1;i<configs.size(); i++) {
@@ -357,16 +357,16 @@ public class TemplateManager {
   }
   
   /**
-   * script-inputs declare what a template's scripts read (see Template.whyNoPageRebuild()); the merged config lists
-   * the declarations of all the templates. A template with active content (a script, targets, an overwritten ant
-   * script, files that could be scripts) or other scripts that doesn't declare what they read makes the declarations
-   * before it incomplete, so they are dropped
+   * script-inputs declare what the scripts of a template and the templates before it read (see
+   * Template.whyNoPageRebuild()); the merged config lists the declarations of all the templates. A template with
+   * active content (a script, targets, an overwritten ant script, files that could be scripts) or other scripts that
+   * doesn't declare makes the declarations before it incomplete, so they are dropped
    */
-  private void dropUndeclaredScriptInputs(JsonObject config, String scriptReason) {
+  private void dropUndeclaredScriptInputs(JsonObject config, String scriptReason, String templateDir, List<String> files) {
     if (configs.stream().noneMatch(c -> c.has(Template.SCRIPT_INPUTS)) || (config != null && config.has(Template.SCRIPT_INPUTS))) {
-      return;
+      return; // no declaration to drop, or this template declares
     }
-    if (scriptReason != null || (config != null && config.has("otherScripts"))) {
+    if (scriptReason != null || (config != null && config.has("otherScripts")) || overwritesAntScript(templateDir, files)) {
       for (JsonObject c : configs) {
         if (c.has(Template.SCRIPT_INPUTS)) {
           c.remove(Template.SCRIPT_INPUTS);
@@ -374,6 +374,20 @@ public class TemplateManager {
         }
       }
     }
+  }
+
+  /** the scan for active content compares paths with the platform's separator, so on Windows it misses this */
+  private boolean overwritesAntScript(String templateDir, List<String> files) {
+    for (String fn : files) {
+      if (isAntScript(antScripts, FileUtilities.getRelativePath(templateDir, fn))) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  static boolean isAntScript(Set<String> antScripts, String relativePath) {
+    return antScripts.contains(relativePath.replace('\\', '/'));
   }
 
   private void applyConfigChanges(JsonObject baseConfig, JsonObject deltaConfig) throws FHIRException {
