@@ -1,6 +1,6 @@
 # QA round 2 results, shard s1
 
-Status: Phase C in progress (1 of 8 IGs done).
+Status: Phase C in progress (2 of 8 IGs done).
 
 - master.jar: HL7 2ccca179460d9bb9f4185a59a6fd66d4d9330951
 - int.jar: qa/page-only-ready 5111080dd56c99f6aa6b1ad62a56978f9d0959bb (seen 17:09 UTC)
@@ -24,12 +24,14 @@ No IG in s1 is skipped (TW Core is s6; the two SUSHI failures are s2).
 
 ## Phase C (int.jar)
 
-Watch: S1 = W1a..W1f, stop (F1); restart, W2, stop (F2); restart, W3..W6, stop (F6). A W1 step is left out when the IG has no such file that reaches output. Every edit was checked in output/ (marker present; after W1f/W5 the page gone; after W6 all markers absent). Master watch (MW) is the same spec with master.jar, same heap. "Complete (scripts)" = Rapido Complete Build because the template does not declare what its scripts read.
+Watch: S1 = W1a..W1f, stop (F1); restart, W2, stop (F2); restart, W3..W6, stop (F6). A W1 step is left out when the IG has no such file that reaches output. Every edit was checked in output/ (marker present; after W1f/W5 the page gone; after W6 all markers absent). Master watch (MW) is the same spec with master.jar, same heap. Mode: int first logs a page-rebuild decision; "gate: scripts" = it logged `Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))`, i.e. no page-only rebuild, then the normal Rapido build ran (Differential or Complete, same as master).
 
 | IG | heap | R1 | I1 | I2 | qa e/w/h R1=I1=I2 | W int (s, mode) | W master (s, mode) | F1/F2/F6 | template scripts | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|
-| ChitSR/sample-ig | 7600m | 64 | 34 | 34 | 1/6/3 | W1a 21.6, W1c 20.0, W1d 19.7, W1e 23.2, W1f 21.2, W2 22.0, W3 21.4, W4 24.1, W5 21.3, W6 19.5 (all Complete (scripts)) | W1a 20.5, W1c 20.0, W1d 20.1 (Differential), W1e 24.6, W1f 21.0 (Complete), W2 21.8, W3 22.3 (Differential), W4 23.9, W5 22.0 (Complete), W6 20.1 (Differential) | 33/33/33 | yes (hl7.au.fhir.template): int does a complete build per step, as intended | same; pre-existing F3 (R1 vs I1/I2), F2 (watch qa.txt paths) |
+| ChitSR/sample-ig | 7600m | 64 | 34 | 34 | 1/6/3 | W1a 21.6, W1c 20.0, W1d 19.7, W1e 23.2, W1f 21.2, W2 22.0, W3 21.4, W4 24.1, W5 21.3, W6 19.5 (every step gate: scripts) | W1a 20.5, W1c 20.0, W1d 20.1 (Differential), W1e 24.6, W1f 21.0 (Complete), W2 21.8, W3 22.3 (Differential), W4 23.9, W5 22.0 (Complete), W6 20.1 (Differential) | 33/33/33 | yes (hl7.au.fhir.template): no page-only rebuild, as intended | same; pre-existing F3 (R1 vs I1/I2), F2 (watch qa.txt paths) |
+| HL7/demo-collect | 7600m | 95 | 44 | 37 | 0/0/0 | W1a 18.1, W1d 22.2 (gate: scripts, then Differential), W1e 29.2, W1f 26.7, W2 29.1, W3 31.7, W4 28.6, W5 26.5, W6 27.9 (gate: scripts, then Complete changed: ig) | W1a 20.7, W1d 25.1 (Differential), W1e 31.1, W1f 30.6, W2 32.9, W3 33.8, W4 30.6, W5 29.1, W6 28.4 (Complete, changed: ig) | 45/45/47 | yes (local ig-template): no page-only rebuild, as intended | same; pre-existing F3 (R1 vs I1/I2) |
 
 ### Per-IG notes
 
 - sample-ig: W1b n/a (background.xml is not listed in ig.xml, so it makes no page). R1-I1 and R1-I2: only package/.index.db ResourceList rows (F3: R1 0 rows, int 2) in the en.tgz and its copy in full-ig.zip. W1f-F1, W2-F2, W6-F6, I1-W6: no output diffs; qa counts equal; message sets differ only by F2 (2 html-check messages name temp/pages/.watch-output/ instead of output/).
+- demo-collect: W1b/W1c n/a (no html/xml page, no intro/notes); W1d = input/data/features.yml footer label. R1-I1, R1-I2: only .index.db ResourceList (F3: R1 0 rows, int 29). W1f-F1, W2-F2, W6-F6, I1-W6: no diffs, qa message sets equal.
