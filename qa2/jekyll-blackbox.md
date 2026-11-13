@@ -49,3 +49,25 @@ linked, plugins (sitemap etc.), `site.time`. None is used by fhir2.base.template
 The deciding problem: (a) needs the publisher to know every page that includes a changed fragment. Only Jekyll's
 own dependency record knows that (an IG page can `{% include %}` another page's fragment), and reading
 `.jekyll-metadata` (a Marshal dump) would be reading Jekyll internals. (b) gets it from Jekyll itself.
+
+## What the publisher rewrites between watch builds (master 2ccca17, same session, hard-link snapshots of temp/pages)
+| rebuild | Rapido | files rewritten | of which | Jekyll in the publisher |
+|---|---|---|---|---|
+| first | complete | all 101,236 | | 72.6 s |
+| profile edit | differential (193 of 811) | 10,428 + 28 new | `_includes` 6,978, en/ru/uz stubs 836 each, root 832 (resource json), assets 97, `_data` all 13 | 67.4 s |
+| page edit (index.md) | differential (94 of 811) | 9,936 (874 MB) | `_includes` 6,576, stubs 836 x3, root 741, assets 97, `_data` 13, `_rapido/state.json` (188 MB) | 70.7 s |
+- Temp is cleared only on a Rapido complete build; a differential build writes into it again. Most rewrites are in
+  place (same inode). Of the 390 that were recreated, 389 are byte-identical (the other is package.db).
+- So "rewrite only when the content changed" would mean changing every writer (FileUtilities calls, template Ant
+  scripts copying assets, xslt writing _data). Instead the Jekyll step hashes what changed since Jekyll's last run
+  (size+mtime differ) and gives a file with the same SHA-256 its old mtime back. SHA-256 here (SHA-NI): 1.9 GB in
+  2.1 s warm; 2.4 GB with a cold cache 10 to 17 s (first build only hashes everything).
+- Between two separate sessions every page stub differs (per-session UUID, `HierarchicalTableGenerator.uuid`), and
+  4 `_data` files; a Rapido complete build therefore always renders every page.
+
+## Things that rule out reusing the staging folder as Jekyll's destination
+- `HTMLInspector.fillPublishBox` rewrites Jekyll's pages in place (marker -> publish box). A page whose box is
+  already filled reads as `hl7State=false` (no publish box), which changes QA. OutputFolderSync also moves changed
+  files out of staging. So Jekyll gets its own destination `temp/pages/.watch-jekyll` (Jekyll skips dot names:
+  checked, output identical to a full build elsewhere, 0 diffs) and the build gets a copy in staging (all 20,698
+  output files: 3.6 s; per rebuild only what changed since the last copy, by stamps).
