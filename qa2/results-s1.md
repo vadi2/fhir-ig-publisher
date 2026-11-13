@@ -1,9 +1,9 @@
 # QA round 2 results, shard s1
 
-Status: Phase A done; waiting for `qa/page-only-ready` (Phase B). Master `-rapido -watch` runs (MW) for timing and classification in progress.
+Status: Phase C in progress (1 of 8 IGs done).
 
 - master.jar: HL7 2ccca179460d9bb9f4185a59a6fd66d4d9330951
-- int.jar: not yet
+- int.jar: qa/page-only-ready 5111080dd56c99f6aa6b1ad62a56978f9d0959bb (seen 17:09 UTC)
 - VM: 4 CPU, 15 GB, swap file 8 GB (16 GB does not fit the ~30 GB disk allowance). All builds LC_ALL=C.UTF-8, IG_GATE_OFF=1, MALLOC_ARENA_MAX=2, -XX:+UseStringDeduplication, no -threads. Times in seconds (R*/I*/F*: whole java run; W*: edit to "Finished @").
 - R1 outputs kept as output.tar.xz + sha256 manifest; compare masks per plan rule 4 (dates, run path, UUIDs, lastUpdated, qa files, order-only lists).
 
@@ -21,3 +21,15 @@ Status: Phase A done; waiting for `qa/page-only-ready` (Phase B). Master `-rapid
 | HL7/US-Core | d85ba3f | 10g | 697 | 7/17/1 | 17145 |
 
 No IG in s1 is skipped (TW Core is s6; the two SUSHI failures are s2).
+
+## Phase C (int.jar)
+
+Watch: S1 = W1a..W1f, stop (F1); restart, W2, stop (F2); restart, W3..W6, stop (F6). A W1 step is left out when the IG has no such file that reaches output. Every edit was checked in output/ (marker present; after W1f/W5 the page gone; after W6 all markers absent). Master watch (MW) is the same spec with master.jar, same heap. "Complete (scripts)" = Rapido Complete Build because the template does not declare what its scripts read.
+
+| IG | heap | R1 | I1 | I2 | qa e/w/h R1=I1=I2 | W int (s, mode) | W master (s, mode) | F1/F2/F6 | template scripts | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|
+| ChitSR/sample-ig | 7600m | 64 | 34 | 34 | 1/6/3 | W1a 21.6, W1c 20.0, W1d 19.7, W1e 23.2, W1f 21.2, W2 22.0, W3 21.4, W4 24.1, W5 21.3, W6 19.5 (all Complete (scripts)) | W1a 20.5, W1c 20.0, W1d 20.1 (Differential), W1e 24.6, W1f 21.0 (Complete), W2 21.8, W3 22.3 (Differential), W4 23.9, W5 22.0 (Complete), W6 20.1 (Differential) | 33/33/33 | yes (hl7.au.fhir.template): int does a complete build per step, as intended | same; pre-existing F3 (R1 vs I1/I2), F2 (watch qa.txt paths) |
+
+### Per-IG notes
+
+- sample-ig: W1b n/a (background.xml is not listed in ig.xml, so it makes no page). R1-I1 and R1-I2: only package/.index.db ResourceList rows (F3: R1 0 rows, int 2) in the en.tgz and its copy in full-ig.zip. W1f-F1, W2-F2, W6-F6, I1-W6: no output diffs; qa counts equal; message sets differ only by F2 (2 html-check messages name temp/pages/.watch-output/ instead of output/).
