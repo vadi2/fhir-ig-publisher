@@ -246,3 +246,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 04:10 tick: fix-42 DONE w/ review: 6 confirmed+fixed (rethrow in failure path, interrupt, static mtime -> copy only Jekyll's files, clock skew -> marker mtime, partial copy flag, give-way await/logger), 1 refuted (skipped files); early-publish 5d1aa98, tail-restart fae64d9; UTG fix4 page1 913 s, pages up 658 s. Simplifier on 5509d19..5d1aa98 running locally (scratchpad simp-42). s1: US-Core masked check, then master DHP watch (F5). Freed 11G local disk (old fix runs/jars).
 - 04:40 simplifier on fix-42 review commits: ab9f4cc8 (Uninterruptibles.getUninterruptibly, unused imports) on early-publish, merge 02f661cf on tail-restart; targeted tests pass. fix-42 fully done.
 - 05:08 tick: s1 US-Core PASS (F3, F4 only). DHP master watch rerun running (decides F5). Only s1 left.
+- 06:08 tick: s1 DHP master watch attempt 3 running (F5 open). Only s1 left.
