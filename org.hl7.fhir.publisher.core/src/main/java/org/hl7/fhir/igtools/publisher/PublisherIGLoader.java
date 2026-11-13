@@ -1477,11 +1477,12 @@ public class PublisherIGLoader extends PublisherBase {
   public void clearTempFolder() throws Exception {
     logDebugMessage(LogCategory.INIT, "Temp: "+ pf.tempDir);
     if (pf.watchOutputDir != null) {
-      // everything but the staging folder, which already has what this build wrote to the output so far
+      // everything but the staging folder, which already has what this build wrote to the output so far, and what
+      // Jekyll's next incremental build needs
       File[] children = new File(pf.tempDir).listFiles();
       if (children != null) {
         for (File f : children) {
-          if (!f.getName().equals(WATCH_OUTPUT_STAGING)) {
+          if (!IncrementalJekyll.kept(f.getName())) {
             FileUtils.forceDelete(f);
           }
         }

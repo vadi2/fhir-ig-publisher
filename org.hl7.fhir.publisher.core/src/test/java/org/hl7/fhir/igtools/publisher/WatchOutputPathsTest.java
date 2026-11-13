@@ -65,6 +65,21 @@ class WatchOutputPathsTest {
   }
 
   @Test
+  void clearingTempInWatchModeKeepsWhatJekyllsIncrementalBuildNeeds() throws Exception {
+    Path temp = dir.resolve("temp");
+    Files.createDirectories(temp.resolve(IncrementalJekyll.SITE));
+    Files.writeString(temp.resolve(IncrementalJekyll.SITE).resolve("index.html"), "rendered");
+    Files.writeString(temp.resolve(IncrementalJekyll.METADATA), "jekyll's record");
+    Files.createDirectories(temp.resolve(".jekyll-cache"));
+
+    clearTemp(temp, p("output"));
+
+    assertEquals("rendered", Files.readString(temp.resolve(IncrementalJekyll.SITE).resolve("index.html")));
+    assertEquals("jekyll's record", Files.readString(temp.resolve(IncrementalJekyll.METADATA)));
+    assertFalse(Files.exists(temp.resolve(".jekyll-cache")));
+  }
+
+  @Test
   void clearingTempOutsideWatchModeClearsEverything() throws Exception {
     Path temp = dir.resolve("temp");
     Files.createDirectories(temp.resolve(PublisherIGLoader.WATCH_OUTPUT_STAGING));
