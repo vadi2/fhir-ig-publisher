@@ -247,3 +247,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 04:40 simplifier on fix-42 review commits: ab9f4cc8 (Uninterruptibles.getUninterruptibly, unused imports) on early-publish, merge 02f661cf on tail-restart; targeted tests pass. fix-42 fully done.
 - 05:08 tick: s1 US-Core PASS (F3, F4 only). DHP master watch rerun running (decides F5). Only s1 left.
 - 06:08 tick: s1 DHP master watch attempt 3 running (F5 open). Only s1 left.
+- 06:30 Vadim OK'd pushing core: vadi2/org.hl7.fhir.core perf3/rc-anchor-set (03297b4a, setter for #54) pushed; perf2/ws7-read-hook (13744e48, #38) was already there. All work is now on remotes except the intentional uncommitted #54 pom core_version and throwaway test merges.
