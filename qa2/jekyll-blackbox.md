@@ -95,3 +95,26 @@ Templates made to declare `script-inputs` (thin local child template, as for the
 | hl7au/au-fhir-encounter | hl7.au.sparked.template | incremental, 2 files | 1,251 | 0 |
 | hl7-eu/xshare-ips-plus | local child of fhir.base.template | incremental, 1 file | 695 | 0 |
 (The only other difference seen: `full-ig.zip`, which the publisher writes into temp after Jekyll and the page rebuild removes before it.)
+
+Re-run with the final code (760868b-equivalent jar, 5fd7e55): each IG gets three page edits in a row (a sentence; extra blank lines; a second sentence), all three page rebuilds, all incremental, then the full `jekyll build` comparison: sample-ig 1,201 files 0 diffs, aitransparency-ig 2,594/0, ITI.DIS 1,803/0, au-fhir-encounter 1,251/0, xshare-ips-plus 695/0.
+
+Fallback check: xshare-ips-plus with `timezone: UTC` added to its template's `_config.yml` logs "Jekyll: renders every page, in the staging folder (a setting that the incremental build isn't known to follow: _config.yml: timezone: UTC)" on every build, no `.watch-jekyll` is made, and the last edit reaches the output (the path from before this change).
+
+## A/B bench (uz.dhp.core, `-rapido -watch`, 4 sessions interleaved base/change/change/base, 4 page edits per session, 7.6 GB heap)
+Base = perf4/watch-page-only 5111080 (pageonly.jar), change = 9f671b9 (the review fixes after it don't touch the timed path).
+| | base | change | saved |
+|---|---|---|---|
+| page edit to Finished, median (n=8) | 245.9 s | 190.4 s | 55.5 s (23%) |
+| Jekyll step in a page rebuild | 66 to 74 s | 4.4 to 5.5 s, plus 3 to 6 s copying `.watch-jekyll` to staging | |
+| profile edit (differential build, Jekyll renders every page) | 490.2 / 464.4 s | 492.4 / 501.0 s | none (noise; plus the copy) |
+| complete first build | 664.1 / 641.8 s | 636.8 / 649.4 s | none |
+Jekyll's resident memory in a page rebuild: 3.4 GB on base, 0.2 GB with the change.
+
+## Review rounds
+- Round 1 (6 roles): env injection, keep_files, theme, yaml/toml config, a staging folder that is now a file (real bug, caught by the new test), copying with Jekyll's file times, copySite out of the exec try, prepare() failing means a full run.
+- Round 2: a page rebuild's record of rewritten files went stale when their old times were restored, so the next page rebuild would fall back to a complete build (reproduced by a test; `PageRebuild.restamp()`); a listing that stopped early became the next baseline; Jekyll's error was lost if cleanup threw; the config regex missed a BOM, quoted keys and TOML tables, replaced by an allow-list (every template checked sets only `kramdown`); comment fixes.
+- Round 3: the allow-list parser still skipped indented TOML/YAML and bare CR; now only block-style YAML is read (TOML, stray indentation and other line breaks count as unknown); restamp checks the file is there; symlink tests skip where links can't be made.
+- Round 4: nothing confirmed (YAML inputs tried against Psych/SafeYAML 1.0.5 found no way past the check).
+- Rejected: taking `source` in the constructor (tempDir is set per build); Windows read-only files (not reproducible, publisher-written files); trusting equal size+mtime (Jekyll's own assumption); generation-off leftovers (same as `.watch-output`); Liquid that reads other pages' content or `site.time` (Jekyll's documented incremental limit; detecting it means parsing Liquid); requiring Jekyll's success line before keeping its record (Jekyll writes the record only at the end); one extra full render after prepare() throws (rare, performance only); `deleteQuietly` on already emptied folders; `succeeded()` being public; `Stamp[]` vs a record; unit-testing runJekyll's exec branches (verified end to end); reading the config twice per build.
+- Mutation check: 33 mutants over IncrementalJekyll and PageRebuild, all killed except one equivalent mutant (removed) and the restamp null guard (defensive). PublisherGenerator's wiring (execs Jekyll) is verified end to end, not by unit tests.
+- Full core suite: 627 run, only the 3 known failures (GitUtilitiesTests.testGetGitSource, 2 ParallelFolderZipTest locale errors).
