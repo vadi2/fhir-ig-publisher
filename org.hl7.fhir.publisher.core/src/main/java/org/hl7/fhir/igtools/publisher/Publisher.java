@@ -929,7 +929,11 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       return;
     }
     // whether pages were put in the output folder is known once their copy has finished
-    generator.awaitEarlyPublish();
+    Throwable copy = generator.finishEarlyPublish();
+    if (copy != null) {
+      log("The copy of the pages into "+ pf.watchOutputDir +" failed too: "+copy);
+      e.addSuppressed(copy);
+    }
     if (pf.watchOutputSynced) {
       // it failed after the output folder was brought up to date
       return;

@@ -630,11 +630,12 @@ class OutputFolderSyncTest {
     for (int i = 0; i < 10; i++) {
       // the last build's package, left in the staging folder, as in the target
       Files.write(staged.resolve("package.tgz"), last);
-      Files.setLastModifiedTime(staged.resolve("package.tgz"), OLD);
       Files.createDirectories(target());
       Files.write(target().resolve("package.tgz"), last);
+      // this build starts (file times are a tick coarser than the clock)
+      Thread.sleep(60);
+      FileTime since = FileTime.from(Instant.now().minusMillis(30));
       write(staged, "a.html", "a, as Jekyll wrote it for build " + i);
-      FileTime since = FileTime.from(Instant.now().minusSeconds(60));
       FileTime asOf = FileTime.from(Instant.now());
       Map<String, String> offered = new HashMap<>();
       OutputFolderSync.Result[] r = new OutputFolderSync.Result[1];
@@ -661,6 +662,17 @@ class OutputFolderSyncTest {
       assertEquals(1, r[0].getWritten());
       assertEquals(Set.of("a.html"), offered.keySet());
     }
+  }
+
+  @Test
+  void publishingSinceABuildStartedTakesAFileCopiedWithItsSourcesTime() throws IOException {
+    Path staged = staged();
+    // Jekyll copies a static file (a changed stylesheet) with the time of its source, from before the build
+    writeOld(staged, "assets/site.css", "new css");
+    write(target(), "assets/site.css", "old css");
+    FileTime since = FileTime.from(Instant.now().minusSeconds(60));
+    OutputFolderSync.publish(staged, target(), null, null, new HashMap<>(), since, null);
+    assertEquals("new css", read(target(), "assets/site.css"));
   }
 
   @Test

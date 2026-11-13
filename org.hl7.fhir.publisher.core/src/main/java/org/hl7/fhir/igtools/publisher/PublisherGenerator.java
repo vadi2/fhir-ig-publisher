@@ -103,6 +103,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.sql.SQLException;
@@ -4874,17 +4875,45 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     PublisherFields fields = pf;
     // what the build writes from now on is left for the sync; and if Jekyll didn't say what it wrote, so is what the
     // last build left in the staging folder, which the package step writes again (a file being written over can look
-    // as it was, but empty, until its first write)
-    Instant now = Instant.now();
-    FileTime asOf = FileTime.from(now);
+    // as it was, but empty, until its first write). The times are the file system's, which may not be this clock's
+    FileTime[] now = stagingClock(staged);
+    FileTime asOf = now[0];
     FileTime since = written == null && pf.stagedOutputKept
-        ? FileTime.from(now.minusNanos(System.nanoTime() - pf.watchBuildStarted).minusSeconds(1)) : null;
+        ? FileTime.from(now[1].toInstant().minusNanos(System.nanoTime() - pf.watchBuildStarted).minusSeconds(1)) : null;
     startEarlyPublish(() -> publishPages(fields, staged, target, written, since, asOf));
+  }
+
+  /**
+   * what time it is on the file system the staging folder is on, as the modification time and the change time (see
+   * OutputFolderSync.changeTime()) of a file made next to it now; this clock's if that can't be done
+   */
+  private FileTime[] stagingClock(Path staged) {
+    try {
+      Path marker = Files.createTempFile(staged.toAbsolutePath().getParent(), ".early-publish", "");
+      try {
+        BasicFileAttributes a = Files.readAttributes(marker, BasicFileAttributes.class);
+        return new FileTime[] {a.lastModifiedTime(), OutputFolderSync.changeTime(marker, a)};
+      } finally {
+        Files.deleteIfExists(marker);
+      }
+    } catch (IOException | RuntimeException e) {
+      FileTime t = FileTime.from(Instant.now());
+      return new FileTime[] {t, t};
+    }
   }
 
   /** runs the copy of the pages on a thread of its own: see awaitEarlyPublish() */
   void startEarlyPublish(Runnable copy) {
-    FutureTask<Void> task = new FutureTask<>(copy, null);
+    PublisherFields fields = pf;
+    FutureTask<Void> task = new FutureTask<>(() -> {
+      try {
+        copy.run();
+      } catch (RuntimeException | Error e) {
+        // it may have put some of the pages there
+        fields.watchPagesPublished = true;
+        throw e;
+      }
+    }, null);
     Thread t = new Thread(task, "ig-early-publish");
     t.setDaemon(true);
     t.start();
@@ -4947,23 +4976,43 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * a failure is recorded there
    */
   void awaitEarlyPublish() {
+    Throwable failure = finishEarlyPublish();
+    if (failure instanceof Error err) {
+      throw err;
+    }
+    if (failure != null) {
+      throw new RuntimeException("Unable to put the pages in " + pf.watchOutputDir + ": " + failure, failure);
+    }
+  }
+
+  /**
+   * As awaitEarlyPublish(), but what failed the copy (a bug, or an Error) is returned rather than thrown (null: nothing),
+   * for a build that has failed already. The wait isn't cut short by an interrupt (the copy would go on unwatched), which
+   * is kept for what follows
+   */
+  Throwable finishEarlyPublish() {
     Future<?> f = earlyPublish;
     if (f == null) {
-      return;
+      return null;
     }
     earlyPublish = null;
+    boolean interrupted = false;
     try {
-      f.get();
-    } catch (InterruptedException e) {
-      Thread.currentThread().interrupt();
-    } catch (ExecutionException e) {
-      // a bug, or an Error: it fails the build, as when the copy wasn't on a thread of its own
-      earlyPages.clear();
-      Throwable cause = e.getCause();
-      if (cause instanceof Error err) {
-        throw err;
+      while (true) {
+        try {
+          f.get();
+          return null;
+        } catch (InterruptedException e) {
+          interrupted = true;
+        } catch (ExecutionException e) {
+          earlyPages.clear();
+          return e.getCause();
+        }
       }
-      throw cause instanceof RuntimeException re ? re : new RuntimeException(cause);
+    } finally {
+      if (interrupted) {
+        Thread.currentThread().interrupt();
+      }
     }
   }
 

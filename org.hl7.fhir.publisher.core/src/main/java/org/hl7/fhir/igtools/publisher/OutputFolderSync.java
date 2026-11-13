@@ -200,7 +200,8 @@ public class OutputFolderSync {
 
   /**
    * As publish(staged, target, files, leftOut, offered), while the build goes on writing to the staging folder: only
-   * the files last changed between since and asOf (either null: no bound) are copied. One the build writes after asOf
+   * the files written since since (by their change time: see changeTime()) and last modified by asOf (either null: no
+   * bound) are copied. One the build writes after asOf
    * (or older than since, which it may be writing over: the package step writes its files over those of the last
    * build, that a Jekyll kept running leaves in the staging folder) is left for the sync, and so is one that changes
    * while it is copied, so that what is only partly written doesn't get into the target
@@ -244,8 +245,7 @@ public class OutputFolderSync {
       Path to = target.resolve(rel);
       try {
         BasicFileAttributes was = Files.readAttributes(from, BasicFileAttributes.class);
-        FileTime changed = was.lastModifiedTime();
-        if ((since != null && changed.compareTo(since) < 0) || (asOf != null && changed.compareTo(asOf) > 0)) {
+        if ((since != null && changeTime(from, was).compareTo(since) < 0) || (asOf != null && was.lastModifiedTime().compareTo(asOf) > 0)) {
           continue;
         }
         String digest = offered == null ? null : digest(from, ba);
@@ -388,6 +388,18 @@ public class OutputFolderSync {
     } catch (IOException ex) {
       Files.deleteIfExists(copy);
       throw ex;
+    }
+  }
+
+  /**
+   * when a file was last written, or its attributes set: unlike its modification time (Jekyll gives a static file its
+   * source's), it can't be set back. Its modification time where the file system doesn't say (Windows)
+   */
+  static FileTime changeTime(Path file, BasicFileAttributes attributes) {
+    try {
+      return (FileTime) Files.getAttribute(file, "unix:ctime");
+    } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
+      return attributes.lastModifiedTime();
     }
   }
 
