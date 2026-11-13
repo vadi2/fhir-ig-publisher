@@ -1,6 +1,6 @@
 # QA round 2 results, shard s4
 
-**Status: Phase C in progress (3/7 IGs done).**
+**Status: Phase C in progress (4/7 IGs done).**
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (sha256 56b2e4adb4af80ef5b495b3013b726df254243b5437eb500b2c7c6a5ae5b238f)
 - VM: 4 CPU, 15 GB, 8 GB swap. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx7600m -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org -package-cache-folder /home/user/qa/pcf`, fresh `cp -a` of the clone, no -threads.
@@ -28,6 +28,7 @@
 | HL7Chile/MHD-CL | 73 | 0/28/5 | 54 | 0/27/5 | 55 / 57 | 0/27/5 each | 58; 27 26 30 38 37 40 32 37 33 35 (no W1b) | 59; 27 27 30 36 37 36 34 36 38 35 | same (pre-existing diffs only) |
 | hl7-eu/readi | 58 | 165/58/39 | 55 | 165/58/39 | 57 / 57 | 165/58/39 each | 55; 24 32 37 35 36 34 41 40 40 (no W1b, W1c) | 60; 24 35 39 40 40 43 44 40 42 | same (pre-existing diffs only) |
 | HL7/imaging-service-request-ig | 78 | 195/225/244 | 74 | 195/225/244 | 78 / 78 | 195/225/244 each | 80; 37 65 64 60 60 44 61 60 58 (no W1b, W1d) | 86; 40 70 66 64 64 46 66 67 65 | same (pre-existing diffs only) |
+| RIVO-Noord/zorgviewer-ig | 118 | 669/137/128 | 98 | 669/137/128 | 112 / 109 | 669/137/128 each | 118; 80 80 73 74 72 70 68 72 68 68 (no W1b) | 121; 78 71 71 70 69 72 69 (W4-W6 not run) | same (pre-existing diffs only) |
 
 ### HL7Chile/MHD-CL
 - Template: local hl7chile-ig-template on hl7.fhir.template (ant/onCheck scripts, no script-inputs): every int.jar watch step logged "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then ran master's Rapido path (Differential for W1a/W1c/W3, Complete for the rest), same modes and times as master. Page-only rebuild never used here, as intended.
@@ -50,3 +51,10 @@
 - Raw: R1 vs I1 2 files (F3 .index.db), R1 vs I2 76, I1 vs I2 74, F1 vs W1f 70, F2 vs W2 4, I1 vs W6 0, R1 vs W6 2 (F3).
 - The 74/70 files are Bundle-example-order-bundle and ImagingStudy-example-requested-procedure-imaging-study (json/ttl/xml, en/*.html, .md, ai.zip, examples.*.zip, packages, package.db): NamingSystem-dui narrative link `terminology.hl7.org/7.5.0` vs `5.0.0` and display `DICOM Unique Id` vs `DUI` (F4, pre-existing, same as round 1). The 4 in F2 vs W2 are codesystem-ref-all-list.csv "used by" order with a quoted field (masked once quotes are ignored).
 - THO-normalised: R1 vs I2 2 (F3), I1 vs I2 0, F1 vs W1f 0, F2 vs W2 0.
+
+### RIVO-Noord/zorgviewer-ig
+- Template: local rivonoord-template on fhir.base.template (no script-inputs): int.jar fell back every step, then master's Rapido gave a Complete Build every step ("terminology server calls failed in the last build (5)", STU3 IG, as round 1), master the same. Times equal to master.
+- Edits: W1a copyrights.md, W1b n/a, W1c StructureDefinition-Appointment-notes.md, W1d input/includes/menu.xml, W1e/W1f qa-new.md + page entry in input/zorgviewer-ig.json, W2 Appointment profile description (json), W3 Patient-Nedap name (referenced by the Nedap Bundles), W4/W5 copy of Patient-Nedap with a new id, W6 revert. All markers found/absent as expected.
+- Output: 0 differing files in every pair (R1/I1, R1/I2, I1/I2, F1/W1f, F2/W2, I1/W6, R1/W6), with the csv/json "used by" masks.
+- QA counts identical (669/137/128, 977 messages). In the watch builds 11 html-check messages name `temp/pages/.watch-output/<page>.html` instead of `output/<page>.html` (same text otherwise): F2, pre-existing (round 1: master watch the same).
+- The master watch run stopped at W4 because of an edit-script error on my side (fixed), so master W4-W6 times are missing.
