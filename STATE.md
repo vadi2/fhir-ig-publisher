@@ -254,3 +254,11 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 07:20 Vadim: F5 explained (kept Jekyll ~3 s vs ~73 s fresh per rebuild; costs 3.5-4.5 GB held all session). Decision: keep. F5 closed as known memory cost, not fixed.
 - 12:00 Vadim: all good. Core #25 check-ins stopped, unsubscribed. Work complete.
 - 12:20 Grahame upstream (2026-11-12, unanswered): HL7 #1461 REJECTED as is: Jekyll driver must come out entirely (non-negotiable), Template Ant-script analysis must become template-declared, FullIgZip drop or use -threads workers, QA delta for HTMLInspector/ConformanceStatementHandler/OutputFolderSync, rebase + rebench (profile/instance slower than master); bring page-only skip back as small PR. Hits fork #22 #25 #48 #49 (on watch-page-rebuild) and the F5 'keep Jekyll' decision. #1466: confirm IG-wide pages (artifacts toc) re-render on entry text change + test assertion; endsWith not regex. #1460 todo: drop statusWarnings reflection once core has public access. Full text qa/grahame-upstream-feedback.txt. hapifhir #2856/#2862: no Grahame comments yet.
+
+## Round 5: #1461 rework + #1466 fix (started 15:14 2026-11-13)
+- Vadim: rework #1461 per Grahame (no Jekyll driver), full dev process + extensive QA; fix #1466 per Grahame; research Jekyll incremental + who to contact.
+- dev perf4/watch-page-only (base HL7 master 2ccca179, PR to vadi2 master, pushes ref qa/page-only-ready when ready): session_013FrhV7AAoLSZwDjnzKopNG, notes qa2/dev.md
+- fix-1466 (pushes to vadi2 rapido-ig-entry-text, Vadim OK'd; no GitHub comments): session_013FrhV8sTH3b1ajodgAHLEU, notes qa2/fix-1466.md
+- Jekyll research: local background agent -> qa2/jekyll-research.md
+- QA2 shards (plan qa2/QA-PLAN.md, results qa2/results-<shard>.md): utg session_013FrhVA785A6Zz6sVmpRTGg, s1 session_013FrhV68Cx2sZ7CfW2Crcs4, s2 session_013FrhV82F5iSZ9ypNEAJNXY, s3 session_013FrhV7h2vjxzYZ1h565qMh, s4 session_013FrhVA8yT3pxoYyKhXSiL1, s5 session_013FrhV5VZ4C7RApp34frz5j, s6 session_013FrhV7CEaZTwC2gBTf5TYC, s7 session_013FrhV8X1x5zkqLJyPB1NDP, s8 session_013FrhV7cDTyrnjCnJKPPxYq
+- Loop: QA regression -> send_message to dev session (fix + review loop + simplifier, moves ready ref) -> tell shard to rerun the step.
