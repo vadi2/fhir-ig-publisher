@@ -612,67 +612,12 @@ class OutputFolderSyncTest {
     // the package step has written the last build's package again
     write(staged, "package.tgz", "this build's package");
     write(target(), "package.tgz", "the last build's package");
-    OutputFolderSync.Result r = OutputFolderSync.publish(staged, target(), null, null, offered, null, FileTime.from(Instant.parse("2021-01-01T00:00:00Z")));
+    OutputFolderSync.Result r = OutputFolderSync.publish(staged, target(), null, null, offered, FileTime.from(Instant.parse("2021-01-01T00:00:00Z")));
 
     assertEquals(1, r.getWritten());
     assertEquals("a, as Jekyll wrote it", read(target(), "a.html"));
     assertEquals("the last build's package", read(target(), "package.tgz"));
     assertEquals(Set.of("a.html"), offered.keySet());
-  }
-
-  @Test
-  void publishingLeavesWhatTheLastBuildLeftForTheSyncWhenToldTo() throws Exception {
-    Path staged = staged();
-    byte[] last = new byte[8 << 20];
-    Arrays.fill(last, (byte) 'o');
-    byte[] next = new byte[8 << 20];
-    Arrays.fill(next, (byte) 'n');
-    for (int i = 0; i < 10; i++) {
-      // the last build's package, left in the staging folder, as in the target
-      Files.write(staged.resolve("package.tgz"), last);
-      Files.createDirectories(target());
-      Files.write(target().resolve("package.tgz"), last);
-      // this build starts (file times are a tick coarser than the clock)
-      Thread.sleep(60);
-      FileTime since = FileTime.from(Instant.now().minusMillis(30));
-      write(staged, "a.html", "a, as Jekyll wrote it for build " + i);
-      FileTime asOf = FileTime.from(Instant.now());
-      Map<String, String> offered = new HashMap<>();
-      OutputFolderSync.Result[] r = new OutputFolderSync.Result[1];
-      Thread copy = new Thread(() -> {
-        try {
-          r[0] = OutputFolderSync.publish(staged, target(), null, null, offered, since, asOf);
-        } catch (IOException e) {
-          throw new UncheckedIOException(e);
-        }
-      });
-      copy.start();
-      // (later than asOf, as the build's package step is)
-      Thread.sleep(20);
-      // the package step writes it again, a block at a time (a file being written over is empty, and may still have
-      // its old time, until its first write)
-      try (OutputStream out = Files.newOutputStream(staged.resolve("package.tgz"))) {
-        for (int k = 0; k < 8; k++) {
-          out.write(next, k << 20, 1 << 20);
-        }
-      }
-      copy.join();
-      assertTrue(Arrays.equals(last, Files.readAllBytes(target().resolve("package.tgz"))), "the package in the target was changed");
-      assertEquals("a, as Jekyll wrote it for build " + i, read(target(), "a.html"));
-      assertEquals(1, r[0].getWritten());
-      assertEquals(Set.of("a.html"), offered.keySet());
-    }
-  }
-
-  @Test
-  void publishingSinceABuildStartedTakesAFileCopiedWithItsSourcesTime() throws IOException {
-    Path staged = staged();
-    // Jekyll copies a static file (a changed stylesheet) with the time of its source, from before the build
-    writeOld(staged, "assets/site.css", "new css");
-    write(target(), "assets/site.css", "old css");
-    FileTime since = FileTime.from(Instant.now().minusSeconds(60));
-    OutputFolderSync.publish(staged, target(), null, null, new HashMap<>(), since, null);
-    assertEquals("new css", read(target(), "assets/site.css"));
   }
 
   @Test

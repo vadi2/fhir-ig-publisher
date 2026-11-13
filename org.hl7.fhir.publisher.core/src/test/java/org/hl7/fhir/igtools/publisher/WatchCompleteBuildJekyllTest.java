@@ -21,6 +21,9 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.io.OutputStream;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.Set;
@@ -316,6 +319,38 @@ class WatchCompleteBuildJekyllTest {
     });
     assertEquals(bug, g.finishEarlyPublish());
     assertEquals(null, g.finishEarlyPublish());
+  }
+
+  @Test
+  void whenJekyllDidntSayWhatItWroteOnlyItsFilesAreCopiedFromAKeptStagingFolder() throws Exception {
+    pf.stagedOutputKept = true;
+    // a stylesheet Jekyll copied again, with its source's time
+    write("temp/assets/site.css", "new css");
+    write("temp/.watch-output/assets/site.css", "new css");
+    Files.setLastModifiedTime(dir.resolve("temp/.watch-output/assets/site.css"), FileTime.from(Instant.parse("2020-01-01T00:00:00Z")));
+    write("output/assets/site.css", "old css");
+    write("temp/.watch-output/a.html", "a2");
+    // the last build's package, which the package step writes again meanwhile
+    byte[] last = new byte[8 << 20];
+    Arrays.fill(last, (byte) 'o');
+    byte[] next = new byte[8 << 20];
+    Arrays.fill(next, (byte) 'n');
+    Path staged = dir.resolve("temp/.watch-output/package.r4.tgz");
+    Files.write(staged, last);
+    Files.write(dir.resolve("output/package.r4.tgz"), last);
+
+    PublisherGenerator g = generator(null);
+    g.publishPagesEarly(null);
+    try (OutputStream o = Files.newOutputStream(staged)) {
+      for (int k = 0; k < 8; k++) {
+        o.write(next, k << 20, 1 << 20);
+      }
+    }
+    g.awaitEarlyPublish();
+
+    assertEquals("new css", output("assets/site.css"));
+    assertEquals("a2", output("a.html"));
+    assertTrue(Arrays.equals(last, Files.readAllBytes(dir.resolve("output/package.r4.tgz"))), "the package in the output folder was changed");
   }
 
   /** puts the pages in the output folder, and waits until they are there (the copy runs while the build goes on) */

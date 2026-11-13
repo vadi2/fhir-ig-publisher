@@ -187,7 +187,7 @@ public class OutputFolderSync {
    *
    * @param files the files to copy, in the staging folder (those that aren't there, or aren't files, are skipped), or
    *              null for every file in it
-   * @param leftOut tells, by its name, a file that isn't copied (null: none)
+   * @param leftOut tells, by its path relative to the staging folder, a file that isn't copied (null: none)
    * @param offered what the calls before this one copied to the target, by relative path (a digest of the content),
    *              kept up to date here; or null. A file that is as it was then, and still in the target, isn't
    *              looked at again: the target has it, or what the build made of it since (the html checks change
@@ -195,19 +195,16 @@ public class OutputFolderSync {
    */
   public static Result publish(Path staged, Path target, Collection<Path> files, Predicate<String> leftOut,
       Map<String, String> offered) throws IOException {
-    return publish(staged, target, files, leftOut, offered, null, null);
+    return publish(staged, target, files, leftOut, offered, null);
   }
 
   /**
-   * As publish(staged, target, files, leftOut, offered), while the build goes on writing to the staging folder: only
-   * the files written since since (by their change time: see changeTime()) and last modified by asOf (either null: no
-   * bound) are copied. One the build writes after asOf
-   * (or older than since, which it may be writing over: the package step writes its files over those of the last
-   * build, that a Jekyll kept running leaves in the staging folder) is left for the sync, and so is one that changes
-   * while it is copied, so that what is only partly written doesn't get into the target
+   * As publish(staged, target, files, leftOut, offered), while the build goes on writing to the staging folder: a file
+   * last modified after asOf (null: no bound), or that changes while it is copied, is left for the sync, so that what is
+   * only partly written doesn't get into the target
    */
   public static Result publish(Path staged, Path target, Collection<Path> files, Predicate<String> leftOut,
-      Map<String, String> offered, FileTime since, FileTime asOf) throws IOException {
+      Map<String, String> offered, FileTime asOf) throws IOException {
     Result result = new Result();
     // the files are named under the staging folder as it was given, which may be reached through a link
     Path given = staged.toAbsolutePath().normalize();
@@ -235,7 +232,7 @@ public class OutputFolderSync {
     }
     rels.remove(QA_JSON);
     if (leftOut != null) {
-      rels.removeIf(rel -> leftOut.test(Paths.get(rel).getFileName().toString()));
+      rels.removeIf(leftOut);
     }
     byte[] ba = new byte[BUFFER];
     byte[] bb = new byte[BUFFER];
@@ -245,7 +242,7 @@ public class OutputFolderSync {
       Path to = target.resolve(rel);
       try {
         BasicFileAttributes was = Files.readAttributes(from, BasicFileAttributes.class);
-        if ((since != null && changeTime(from, was).compareTo(since) < 0) || (asOf != null && was.lastModifiedTime().compareTo(asOf) > 0)) {
+        if (asOf != null && was.lastModifiedTime().compareTo(asOf) > 0) {
           continue;
         }
         String digest = offered == null ? null : digest(from, ba);
@@ -260,7 +257,7 @@ public class OutputFolderSync {
         if (there && Files.size(to) == Files.size(from) && sameContent(from, to, ba, bb)) {
           // (not noted as offered: it may be what the build made of the file, put back in the staging folder)
           result.unchanged++;
-        } else if (copy(from, to, since == null && asOf == null ? null : was)) {
+        } else if (copy(from, to, asOf == null ? null : was)) {
           result.written++;
           if (digest != null) {
             offered.put(rel, digest);
@@ -388,18 +385,6 @@ public class OutputFolderSync {
     } catch (IOException ex) {
       Files.deleteIfExists(copy);
       throw ex;
-    }
-  }
-
-  /**
-   * when a file was last written, or its attributes set: unlike its modification time (Jekyll gives a static file its
-   * source's), it can't be set back. Its modification time where the file system doesn't say (Windows)
-   */
-  static FileTime changeTime(Path file, BasicFileAttributes attributes) {
-    try {
-      return (FileTime) Files.getAttribute(file, "unix:ctime");
-    } catch (IOException | UnsupportedOperationException | IllegalArgumentException e) {
-      return attributes.lastModifiedTime();
     }
   }
 
