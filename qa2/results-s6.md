@@ -112,3 +112,49 @@ page or an intro file. F1/F2/F6 = int full builds of a pristine copy with the ed
 - every edit reached output/en/.
 - I1 = I2 = W6 = F6; F1 = W1f; F2 = W2. I1/I2/W6 vs R1: only `.index.db` ResourceList in hl7.fhir.uv.cpg.en.tgz (F3).
 - verdict: **same** (pre-existing diffs: F3 .index.db).
+
+## Phase D
+- jar: int = qa/page-only-ready at 5111080 (Phase D started before the move to e6a0c6a2; per the plan it ran to the end
+  on 5111080). master = 2ccca17. Same declared template copy, same edits and heap (7600m) on both jars.
+- declared copies, from qa2/script-inputs.md: crmi, cqm, cpg: `hl7.fhir.template#current` copy with the hl7 list; ucum:
+  `hl7.be.fhir.template` copy with the fhir2 list; eeqre (#tehik-template) and lars (#custom-template): `script-inputs`
+  with the fhir.base list added to the local template's config.json (both are based on fhir.base and add no script).
+- steps: W1a page edit, W1b xml page edit (lars), W1c intro-notes (cpg), W1d an include (ucum results-run.md, cpg
+  artifact-profiles.html) or menu.xml (crmi, cqm, lars), W1e add page, W1f delete it, W2 a non-page edit (profile), W1a2
+  page edit again. n/a where the IG has no such file. F1 = int full build after W1f, F2 after W1a2.
+- cells: int mode/seconds | master mode/seconds. P = Page Rebuild, D = Differential, C = Complete.
+
+| IG | W1a | W1b | W1c | W1d | W1e | W1f | W2 | W1a2 | F1 = W1f | F2 = W1a2 | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| eeqre | P 5.5 / C 37.6 | n/a | n/a | n/a | C 54.1 / C 54.6 | C 55.6 / C 52.1 | C 52.6 / C 49.6 | P 5.0 / C 32.6 | yes | yes | ok |
+| ucum | P 7.5 / D 22.0 | n/a | n/a | P 9.0 / D 20.5 | C 27.5 / C 32.0 | C 27.5 / C 31.0 | C 30.0 / C 28.5 | P 8.0 / D 19.5 | yes | yes | ok |
+| crmi | P 37.5 / D 85.6 | n/a | n/a | D 86.6 / D 83.6 (menu.xml, declared) | C 157.7 / C 153.7 | C 143.7 / C 149.2 | C 143.7 / C 151.7 | P 35.0 / D 81.1 | yes | yes | ok |
+| lars | P 48.5 / D 118.6 | D 123.2 / D 118.6 | n/a | P 48.5 / D 115.7 (menu.xml, not declared by fhir.base) | C 147.2 / C 131.2 | C 140.2 / C 139.7 | C 143.7 / C 148.2 | P 47.6 / D 118.2 | yes | yes | ok, W1b not a page rebuild |
+| cqm | P 35.5 / D 80.1 | n/a | n/a | D 91.1 / D 84.7 (menu.xml, declared) | C 134.8 / C 125.8 | C 120.7 / C 124.8 | D 102.7 / D 105.8 | P 36.6 / D 88.7 | yes (package.db) | yes (package.db) | ok |
+| cpg | P 59.6 / D 128.2 | n/a | P 66.5 / D 126.2 | P 66.5 / D 126.2 | C 222.7 / C 224.3 | C 227.3 / C 226.9 | C 233.3 / C 232.4 | P 61.1 / D 128.3 | yes | yes | ok |
+
+First builds (int / master, s): eeqre 77 / 74, ucum 48 / 51, crmi 166 / 154, lars 178 / 164, cqm 151 / 139, cpg 250 /
+238. F1, F2 (s): eeqre 71, 71; ucum 47, 48; crmi 171, 189; lars 159, 170; cqm 140, 132; cpg 230, 229.
+
+Notes
+- No regression. Every edit reached the output on both jars; QA counts equal in every build. int watch W1f and W1a2
+  equal the int full builds F1 and F2 byte for byte after the round masks (cqm: only package.db CodeSystemListRefs,
+  R4 vs THO 7.5.0 links, the round-1 nondeterminism, seen in both directions). int and master watch snapshots are equal
+  at W1f and W1a2 except lars and cqm below.
+- Page rebuild seconds vs master on the same page edit: eeqre 5 vs 35, ucum 8 vs 21, crmi 36 vs 83, lars 48 vs 118,
+  cqm 36 vs 84, cpg 60 vs 127. Add/delete page and profile edits take the same path and time on both jars.
+- Declared-path check (step 6): crmi and cqm W1d edit `input/includes/menu.xml`, listed for hl7.fhir.template. int logs
+  "Complete Build (.../input/includes/menu.xml is read by the template's scripts)", then Rapido runs its Differential
+  Build like master; menu change visible on every checked page. lars W1d edits menu.xml too, but its template is based on
+  fhir.base, whose list does not have menu.xml (fhir.base's scripts don't read it), so a page rebuild is right there; the
+  change is in index.html and security.html and W1a2 equals F2.
+- lars W1b (input/pagecontent/downloads.xml): int logs "Complete Build (.../downloads.xml is transformed)" and runs a
+  Differential Build, so W1b doesn't get a page rebuild. The plan expects one for W1b. Output is correct; the cost is
+  123 s instead of about 48.
+- eeqre: its builds have 227 failed terminology calls (fhir.ee systems). master answers every watch edit with
+  "Complete Build (terminology server calls failed in the last build (227))"; int's page rebuild runs anyway and doesn't
+  retry them. Output is the same as a full build here (same failures); noted because it is a behaviour change.
+- lars, master watch W1a2 (Differential) vs int W1a2 (Page Rebuild): the mappings column order (L3), the text of three
+  twcore 0.3.2 StructureDefinitions in package-combined.tgz (trailing space, a relative vs R4 link), and one file entry
+  in qa.html. int's W1a2 equals F2 in all three, so these are on master's differential side (Phase C's master watch
+  never had a differential step after a complete one on lars).
