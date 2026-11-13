@@ -47,3 +47,38 @@ Tests: publisher.core suite, 752 tests on #42 and 789 on #45 after the merge. Fa
 - AIProcessorTest once on #42 (a timing flake in code #42 doesn't change; passes on reruns).
 
 #45 merge: TailWatch.enabled is now volatile and is set by the copy thread. A page rebuild waits for the copy before its first give-way check, and a complete build waits for it before the AI step's check.
+
+## Orchestrator review (on 69dc70f and f6bfcc3)
+
+New commits:
+- perf3/early-publish: 5509d19, 5d1aa98.
+- perf3/tail-restart: merges 97a2dc5 and 4657c25, then fae64d9.
+
+Suites, failing only GitUtilitiesTests[4] and ParallelFolderZipTest x2 (pre-existing):
+- early-publish: 755 tests;
+- tail-restart: 793 tests.
+
+1. **Copy failure rethrown in recordWatchFailure ends watch mode.** CONFIRMED by reading: `awaitEarlyPublish` throws by design (test `whatFailsTheCopyOfThePagesFailsTheBuildWhenItWaitsForIt`), and `recordWatchFailure` called it inside the watch loop's catch. FIXED:
+   - `finishEarlyPublish()` returns the copy's failure; `recordWatchFailure` logs it and adds it to `e` with addSuppressed, then goes on recording.
+   - The normal path wraps a RuntimeException with "Unable to put the pages in <output>: ...".
+   - Test: `aBuildThatHasFailedGetsWhatFailedTheCopyWithoutItBeingThrown`.
+2. **Interrupt cuts the wait short.** CONFIRMED with failing test `anInterruptDoesntCutShortTheWaitForTheCopy`: with the flag set, the wait returned while the copy was still running. FIXED: the wait is uninterruptible and the flag is restored afterwards.
+3. **Static files with their source's mtime skipped.** CONFIRMED with a failing test: a css with an old mtime was not copied.
+   - First fix, ctime (5509d19), was REFUTED by a UTG run: renames during the build reset the ctime of last build's leftovers, and the copy listed 85578 files again.
+   - FIXED in 5d1aa98 without clocks: with a kept staging folder and no Jekyll list, the copy takes only `.html` pages and files that exist in Jekyll's source folder (`temp/pages`).
+   - Test `whenJekyllDidntSayWhatItWroteOnlyItsFilesAreCopiedFromAKeptStagingFolder` covers both the old-mtime css and a package rewritten during the copy.
+   - UTG run fix4: the copy listed 81132 = Jekyll's files only. Page1 finished 913 s, pages up 658 s.
+4. **Skipped and changed-during-copy files not in Result; give-way still enabled.** REFUTED.
+   - Skipped files are never Jekyll's pages: they are last build's leftovers, or files written after the copy started.
+   - Nothing writes Jekyll's files during the copy: the AI step and html checks wait for it.
+   - So giving way leaves the output as #45 intends: this build's pages, and the last good build's other files.
+   - UTG fix2: 29031 written + 52100 unchanged = 81131, all of Jekyll's output.
+5. **Clock skew.** CONFIRMED with libfaketime: with the JVM clock 1 h behind the file system, 3 more early-publish tests failed (nothing copied). FIXED:
+   - `asOf` is now the mtime of a marker file created next to the staging folder.
+   - The `since` bound is gone (see 3).
+   - The suites pass under faketime at -1 h and +1 h.
+6. **Copy dies part way, watchPagesPublished stays false.** CONFIRMED with failing test `aCopyThatFailsPartWayCountsAsHavingPutPagesThere`. FIXED: a copy that throws marks the build's fields as having put pages there.
+7. **Tail give-way returns without waiting; the copy logs through a mutable pf.** CONFIRMED with failing test `theBuildGivesWayOnlyOnceTheCopyHasFinished` (gave way while the copy's last log line was still running). FIXED:
+   - `pagesPublished()` is now called last;
+   - the copy logs through its own build's logger;
+   - the generator's `givesWayBefore` waits for the copy when it gives way.
