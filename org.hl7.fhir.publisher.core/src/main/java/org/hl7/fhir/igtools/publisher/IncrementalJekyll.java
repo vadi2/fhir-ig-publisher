@@ -282,7 +282,8 @@ public class IncrementalJekyll {
    * KNOWN_CONFIG; otherwise the first line that isn't one of them, and the caller has Jekyll render every page in the
    * staging folder, as without -watch. Only YAML in block style is read: a TOML file, an indented line that isn't
    * part of a known setting, a quoted key, a byte order mark, flow style or a line break other than LF or CRLF counts
-   * as another setting.
+   * as another setting. Some YAML that has only known settings is turned down too (e.g. a list item at column 0, a
+   * directive): that only costs the incremental build.
    */
   public static String unknownConfig(Path source) throws IOException {
     for (String name : new String[] {"_config.yml", "_config.yaml", "_config.toml"}) {

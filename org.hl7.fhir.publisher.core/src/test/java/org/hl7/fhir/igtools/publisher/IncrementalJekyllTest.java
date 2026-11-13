@@ -221,6 +221,8 @@ class IncrementalJekyllTest {
     assertNull(IncrementalJekyll.unknownConfig(temp));
     write("_config.yml", "---\n# the template's\nkramdown:\n  toc_levels: 1..3\n\nexclude: [x]\r\ntitle: An IG\n");
     assertNull(IncrementalJekyll.unknownConfig(temp));
+    write("_config.yml", "kramdown:\n\n# a comment\n  toc_levels: 1..3\n");
+    assertNull(IncrementalJekyll.unknownConfig(temp));
     for (String config : new String[] {"plugins:\n  - jekyll-sitemap\n", "theme: minima\n", "collections:\n  rapido:\n    output: true\n",
         "keep_files: [.git, extra]\n", "includes_dir: x\n", "gems: [x]\n", "\"plugins\": [x]\n", "'theme': x\n", "\uFEFFplugins: [x]\n",
         "{plugins: [x]}\n", "kramdown:\n  toc_levels: 1..3\nplugins_dir: x\n", "  plugins: [x]\n  title: y\n",
