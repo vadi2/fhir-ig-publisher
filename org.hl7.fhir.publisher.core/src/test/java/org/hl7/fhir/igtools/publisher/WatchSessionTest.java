@@ -119,6 +119,85 @@ class WatchSessionTest {
   }
 
   @Test
+  void whatAStepOfTheBuildWroteIsNotAChange() throws IOException {
+    // the test data factories: they clear their folder, write other content in it on every build, and log
+    WatchSession s = session();
+    write("input/factories/Patient-1.json", "{\"id\": \"a\"}");
+    write("input/factories/old.json", "{}");
+    write("input/examples/mine.json", "{}");
+    write("input/examples/sub/mine.json", "{}");
+    write("input/fsh/b.fsh", "Profile: B");
+    write("input/cases/notes.md", "notes");
+    s.startBuild();
+    // saved while the build ran, before the factories
+    write("input/pagecontent/index.md", "# Home, edited");
+    WatchSession.StepWrites w = s.stepWriting("the factories",
+        List.of(dir.resolve("input/factories"), dir.resolve("input/log"), dir.resolve("tests")),
+        List.of(dir.resolve("input/examples/Bundle.json"), dir.resolve("input/cases/$id$/$kind$-case.json"), dir.resolve("output/$id$.json")));
+    Files.delete(dir.resolve("input/factories/old.json"));
+    write("input/factories/Patient-1.json", "{\"id\": \"b\"}");
+    write("input/factories/Patient-2.json", "{\"id\": \"c\"}");
+    write("input/log/factory.log", "ran at 10:00");
+    write("input/examples/Bundle.json", "{}");
+    write("tests/Bundle.json", "{}");
+    write("input/cases/1/a-case.json", "{}");
+    write("input/cases/2/x/b-case.json", "{}");
+    // not the factories' (next to a file they write, in a folder named like theirs, or elsewhere)
+    write("input/examples/sub/mine.json", "{\"edited\": true}");
+    write("input/examples/other.json", "{}");
+    write("input/cases/1/notes.md", "notes");
+    write("input/cases/notes.md", "more notes");
+    write("input/fsh/b.fsh", "Profile: B2");
+    Path in = dir.resolve("input").toAbsolutePath();
+    assertEquals(new HashSet<>(Arrays.asList(in.resolve("factories/old.json"), in.resolve("factories/Patient-1.json"),
+        in.resolve("factories/Patient-2.json"), in.resolve("log/factory.log"), in.resolve("examples/Bundle.json"), in.resolve("cases/1/a-case.json"),
+        in.resolve("cases/2/x/b-case.json"))), s.stepWrote(w), "tests and output aren't watched");
+    assertEquals(new HashSet<>(Arrays.asList(in.resolve("pagecontent/index.md"), in.resolve("examples/sub/mine.json"), in.resolve("examples/other.json"),
+        in.resolve("cases/1/notes.md"), in.resolve("cases/notes.md"), in.resolve("fsh/b.fsh"))), s.changesSinceBuildStart().all());
+
+    // nothing of it is a change for the next build either, and the next run of the factories is the build's again
+    s.startBuild();
+    assertEquals(6, s.changesSincePreviousBuild().all().size());
+    w = s.stepWriting("the factories", List.of(dir.resolve("input/factories")), List.of());
+    write("input/factories/Patient-1.json", "{\"id\": \"d\"}");
+    assertEquals(Collections.singleton(in.resolve("factories/Patient-1.json")), s.stepWrote(w));
+    assertTrue(s.changesSinceBuildStart().isEmpty());
+
+    // but an edit of a file there after the step ran is
+    write("input/factories/Patient-1.json", "{\"id\": \"by hand\"}");
+    assertEquals(Collections.singleton(in.resolve("factories/Patient-1.json")), s.changesSinceBuildStart().getModified());
+    assertNull(s.stepWriting("the factories", List.of(dir.resolve("tests")), List.of(dir.resolve("factories"))), "none of it is watched");
+  }
+
+  @Test
+  void whatTheFactoriesWroteDoesNotMakeSushiRunAgain() throws IOException {
+    // SUSHI runs before the factories, which write other content in input/factories on every build
+    WatchSession s = session();
+    write("input/factories/Patient-1.json", "{\"id\": \"0\"}");
+    for (int build = 1; build <= 3; build++) {
+      s.startBuild();
+      if (build == 1) {
+        assertFalse(s.canSkipSushi());
+        s.sushiRan();
+      } else {
+        assertTrue(s.canSkipSushi(), "build " + build + ": only a page changed since SUSHI ran");
+      }
+      if (build < 3) {
+        WatchSession.StepWrites w = s.stepWriting("the factories", List.of(dir.resolve("input/factories")), List.of());
+        write("input/factories/Patient-1.json", "{\"id\": \"" + build + "\"}");
+        write("input/factories/Patient-" + (build + 1) + ".json", "{}");
+        assertFalse(s.stepWrote(w).isEmpty());
+        // the user edits a page while the build runs
+        write("input/pagecontent/index.md", "# Home " + build);
+      }
+    }
+    // an edit SUSHI may read still runs it
+    write("input/fsh/a.fsh", "Profile: B");
+    s.startBuild();
+    assertFalse(s.canSkipSushi());
+  }
+
+  @Test
   void aSaveAfterAFailedBuildBuildsAgain() throws IOException {
     // the build may have failed for a reason outside the sources (a server down): saving retries
     WatchSession s = session();

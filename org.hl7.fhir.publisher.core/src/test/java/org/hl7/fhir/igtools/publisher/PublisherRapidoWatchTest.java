@@ -73,6 +73,117 @@ class PublisherRapidoWatchTest {
     assertEquals("the-last-build", HierarchicalTableGenerator.uuid);
   }
 
+  /**
+   * A build that gave up the rest of its tail for a change (see TailWatch) had validated and generated everything:
+   * the next build reuses it as it would after a build that ran to its end, not as after a failure
+   */
+  @Test
+  void theBuildAfterOneThatGaveUpItsTailReusesWhatItMade() throws Exception {
+    HierarchicalTableGenerator.uuid = "the-last-build";
+    PublisherFields first = build("a");
+    assertTrue(first.rapido.isCompleteBuild());
+    generate(first, null);
+    giveWay(first, dir.resolve("watched").resolve("a.fsh"));
+
+    HierarchicalTableGenerator.uuid = "a-new-session";
+    PublisherFields pf = build("a2");
+    assertFalse(pf.rapido.isCompleteBuild(), pf.rapido.getReason());
+    assertEquals(List.of("Observation-o.json (something it depends on changed)", "Patient-a.json (changed)",
+        "ig.json (always processed)", "page.md (always processed)"), pf.rapido.listRenderDirty());
+    assertEquals("the-last-build", HierarchicalTableGenerator.uuid);
+  }
+
+  /**
+   * A file in the IG folder that isn't one of the IG's sources (the state has those as they are when it is saved, as
+   * the template writes some of them): one that the build gave up its tail for is recorded as the build read it, so
+   * the next build doesn't reuse what was made with the old one
+   */
+  @Test
+  void aFileTheBuildGaveWayForIsSeenAsChangedByTheNextBuild() throws Exception {
+    cache = dir.resolve("cache");
+    Files.createDirectories(cache);
+    Path other = dir.resolve("input").resolve("ignoreWarnings.txt");
+    Files.createDirectories(other.getParent());
+    Files.writeString(other, "1");
+    finish(build("a"));
+    PublisherFields second = build("a");
+    assertFalse(second.rapido.isCompleteBuild(), second.rapido.getReason());
+    generate(second, null);
+    giveWay(second, other);
+
+    PublisherFields third = build("a");
+    assertTrue(third.rapido.isCompleteBuild());
+    assertEquals("changed: input/ignoreWarnings.txt", third.rapido.getReason());
+  }
+
+  @Test
+  void aFileAddedWhileTheBuildRanThatItGaveWayForIsSeenAsAddedByTheNextBuild() throws Exception {
+    cache = dir.resolve("cache");
+    Files.createDirectories(cache);
+    Files.createDirectories(dir.resolve("input"));
+    Files.writeString(dir.resolve("input").resolve("ignoreWarnings.txt"), "1");
+    finish(build("a"));
+    PublisherFields second = build("a");
+    assertFalse(second.rapido.isCompleteBuild(), second.rapido.getReason());
+    generate(second, null);
+    // (the build didn't read it: it isn't there until now)
+    giveWay(second, dir.resolve("input").resolve("new.txt"));
+
+    PublisherFields third = build("a");
+    assertTrue(third.rapido.isCompleteBuild());
+    assertEquals("changed: input/new.txt (added)", third.rapido.getReason());
+  }
+
+  /** The build stops after Jekyll because this file was saved (see TailWatch), as Publisher.finishIg() ends it */
+  private void giveWay(PublisherFields pf, Path edited) throws Exception {
+    Files.createDirectories(edited.getParent());
+    if (!Files.exists(edited)) {
+      Files.writeString(edited, "as the build read it");
+    }
+    SourceSnapshot before = SourceSnapshot.take(List.of(edited.getParent()), null);
+    Files.writeString(edited, "edited while the build ran");
+    SourceSnapshot.Changes changes = SourceSnapshot.take(List.of(edited.getParent()), before).changesSince(before);
+    TailWatch tail = new TailWatch(new TailWatch.ChangeSource() {
+      public void start() {
+      }
+
+      public SourceSnapshot.Changes settledChanges() {
+        return changes;
+      }
+
+      public void stop() {
+      }
+    }, false, null, s -> { });
+    tail.pagesPublished();
+    assertTrue(tail.givesWayBefore(TailWatch.Step.PACKAGES));
+    pf.watchTail = tail;
+    Publisher stopping = new Publisher();
+    stopping.setPf(pf);
+    stopping.tailAbandoned(new IniFile(tracker()), false);
+  }
+
+  /** where the build keeps its tracker and its record of outputs: the IG folder, or a folder in it */
+  private Path cache;
+
+  private Path cache() {
+    return cache != null ? cache : dir;
+  }
+
+  private String tracker() {
+    return cache().resolve(".build-tracker.ini").toString();
+  }
+
+  /** As theBuildAfterOneThatGaveUpItsTailReusesWhatItMade, but the build failed: the tracker says it started and didn't complete */
+  @Test
+  void theBuildAfterOneThatDidNotEndReusesNothing() throws Exception {
+    PublisherFields first = build("a");
+    generate(first, null);
+
+    PublisherFields pf = build("a2");
+    assertTrue(pf.rapido.isCompleteBuild());
+    assertEquals("after failure", pf.rapido.getReason());
+  }
+
   @Test
   void withoutARecordOfWhatTheLastBuildWroteTheBuildIsComplete() throws Exception {
     finish(build("a"));
@@ -323,6 +434,16 @@ class PublisherRapidoWatchTest {
 
   /** as finish(pf), with the html of the file named failing as generateResourceHtmlInner reports an exception */
   private RapidoOutputs.Change finish(PublisherFields pf, String failing) throws Exception {
+    RapidoOutputs.Change change = generate(pf, failing);
+    pf.rapido.save();
+    IniFile buildTracker = new IniFile(tracker());
+    buildTracker.setBooleanProperty("status", "complete", true, null);
+    buildTracker.save();
+    return change;
+  }
+
+  /** The part of finish() that comes before Jekyll: what is validated and generated, and recorded for the next build */
+  private RapidoOutputs.Change generate(PublisherFields pf, String failing) throws Exception {
     pf.rapido.finishValidation();
     replayed.clear();
     for (FetchedFile f : pf.fileList) {
@@ -347,12 +468,7 @@ class PublisherRapidoWatchTest {
       pf.rapido.startRecording(f, RapidoTracker.PHASE_SHEETS);
       pf.rapido.stopRecording();
     }
-    RapidoOutputs.Change change = new RapidoOutputs(pf.vsCache, pf.tempDir).update(pf.fileList, pf.changeList);
-    pf.rapido.save();
-    IniFile buildTracker = new IniFile(dir.resolve(".build-tracker.ini").toString());
-    buildTracker.setBooleanProperty("status", "complete", true, null);
-    buildTracker.save();
-    return change;
+    return new RapidoOutputs(pf.vsCache, pf.tempDir).update(pf.fileList, pf.changeList);
   }
 
   /** checkDependencies on new files, as a watch rebuild loads them, with the given content for Patient/a */
@@ -375,7 +491,7 @@ class PublisherRapidoWatchTest {
     PublisherFields pf = new PublisherFields();
     pf.logger = mock(ILoggingService.class);
     pf.rootDir = dir.toString();
-    pf.vsCache = dir.toString();
+    pf.vsCache = cache().toString();
     pf.tempDir = dir.resolve("temp").toString();
     pf.igpkp = mock(IGKnowledgeProvider.class);
     when(pf.igpkp.getCanonical()).thenReturn("http://example.org/ig");
@@ -389,7 +505,7 @@ class PublisherRapidoWatchTest {
     loader.setAccessible(true);
     ((PublisherIGLoader) loader.get(publisher)).setPf(pf);
 
-    publisher.checkDependencies(ig, new IniFile(dir.resolve(".build-tracker.ini").toString()));
+    publisher.checkDependencies(ig, new IniFile(tracker()));
     return pf;
   }
 

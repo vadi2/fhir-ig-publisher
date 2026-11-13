@@ -19,11 +19,13 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Calendar;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.Date;
 import java.util.Deque;
@@ -1062,8 +1064,21 @@ public class RapidoTracker {
     return b.toString();
   }
 
-  /** saves the state for the next build. Only called once the build has finished successfully */
+  /**
+   * saves the state for the next build. Only called once the build has finished successfully, or, in watch mode, has
+   * given up the steps after Jekyll for a change (see Publisher.tailAbandoned()): the state only holds what is
+   * validated and generated before Jekyll runs
+   */
   public void save() throws IOException {
+    save(Collections.emptySet());
+  }
+
+  /**
+   * As save(), when these files are known to have been saved while the build ran (watch mode: the changes the build
+   * gave up the rest of its tail for). Those among the other files are recorded as the build read them, not as they
+   * are now, so the next build sees that they changed
+   */
+  public void save(Collection<Path> editedWhileBuilding) throws IOException {
     JsonObject state = new JsonObject();
     state.add("version", STATE_VERSION);
     File sf = new File(stateFile);
@@ -1080,8 +1095,22 @@ public class RapidoTracker {
     // the template can write into the IG folder as well (the HL7 template copies the IG's Jira spec file there), so the
     // next build has to be compared with what the other files hold now, not with what they held when this one started.
     // (A file edited by hand while the build is running is taken as unchanged by the next build, as it would be by any
-    // build tool that compares with the end of the last build)
+    // build tool that compares with the end of the last build; except those in editedWhileBuilding, which are put
+    // back below as the build read them)
     Map<String, String> otherNow = scanOtherFiles();
+    Path root = Paths.get(pf.rootDir).toAbsolutePath().normalize();
+    for (Path p : editedWhileBuilding) {
+      Path edited = p.toAbsolutePath().normalize();
+      if (edited.startsWith(root)) {
+        String rel = root.relativize(edited).toString().replace(File.separatorChar, '/');
+        String read = otherFiles.get(rel);
+        if (read != null) {
+          otherNow.put(rel, read);
+        } else {
+          otherNow.remove(rel);
+        }
+      }
+    }
     global.put("other-files", hashOtherFiles(otherNow));
     JsonObject g = new JsonObject();
     for (Map.Entry<String, String> e : global.entrySet()) {

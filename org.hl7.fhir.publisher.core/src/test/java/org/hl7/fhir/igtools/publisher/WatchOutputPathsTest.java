@@ -156,7 +156,7 @@ class WatchOutputPathsTest {
         Publisher.watchFailureNote("out", false, false));
     String note = Publisher.watchFailureNote("out", true, false);
     assertTrue(note.startsWith("The build failed after pages were put in out as Jekyll rendered them (not html checked)"), note);
-    assertTrue(note.contains("is from the last build that succeeded"), note);
+    assertTrue(note.contains("is from the last build that ran to its end"), note);
     // with -destination nothing is recorded in the output folder, but pages that were put there are still told
     assertEquals(null, Publisher.watchFailureNote("out", false, true));
     assertEquals(note, Publisher.watchFailureNote("out", true, true));
