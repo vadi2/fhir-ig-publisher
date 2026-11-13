@@ -107,6 +107,8 @@ public class PageRebuild {
   private String onCheckMessages;
 
   private Map<Path, Stamp> tempFiles;
+  /** the files passed to the last prepareTemp() */
+  private Collection<String> lastChanged = Collections.emptyList();
   private Set<Path> tempFolders;
   private Map<Path, Stamp> outputAfterJekyll;
   /** the files in the output folder when Jekyll and the template's check had run in the build */
@@ -530,6 +532,7 @@ public class PageRebuild {
    * exception if something else in it changed
    */
   public void prepareTemp(Collection<String> changed) throws IOException {
+    lastChanged = changed;
     Path temp = Paths.get(pf.tempDir);
     for (String s : changed) {
       Path rel = temp.relativize(Paths.get(s));
@@ -561,6 +564,18 @@ public class PageRebuild {
     extraFolders.sort(Comparator.comparingInt(Path::getNameCount).reversed());
     for (Path p : extraFolders) {
       Files.delete(temp.resolve(p));
+    }
+  }
+
+  /**
+   * Records the files passed to the last prepareTemp() as they are now: Jekyll's incremental build (see
+   * IncrementalJekyll) gives a file written again with the same content its earlier time back
+   */
+  public void restamp() throws IOException {
+    Path temp = Paths.get(pf.tempDir);
+    for (String s : lastChanged) {
+      Path rel = temp.relativize(Paths.get(s));
+      tempFiles.put(rel, stamp(temp.resolve(rel)));
     }
   }
 

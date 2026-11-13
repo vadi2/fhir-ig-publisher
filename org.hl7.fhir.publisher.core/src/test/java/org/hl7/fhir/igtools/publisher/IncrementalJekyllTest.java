@@ -3,6 +3,7 @@ package org.hl7.fhir.igtools.publisher;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -214,7 +215,7 @@ class IncrementalJekyllTest {
       write(IncrementalJekyll.METADATA, "jekyll's record");
       write(IncrementalJekyll.SITE + "/index.html", "rendered");
       j.succeeded(temp);
-      assertEquals("_config.yml has settings that Jekyll's incremental build doesn't follow", j.prepare(temp), key);
+      assertEquals("Jekyll's configuration has settings that its incremental build doesn't follow", j.prepare(temp), key);
     }
   }
 
@@ -226,11 +227,21 @@ class IncrementalJekyllTest {
   }
 
   @Test
+  void aListingThatStoppedEarlyIsntWhatTheNextRunComparesWith() throws IOException {
+    ranOnce();
+    Files.createSymbolicLink(temp.resolve("_includes/link.md"), temp.resolve("_includes/index.md"));
+    assertNotNull(jekyll.prepare(temp));
+    ran();
+    Files.delete(temp.resolve("_includes/link.md"));
+    assertEquals("no earlier Jekyll run in this session", jekyll.prepare(temp));
+  }
+
+  @Test
   void theConfigCanBeYamlOrToml() throws IOException {
     Files.delete(temp.resolve("_config.yml"));
     write("_config.yaml", "theme: minima\n");
     ranOnce();
-    assertEquals("_config.yml has settings that Jekyll's incremental build doesn't follow", jekyll.prepare(temp));
+    assertEquals("Jekyll's configuration has settings that its incremental build doesn't follow", jekyll.prepare(temp));
     Files.delete(temp.resolve("_config.yaml"));
     write("_config.toml", "keep_files = [\"x\"]\n");
     assertFalse(IncrementalJekyll.writesToSite(temp));
@@ -295,14 +306,14 @@ class IncrementalJekyllTest {
   void configThatLoadsPluginsMakesEveryRunComplete() throws IOException {
     write("_config.yml", "plugins:\n  - jekyll-sitemap\n");
     ranOnce();
-    assertEquals("_config.yml has settings that Jekyll's incremental build doesn't follow", jekyll.prepare(temp));
+    assertEquals("Jekyll's configuration has settings that its incremental build doesn't follow", jekyll.prepare(temp));
   }
 
   @Test
   void collectionsMakeEveryRunComplete() throws IOException {
     write("_config.yml", "collections:\n  rapido:\n    output: true\n");
     ranOnce();
-    assertEquals("_config.yml has settings that Jekyll's incremental build doesn't follow", jekyll.prepare(temp));
+    assertEquals("Jekyll's configuration has settings that its incremental build doesn't follow", jekyll.prepare(temp));
   }
 
   @Test

@@ -31,7 +31,8 @@ import org.apache.commons.io.FileUtils;
  * {@code .jekyll-metadata}), or when the page's output file is missing. It doesn't follow {@code _data},
  * {@code _config.yml}, which pages and files exist ({@code site.pages} and the like) or plugins. So a build is
  * incremental only when Jekyll's last run in this session succeeded, everything that has been added, changed or
- * deleted in Jekyll's source folder since then is in {@code _includes}, and the site has no plugins. Any other build
+ * deleted in Jekyll's source folder since then is in {@code _includes}, the site can't have plugins (no
+ * {@code _plugins}, Gemfile or BUNDLE_GEMFILE), and the configuration has none of the settings in UNSAFE_CONFIG. Any other build
  * deletes {@code .jekyll-metadata}, and Jekyll renders every page, as it does without the option.
  *
  * <p>The publisher writes most of the source folder again in every build, mostly with the same content. A file whose
@@ -59,11 +60,12 @@ public class IncrementalJekyll {
 
   /** the folders that Jekyll reads although their names start with an underscore */
   private static final Set<String> JEKYLL_FOLDERS = Set.of("_includes", "_layouts", "_data", "_plugins", "_sass", "_posts", "_drafts");
-  /**
-   * settings in _config.yml that load plugins, or make Jekyll read other folders that start with an underscore (a
-   * folder that it doesn't read, such as _rapido, isn't followed here)
-   */
+  /** keep_files: what Jekyll leaves in its destination, which copySite() doesn't follow (see writesToSite) */
   private static final Pattern KEEP_FILES = Pattern.compile("^keep_files\\s*[:=]", Pattern.MULTILINE);
+  /**
+   * settings in Jekyll's configuration that load plugins, or make Jekyll read other folders that start with an
+   * underscore (a folder that it doesn't read, such as _rapido, isn't followed here)
+   */
   private static final Pattern UNSAFE_CONFIG = Pattern.compile("^(plugins|gems|plugins_dir|whitelist|collections|include|includes_dir|layouts_dir|data_dir|source|theme)\\s*[:=]", Pattern.MULTILINE);
 
   /**
@@ -124,7 +126,8 @@ public class IncrementalJekyll {
     changed = 0;
     Map<String, Source> now = new HashMap<>();
     String why = listSources(source, now);
-    pending = now;
+    // (a listing that stopped early can't be what the next run compares with)
+    pending = why == null ? now : null;
     if (why == null) {
       why = whyNotIncremental(source, now);
     }
@@ -149,7 +152,7 @@ public class IncrementalJekyll {
     }
   }
 
-  /** how many files in _includes the last {@link #prepare} found changed, if it found the run can be incremental */
+  /** how many files in _includes the last {@link #prepare} found added, changed or deleted, if it found the run can be incremental */
   public int getChanged() {
     return changed;
   }
@@ -242,7 +245,7 @@ public class IncrementalJekyll {
       return "the site can have plugins";
     }
     if (UNSAFE_CONFIG.matcher(config(source)).find()) {
-      return "_config.yml has settings that Jekyll's incremental build doesn't follow";
+      return "Jekyll's configuration has settings that its incremental build doesn't follow";
     }
     for (Map.Entry<String, Source> e : now.entrySet()) {
       if (e.getValue() != sources.get(e.getKey())) {

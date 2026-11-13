@@ -757,6 +757,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     prepareJekyll();
     if (replay == null) {
       keepForPageRebuild(() -> pageRebuild.beforeJekyll());
+    } else {
+      replay.restamp();
     }
 
     jekyllReturnedError = false;
@@ -4666,10 +4668,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         why = incremental.prepare(source);
       } catch (IOException e) {
         // Jekyll renders every page
-        incremental.failed(source);
+        try {
+          incremental.failed(source);
+        } catch (IOException e2) {
+          e.addSuppressed(e2);
+          throw e;
+        }
         why = "unable to compare the temp folder with Jekyll's last run: " + e.getMessage();
       }
-      log(why == null ? "Jekyll: incremental build ("+incremental.getChanged()+" files changed, all in _includes)" : "Jekyll: renders every page ("+why+")");
+      log(why == null ? "Jekyll: incremental build ("+incremental.getChanged()+" files in _includes added, changed or deleted)" : "Jekyll: renders every page ("+why+")");
     }
   }
 
@@ -4760,10 +4767,14 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           pageRebuild.notReusable("Jekyll returned an error");
         }
       } else {
-        if (incremental != null) {
-          incremental.failed(source);
-        }
         log("Jekyll has failed. Complete output from running Jekyll: " + pumpHandler.getBufferString());
+        if (incremental != null) {
+          try {
+            incremental.failed(source);
+          } catch (IOException e) {
+            ioex.addSuppressed(e);
+          }
+        }
         if (watchdog.killedProcess()) {
           log("Jekyll timeout exceeded: " + Long.toString(pf.jekyllTimeout /1000) + " seconds");
         } else {

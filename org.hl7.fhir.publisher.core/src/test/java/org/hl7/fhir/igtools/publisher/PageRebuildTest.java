@@ -313,6 +313,29 @@ class PageRebuildTest {
   }
 
   @Test
+  void aPageWrittenAgainWithTheSameContentKeepsTheTimeJekyllsIncrementalBuildGaveIt() throws IOException {
+    Path temp = dir.resolve("temp");
+    Path x = temp.resolve("_includes/x.xml");
+    write("temp/_includes/y.xml", "<y/>");
+    IncrementalJekyll jekyll = new IncrementalJekyll();
+    jekyll.prepare(temp);
+    state.beforeJekyll();
+    write("temp/" + IncrementalJekyll.METADATA, "record");
+    write("temp/" + IncrementalJekyll.SITE + "/index.html", "<html/>");
+    jekyll.succeeded(temp);
+    // a page rebuild writes x again, as it was: Jekyll's incremental build gives it its earlier time back
+    write("temp/_includes/x.xml", "<x/>");
+    Files.setLastModifiedTime(x, FileTime.fromMillis(System.currentTimeMillis() + 5000));
+    state.prepareTemp(Collections.singletonList(x.toString()));
+    assertNull(jekyll.prepare(temp));
+    state.restamp();
+    // the next page rebuild finds the temp folder as Jekyll left it
+    write("temp/_includes/y.xml", "<y>changed</y>");
+    Files.setLastModifiedTime(temp.resolve("_includes/y.xml"), FileTime.fromMillis(System.currentTimeMillis() + 10000));
+    state.prepareTemp(Collections.singletonList(temp.resolve("_includes/y.xml").toString()));
+  }
+
+  @Test
   void prepareTempLeavesTheWatchStagingFolderAlone() throws IOException {
     // in watch mode the build writes its output in the temp folder, and the sync moves files out of it
     pf.outputDir = dir.resolve("temp/.watch-output").toString();
