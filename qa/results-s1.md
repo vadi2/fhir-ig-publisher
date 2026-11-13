@@ -16,8 +16,8 @@ Status: in progress (Phase C)
 | HL7/fhir-consent-management | aad3563 | 7600m | 75 | 2/0/0 | 76 | 2/0/0 | 75 | W1 8.6, W2 43.8, W3 42.5, W4 55.8, W5 51.5, W6 41.1 | 75 | 75 | pass; F1 (intended), F4 pre-existing |
 | HL7/emedicinal-product-info | 66968b7 | 7600m | 135 | 7/0/0 | 136 | 7/0/0 | 118 | W1 23.0, W2 79.8, W3 82.7, W4 109.5, W5 109.1, W6 85.8 | 119 | 117 | pass; F1 (intended), F3 pre-existing; comparison pages differ only in embedded Java stack traces |
 | hyweb-cdc/niis | b343858 | 7600m | 116 | 0/0/0 | 99 | 0/0/0 | 100 | W1 9.4 MISSING, W2 73.7, W3 72.7, W4 73.3, W5 84.5, W6 68.4 (NOT OK) | 93 | 94 | pass (F3); W1 redone on index.md: change in output after 8.7 s, revert 8.0 s |
-| uzinfocom-org/digital-health-ig | 31e406f | 7600m | 748 | 5/268/9446 | 715 | 5/268/9446 | 695 | W1 21.5, W2 192.0, W3 183.7 (NOT OK) | 670 |  | open: watch W1-W3 ok (21.5 s, 192 s, 184 s); W4 publisher OOM-killed (see F5); R1-I1 only F1+F3; R1-I2 and W2-F2 show the ValueSet expansion parameter difference (F6, master check queued) |
-| HL7/US-Core | 3a65397 | 10g | 498 | 7/20/1 | 408 | 7/20/1 | 271 | W1 24.0, W2 294.7, W3 270.6, W4 269.2, W5 272.6, W6 274.6 | 292 (exit 1) | 310 (exit 1) | in progress: R1/I1/I2 qa equal, watch OK; diffs F3, F4, stack frames, plus package.db provenance-agent-type link (R4 on master, THO on int; master rerun queued). F2/F6 redo queued (my snapshot bug) |
+| uzinfocom-org/digital-health-ig | 31e406f | 7600m | 748 | 5/268/9446 | 715 | 5/268/9446 | 695 | W1 21.5, W2 192.0, W3 183.7 (NOT OK) | 670 |  | open: watch W1-W3 ok (21.5 s, 192 s, 184 s); W4 publisher OOM-killed (F5, master watch queued); R1-I1 only F1+F3; R1-I2 and W2-F2 differ only by F6 (pre-existing) |
+| HL7/US-Core | 3a65397 | 10g | 498 | 7/20/1 | 408 | 7/20/1 | 271 | W1 24.0, W2 294.7, W3 270.6, W4 269.2, W5 272.6, W6 274.6 |  | 310 (exit 1) | in progress: R1/I1/I2 qa equal, watch OK; diffs F3, F4, stack frames, plus package.db provenance-agent-type link (R4 on master, THO on int; master rerun queued). F2/F6 redo queued (my snapshot bug) |
 
 ## Findings
 
@@ -45,7 +45,7 @@ US-Core: F4 here also hits NamingSystem dui, uri and CLIA links (master R1 npi 6
 **F5. digital-health-ig watch: the publisher was killed for memory at W4 (add an example), int, being classified.**
 Heap 7600m, 16 GB machine, 14.3 GB cgroup memory limit, 2 GB swap. At W4 Rapido found 14077 temp files changed (W2 120, W3 151) and handed them to the kept-running Jekyll; java RSS 9.3 GB plus the Jekyll driver 4.4 GB and growing (3.7 GB peak on the first full build) went over the limit and the kernel killed java. The kept-running Jekyll comes from the base branch (e85860f2, ae762436, 26aaf1ac), not master. A master watch on the same IG with the same heap and swap is queued to see whether master gets through W4.
 
-**F6. digital-health-ig: ValueSet expansions written by a build that reuses the folder carry different expansion parameters (int, being classified).**
+- F6 (pre-existing): a second build in a reused folder (I2, watch W2) writes ValueSet expansions differently from a fresh build (expansion parameters, supplement list in the HTML header) and drops one 'expansion too large' INFO (hints 9446 vs 9445). Master built twice in one folder (MA1, MA2) shows the same 41 files and the same lost INFO; I2 vs MA2 shows only F1 and list order.
 In definitions.json.zip, validator*.pack, package-combined.tgz and the ValueSet pages, I2 (second build in the I1 folder) and the watch W2 output have `warning-experimental` and lack `used-valueset` / `includeDefinition` that fresh builds (R1, I1, F2) have. I2 also lacks one INFORMATION message (`The value set expansion is too large` on medication-classification-vs), so hints 9445 vs 9446. Master built twice in one folder is queued to see if master does the same.
 
 ## Compare method notes
