@@ -260,6 +260,7 @@ public class PageRebuild {
   public void beforeJekyll() throws IOException {
     tempFolders = new HashSet<>();
     tempFiles = listTemp(tempFolders);
+    lastChanged = Collections.emptyList();
   }
 
   /**
@@ -532,7 +533,7 @@ public class PageRebuild {
    * exception if something else in it changed
    */
   public void prepareTemp(Collection<String> changed) throws IOException {
-    lastChanged = changed;
+    lastChanged = List.copyOf(changed);
     Path temp = Paths.get(pf.tempDir);
     for (String s : changed) {
       Path rel = temp.relativize(Paths.get(s));
@@ -575,7 +576,11 @@ public class PageRebuild {
     Path temp = Paths.get(pf.tempDir);
     for (String s : lastChanged) {
       Path rel = temp.relativize(Paths.get(s));
-      tempFiles.put(rel, stamp(temp.resolve(rel)));
+      Stamp st = stamp(temp.resolve(rel));
+      if (st == null) {
+        throw new IOException("Page output " + s + " was removed before Jekyll ran");
+      }
+      tempFiles.put(rel, st);
     }
   }
 

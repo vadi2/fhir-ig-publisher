@@ -1,5 +1,6 @@
 package org.hl7.fhir.igtools.publisher;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -332,7 +333,8 @@ class PageRebuildTest {
     // the next page rebuild finds the temp folder as Jekyll left it
     write("temp/_includes/y.xml", "<y>changed</y>");
     Files.setLastModifiedTime(temp.resolve("_includes/y.xml"), FileTime.fromMillis(System.currentTimeMillis() + 10000));
-    state.prepareTemp(Collections.singletonList(temp.resolve("_includes/y.xml").toString()));
+    // without restamp(), x.xml would count as changed since the build, and the page rebuild would fail
+    assertDoesNotThrow(() -> state.prepareTemp(Collections.singletonList(temp.resolve("_includes/y.xml").toString())));
   }
 
   @Test

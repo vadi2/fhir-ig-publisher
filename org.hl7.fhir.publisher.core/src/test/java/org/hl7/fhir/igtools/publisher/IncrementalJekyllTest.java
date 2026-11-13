@@ -6,6 +6,7 @@ import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -49,6 +50,15 @@ class IncrementalJekyllTest {
     write(IncrementalJekyll.METADATA, "jekyll's record");
     write(IncrementalJekyll.SITE + "/index.html", "rendered");
     jekyll.succeeded(temp);
+  }
+
+  /** (Windows needs a privilege to make one) */
+  private static void symlink(Path link, Path target) {
+    try {
+      Files.createSymbolicLink(link, target);
+    } catch (UnsupportedOperationException | IOException e) {
+      assumeTrue(false, "symbolic links not supported here: " + e);
+    }
   }
 
   private Path write(String rel, String content) throws IOException {
@@ -213,37 +223,36 @@ class IncrementalJekyllTest {
     assertNull(IncrementalJekyll.unknownConfig(temp));
     for (String config : new String[] {"plugins:\n  - jekyll-sitemap\n", "theme: minima\n", "collections:\n  rapido:\n    output: true\n",
         "keep_files: [.git, extra]\n", "includes_dir: x\n", "gems: [x]\n", "\"plugins\": [x]\n", "'theme': x\n", "\uFEFFplugins: [x]\n",
-        "{plugins: [x]}\n", "kramdown:\n  toc_levels: 1..3\nplugins_dir: x\n"}) {
+        "{plugins: [x]}\n", "kramdown:\n  toc_levels: 1..3\nplugins_dir: x\n", "  plugins: [x]\n  title: y\n",
+        "---\n  plugins: [x]\n", "kramdown:\n  x: 1\rplugins: [x]\n", "kramdown:\n  x: 1\u0085plugins: [x]\n", "kramdown:\n  x: 1\nplugins:\n  - x\n"}) {
       write("_config.yml", config);
       assertNotNull(IncrementalJekyll.unknownConfig(temp), config);
     }
   }
 
   @Test
-  void theConfigCanBeYamlOrToml() throws IOException {
+  void theConfigCanBeYamlButNotToml() throws IOException {
     Files.delete(temp.resolve("_config.yml"));
     write("_config.yaml", "theme: minima\n");
     assertEquals("_config.yaml: theme: minima", IncrementalJekyll.unknownConfig(temp));
-    Files.delete(temp.resolve("_config.yaml"));
-    write("_config.toml", "title = \"An IG\"\n[kramdown]\ntoc_levels = \"1..3\"\n");
+    write("_config.yaml", "kramdown:\r\n  toc_levels: 1..3\r\n");
     assertNull(IncrementalJekyll.unknownConfig(temp));
-    for (String config : new String[] {"keep_files = [\"x\"]\n", "[collections.rapido]\noutput = true\n", "[kramdown]\n[[plugins]]\n"}) {
-      write("_config.toml", config);
-      assertNotNull(IncrementalJekyll.unknownConfig(temp), config);
-    }
+    Files.delete(temp.resolve("_config.yaml"));
+    write("_config.toml", "title = \"An IG\"\n");
+    assertEquals("_config.toml", IncrementalJekyll.unknownConfig(temp));
   }
 
   @Test
   void somethingThatIsntAFileMakesTheRunComplete() throws IOException {
     ranOnce();
-    Files.createSymbolicLink(temp.resolve("_includes/link.md"), temp.resolve("_includes/index.md"));
+    symlink(temp.resolve("_includes/link.md"), temp.resolve("_includes/index.md"));
     assertTrue(jekyll.prepare(temp).startsWith("Jekyll's source folder has something that isn't a file or a folder"));
   }
 
   @Test
   void aListingThatStoppedEarlyIsntWhatTheNextRunComparesWith() throws IOException {
     ranOnce();
-    Files.createSymbolicLink(temp.resolve("_includes/link.md"), temp.resolve("_includes/index.md"));
+    symlink(temp.resolve("_includes/link.md"), temp.resolve("_includes/index.md"));
     assertNotNull(jekyll.prepare(temp));
     ran();
     Files.delete(temp.resolve("_includes/link.md"));

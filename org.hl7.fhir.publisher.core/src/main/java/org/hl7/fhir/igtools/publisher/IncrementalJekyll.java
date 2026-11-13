@@ -33,8 +33,9 @@ import org.apache.commons.io.FileUtils;
  * {@code _config.yml}, which pages and files exist ({@code site.pages} and the like) or plugins. So a build is
  * incremental only when Jekyll's last run in this session succeeded, everything that has been added, changed or
  * deleted in Jekyll's source folder since then is in {@code _includes}, and the site can't have plugins (no
- * {@code _plugins}, Gemfile or BUNDLE_GEMFILE; the configuration has only the settings in KNOWN_CONFIG). Any other build
- * deletes {@code .jekyll-metadata}, and Jekyll renders every page, as it does without the option.
+ * {@code _plugins}, Gemfile or BUNDLE_GEMFILE). Any other build deletes {@code .jekyll-metadata}, and Jekyll renders
+ * every page, as it does without the option. Before that, the caller checks {@link #unknownConfig}: with a setting
+ * that isn't known, Jekyll writes to the staging folder without the option, and nothing here is used or changed.
  *
  * <p>The publisher writes most of the source folder again in every build, mostly with the same content. A file whose
  * content is the same as in Jekyll's last run (same size and SHA-256) gets that run's modification time back, so
@@ -62,15 +63,16 @@ public class IncrementalJekyll {
   /** the folders that Jekyll reads although their names start with an underscore */
   private static final Set<String> JEKYLL_FOLDERS = Set.of("_includes", "_layouts", "_data", "_plugins", "_sass", "_posts", "_drafts");
   /**
-   * the settings in Jekyll's configuration that only change how every page is rendered or which files are pages, so
-   * that the incremental build follows them (the IG templates set only kramdown). Others can load plugins (plugins,
-   * theme), make Jekyll read folders this doesn't follow (collections, includes_dir...) or keep files in its
-   * destination that copySite() would delete (keep_files)
+   * the settings in Jekyll's configuration that, while the configuration stays the same, don't make an incremental
+   * build differ from a complete one (a change to the configuration is a change outside _includes, so every page is
+   * rendered). The IG templates set only kramdown. Others can load plugins (plugins, theme), make Jekyll read folders
+   * this doesn't follow (collections, includes_dir...) or keep files in its destination that copySite() would delete
+   * (keep_files)
    */
   private static final Set<String> KNOWN_CONFIG = Set.of("kramdown", "markdown", "highlighter", "encoding", "liquid", "exclude", "title", "description", "url", "baseurl");
-  private static final Pattern YAML_KEY = Pattern.compile("([A-Za-z_][A-Za-z0-9_-]*)\\s*:(\\s.*)?");
-  private static final Pattern TOML_KEY = Pattern.compile("([A-Za-z_][A-Za-z0-9_-]*)\\s*=.*");
-  private static final Pattern TOML_TABLE = Pattern.compile("\\[([A-Za-z_][A-Za-z0-9_-]*)(\\.[^\\]]*)?\\]\\s*");
+  private static final Pattern YAML_KEY = Pattern.compile("([A-Za-z_][A-Za-z0-9_-]*)[ \\t]*:([ \\t].*)?");
+  /** line breaks in YAML other than LF and CRLF */
+  private static final Pattern OTHER_LINE_BREAK = Pattern.compile("[\\r\\u0085\\u2028\\u2029]");
 
   /**
    * A file in the source folder. A file that hasn't changed since the last run keeps the same instance, so a changed
@@ -276,35 +278,34 @@ public class IncrementalJekyll {
   }
 
   /**
-   * Whether this can be used: null if Jekyll's configuration (the first of the files it reads by default that is
-   * there) has only settings in KNOWN_CONFIG, or the line that isn't one. Anything this doesn't recognise as one of
-   * them (a quoted key, a byte order mark, flow style...) counts as another setting. Otherwise Jekyll writes to the
-   * staging folder and renders every page, as it does without -watch
+   * null if Jekyll's configuration (the first of the files it reads by default that is there) has only settings in
+   * KNOWN_CONFIG; otherwise the first line that isn't one of them, and the caller has Jekyll render every page in the
+   * staging folder, as without -watch. Only YAML in block style is read: a TOML file, an indented line that isn't
+   * part of a known setting, a quoted key, a byte order mark, flow style or a line break other than LF or CRLF counts
+   * as another setting.
    */
   public static String unknownConfig(Path source) throws IOException {
     for (String name : new String[] {"_config.yml", "_config.yaml", "_config.toml"}) {
       Path config = source.resolve(name);
       if (Files.isRegularFile(config)) {
-        boolean toml = name.endsWith(".toml");
-        // in TOML, the lines after a table's header are its keys
-        boolean inKnownTable = false;
-        for (String line : new String(Files.readAllBytes(config), StandardCharsets.UTF_8).split("\\r?\\n")) {
-          if (line.isBlank() || line.startsWith("#") || line.startsWith(" ") || line.startsWith("\t") || (!toml && line.equals("---"))) {
+        if (name.endsWith(".toml")) {
+          return name;
+        }
+        String text = new String(Files.readAllBytes(config), StandardCharsets.UTF_8).replace("\r\n", "\n");
+        if (OTHER_LINE_BREAK.matcher(text).find()) {
+          return name + ": a line break other than LF or CRLF";
+        }
+        // whether the lines that are indented belong to a known setting
+        boolean inKnown = false;
+        for (String line : text.split("\n")) {
+          if (line.isBlank() || line.startsWith("#") || (inKnown && (line.startsWith(" ") || line.startsWith("\t")))) {
             continue;
           }
-          if (toml && line.startsWith("[")) {
-            Matcher m = TOML_TABLE.matcher(line);
-            inKnownTable = m.matches() && KNOWN_CONFIG.contains(m.group(1));
-            if (inKnownTable) {
-              continue;
-            }
-          } else {
-            Matcher m = (toml ? TOML_KEY : YAML_KEY).matcher(line);
-            if (inKnownTable || m.matches() && KNOWN_CONFIG.contains(m.group(1))) {
-              continue;
-            }
+          Matcher m = YAML_KEY.matcher(line);
+          inKnown = m.matches() && KNOWN_CONFIG.contains(m.group(1));
+          if (!inKnown && !line.equals("---")) {
+            return name + ": " + line;
           }
-          return name + ": " + line;
         }
         return null;
       }
