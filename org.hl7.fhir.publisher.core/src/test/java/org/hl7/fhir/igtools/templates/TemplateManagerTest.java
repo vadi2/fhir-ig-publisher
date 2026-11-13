@@ -78,24 +78,36 @@ class TemplateManagerTest {
   }
 
   private static final String SCRIPT = "\"script\": \"scripts/ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}, \"otherScripts\": []";
+  private static final String UNDECLARED = "the template doesn't declare what its scripts read (script-inputs in its config.json)";
+
+  /** a template in a local folder (an ig.ini override), with its config.json (if not null) and files */
+  private void template(String name, String base, String config, String... files) throws IOException {
+    write(name + "/package/package.json", "{\"name\": \"" + name + "\", \"version\": \"1.0.0\", \"type\": \"fhir.template\""
+        + (base == null ? "" : ", \"base\": \"" + base + "\", \"dependencies\": {\"" + base + "\": \"1.0.0\"}") + "}");
+    if (config != null) {
+      write(name + "/config.json", config);
+    }
+    for (String f : files) {
+      write(name + "/" + f, "<project/>");
+    }
+  }
+
+  private Template load(String name) throws IOException {
+    StringBuilder ini = new StringBuilder("[IG]\nig = input/ig.xml\ntemplate = " + name + "#1.0.0\n");
+    for (String t : new String[] {"base.t", "middle.t", "child.t"}) {
+      ini.append(t).append(" = ").append(t).append("\n");
+    }
+    write("ig.ini", ini.toString());
+    TemplateManager tm = manager();
+    tm.loadTemplateOverrides(new IniFile(dir.resolve("ig.ini").toString()), dir.toString());
+    return tm.loadTemplate(name + "#1.0.0", dir.toString(), "x.y", false, false, false);
+  }
 
   /** a template whose base template declares that its scripts read input/data */
   private Template childOf(String childConfig, String... childFiles) throws IOException {
-    write("base/package/package.json", "{\"name\": \"base.t\", \"version\": \"1.0.0\", \"type\": \"fhir.template\"}");
-    write("base/config.json", "{" + SCRIPT + ", \"script-inputs\": [\"input/data\"]}");
-    write("base/scripts/ant.xml", "<project/>");
-    write("child/package/package.json", "{\"name\": \"child.t\", \"version\": \"1.0.0\", \"type\": \"fhir.template\", "
-        + "\"base\": \"base.t\", \"dependencies\": {\"base.t\": \"1.0.0\"}}");
-    if (childConfig != null) {
-      write("child/config.json", childConfig);
-    }
-    for (String f : childFiles) {
-      write("child/" + f, "<project/>");
-    }
-    write("ig.ini", "[IG]\nig = input/ig.xml\ntemplate = child.t#1.0.0\nchild.t = child\nbase.t = base\n");
-    TemplateManager tm = manager();
-    tm.loadTemplateOverrides(new IniFile(dir.resolve("ig.ini").toString()), dir.toString());
-    return tm.loadTemplate("child.t#1.0.0", dir.toString(), "x.y", false, false, false);
+    template("base.t", null, "{" + SCRIPT + ", \"script-inputs\": [\"input/data\"]}", "scripts/ant.xml");
+    template("child.t", "base.t", childConfig, childFiles);
+    return load("child.t");
   }
 
   private String inIg(String path) {
@@ -118,13 +130,51 @@ class TemplateManagerTest {
 
   @Test
   void aChildThatNamesAScriptWithoutDeclaringDropsTheDeclaration() throws IOException {
-    Template t = childOf("{\"script\": \"scripts/child.xml\", \"otherScripts\": []}", "scripts/child.xml");
-    assertEquals("the template doesn't declare what its scripts read (script-inputs in its config.json)", t.whyNoPageRebuild());
+    assertEquals(UNDECLARED, childOf("{\"script\": \"scripts/child.xml\", \"otherScripts\": []}", "scripts/child.xml").whyNoPageRebuild());
+  }
+
+  @Test
+  void aChildThatNamesTargetsWithoutDeclaringDropsTheDeclaration() throws IOException {
+    assertEquals(UNDECLARED, childOf("{\"targets\": {\"onCheck\": \"onCheck\"}}").whyNoPageRebuild());
+  }
+
+  @Test
+  void aChildThatNamesOtherScriptsWithoutDeclaringDropsTheDeclaration() throws IOException {
+    assertEquals(UNDECLARED, childOf("{\"otherScripts\": [\"scripts/more.xml\"]}").whyNoPageRebuild());
   }
 
   @Test
   void aChildThatOverwritesTheAntScriptDropsTheDeclaration() throws IOException {
-    Template t = childOf(null, "scripts/ant.xml");
-    assertEquals("the template doesn't declare what its scripts read (script-inputs in its config.json)", t.whyNoPageRebuild());
+    assertEquals(UNDECLARED, childOf(null, "scripts/ant.xml").whyNoPageRebuild());
+  }
+
+  @Test
+  void aChildThatOverwritesTheAntScriptAndShipsOtherActiveFilesDropsTheDeclaration() throws IOException {
+    // a.js comes before scripts/ in the file list, where the scan for active content stops
+    assertEquals(UNDECLARED, childOf(null, "a.js", "scripts/ant.xml").whyNoPageRebuild());
+  }
+
+  @Test
+  void aChildThatShipsFilesThatCouldBeScriptsDropsTheDeclaration() throws IOException {
+    assertEquals(UNDECLARED, childOf(null, "scripts/gen.py").whyNoPageRebuild());
+  }
+
+  @Test
+  void aTemplateAfterADropCanDeclareAgain() throws IOException {
+    template("base.t", null, "{" + SCRIPT + ", \"script-inputs\": [\"input/data\"]}", "scripts/ant.xml");
+    template("middle.t", "base.t", "{\"script\": \"scripts/middle.xml\", \"otherScripts\": []}", "scripts/middle.xml");
+    template("child.t", "middle.t", "{\"script-inputs\": [\"package-list.json\"]}");
+    Template t = load("child.t");
+    assertNull(t.whyNoPageRebuild());
+    assertEquals(Collections.singletonList(inIg("package-list.json")), t.getScriptInputs());
+  }
+
+  @Test
+  void theConfigIsAsItWasWhenNoTemplateDeclares() throws IOException {
+    String config = "{" + SCRIPT + "}";
+    template("base.t", null, config, "scripts/ant.xml");
+    template("child.t", "base.t", null, "scripts/ant.xml");
+    assertEquals(UNDECLARED, load("child.t").whyNoPageRebuild());
+    assertEquals(config, new String(Files.readAllBytes(dir.resolve("template/config.json")), StandardCharsets.UTF_8));
   }
 }

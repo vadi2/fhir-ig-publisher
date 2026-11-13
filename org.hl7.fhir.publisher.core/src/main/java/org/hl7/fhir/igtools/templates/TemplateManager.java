@@ -64,9 +64,8 @@ public class TemplateManager {
   private Map<String, String> templateOverrides = new LinkedHashMap<>(); // template id (name#version, or just name) -> local folder
   private boolean usedOverride;
   private final List<String> localFolders = new ArrayList<>(); // the local folders the last template was loaded from
-  private boolean scriptInputsDropped;
+  private boolean scriptInputsDropped; // like configs, for the one template a manager loads
 
-  private static final String OVERWRITES_ANT_SCRIPT = "Template contains a registered ant script";
   private static final String ACCESSIBLE_MARKER = "[%accessibility-routines%]";
   private static final String JS_ROUTINE_NAME_REGEX = "[A-Za-z_$][A-Za-z0-9_$]*(\\.[A-Za-z_$][A-Za-z0-9_$]*)*";
 
@@ -120,7 +119,6 @@ public class TemplateManager {
     this.autoMode = autoMode;
     this.usedOverride = false;
     localFolders.clear();
-    scriptInputsDropped = false;
     if (autoMode && !templateOverrides.isEmpty()) {
       // overrides would let an IG substitute arbitrary content for a trusted template id
       logger.logMessage("Template overrides in ig.ini are ignored in auto-build mode: "+String.join(", ", templateOverrides.keySet()));
@@ -282,9 +280,9 @@ public class TemplateManager {
           }
 
           String s = extension(n);
-          if (antScripts.contains(n)) {
+          if (antScripts.contains(unix)) {
             // nah, if you overwrite an xml ant script, you're doing active content
-            scriptReason = OVERWRITES_ANT_SCRIPT;
+            scriptReason = "Template contains a registered ant script";
           } else if (!Utilities.existsInList(s,
               ".html", ".css", ".png", ".gif", ".oet", ".json", ".xml", ".ico", ".jpg", ".md", ".ini",
               ".eot", ".otf", ".svg", ".ttf", ".woff", ".woff2", ".txt", ".yml", ".yaml", ".liquid", ".gitignore")) {
@@ -359,14 +357,16 @@ public class TemplateManager {
   }
   
   /**
-   * A template's script-inputs declare what the scripts of that template and the templates before it read (see
-   * Template.whyNoPageRebuild()). A template that changes the scripts (names a script, targets or other scripts, or
-   * overwrites an ant script) without declaring them too makes the declarations before it untrue, so they are dropped
+   * script-inputs declare what a template's scripts read (see Template.whyNoPageRebuild()); the merged config lists
+   * the declarations of all the templates. A template with active content (a script, targets, an overwritten ant
+   * script, files that could be scripts) or other scripts that doesn't declare what they read makes the declarations
+   * before it incomplete, so they are dropped
    */
   private void dropUndeclaredScriptInputs(JsonObject config, String scriptReason) {
-    boolean changesScripts = OVERWRITES_ANT_SCRIPT.equals(scriptReason)
-        || (config != null && (config.has("script") || config.has("targets") || config.has("otherScripts")));
-    if (changesScripts && (config == null || !config.has(Template.SCRIPT_INPUTS))) {
+    if (configs.stream().noneMatch(c -> c.has(Template.SCRIPT_INPUTS)) || (config != null && config.has(Template.SCRIPT_INPUTS))) {
+      return;
+    }
+    if (scriptReason != null || (config != null && config.has("otherScripts"))) {
       for (JsonObject c : configs) {
         if (c.has(Template.SCRIPT_INPUTS)) {
           c.remove(Template.SCRIPT_INPUTS);
