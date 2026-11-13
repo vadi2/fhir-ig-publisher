@@ -2,6 +2,8 @@
 
 Status: Phase C in progress (2 of 6 IGs done).
 
+Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar only rebuilds pages when the template has no script or declares `script-inputs` in its config.json (Template.whyNoPageRebuild). fhir2.base.template (#current and #0.1.0), which every template here extends, has scripts/ant.xml (onLoad/onGenerate/onCheck) and no script-inputs; hl7.base and hl7.be.fhir add their own ant scripts. So every watch rebuild logs "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then does the usual Differential/Complete build, as master does. These runs show the branch changes nothing when the feature is off; they don't exercise the page rebuild itself.
+
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951
 - int.jar: qa/page-only-ready 5111080dd56c99f6aa6b1ad62a56978f9d0959bb ("Page rebuild: simplify", on top of master 2ccca17)
 - VM: 4 CPU, 15 GB, 16 GB swap file. Heap 7600m for all IGs. Times in seconds, wall clock of the whole java run. R1 of the first IG includes filling the empty package cache.
