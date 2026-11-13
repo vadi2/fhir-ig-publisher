@@ -1,6 +1,6 @@
 # QA round 2 results, shard s4
 
-**Status: Phase C in progress (2/7 IGs done).**
+**Status: Phase C in progress (3/7 IGs done).**
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (sha256 56b2e4adb4af80ef5b495b3013b726df254243b5437eb500b2c7c6a5ae5b238f)
 - VM: 4 CPU, 15 GB, 8 GB swap. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx7600m -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org -package-cache-folder /home/user/qa/pcf`, fresh `cp -a` of the clone, no -threads.
@@ -8,6 +8,7 @@
 - Times in seconds: whole java run for R1/I1/I2/F1/F2; watch: first build, then each edit to the next "Watching for changes". IW = int.jar watch, MW = master.jar watch, same edits, same heap.
 - QA = err/warn/hints from qa.txt; messages compared by file + text (run folder masked).
 - F6 = I1 (fresh full build of the clean sources by int.jar), so W6 is compared to I1 and to R1. Output snapshots taken while the watch was idle after the step (not stopped).
+- THO-normalised (where stated): `terminology.hl7.org/<version>/NamingSystem-*` links and their display text (DICOM Unique Id/DUI, NPI/United States National Provider Identifier, URI/Uniform Resource Identifier (URI)), the known pre-existing F4; raw counts are given too.
 - Masked: dates/times/timestamps, UUIDs, run folder, "used by" entries in *-ref-*list.json/csv, fragment-usage-analysis.csv, qa* reports; archives (zip/tgz/pack/xlsx) compared entry by entry, sqlite dumped sorted.
 
 | IG | commit | heap | R1 | R1 qa | verdict |
@@ -26,6 +27,7 @@
 |---|---|---|---|---|---|---|---|---|---|
 | HL7Chile/MHD-CL | 73 | 0/28/5 | 54 | 0/27/5 | 55 / 57 | 0/27/5 each | 58; 27 26 30 38 37 40 32 37 33 35 (no W1b) | 59; 27 27 30 36 37 36 34 36 38 35 | same (pre-existing diffs only) |
 | hl7-eu/readi | 58 | 165/58/39 | 55 | 165/58/39 | 57 / 57 | 165/58/39 each | 55; 24 32 37 35 36 34 41 40 40 (no W1b, W1c) | 60; 24 35 39 40 40 43 44 40 42 | same (pre-existing diffs only) |
+| HL7/imaging-service-request-ig | 78 | 195/225/244 | 74 | 195/225/244 | 78 / 78 | 195/225/244 each | 80; 37 65 64 60 60 44 61 60 58 (no W1b, W1d) | 86; 40 70 66 64 64 46 66 67 65 | same (pre-existing diffs only) |
 
 ### HL7Chile/MHD-CL
 - Template: local hl7chile-ig-template on hl7.fhir.template (ant/onCheck scripts, no script-inputs): every int.jar watch step logged "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then ran master's Rapido path (Differential for W1a/W1c/W3, Complete for the rest), same modes and times as master. Page-only rebuild never used here, as intended.
@@ -40,3 +42,11 @@
 - QA identical everywhere (165/58/39, 265 messages, also for I2 and the watch: no SCT-edition-style drop here).
 - R1 vs I1, R1 vs I2, R1 vs W6: only package .index.db ResourceList (F3, pre-existing). I1 vs I2, F2 vs W2, I1 vs W6: 0 files.
 - F1 vs W1f: 36 files (Bundle-readi-sample-1-r4 json/xml/ttl/html/md, examples.*.zip, ai.zip, packages, package.db) differ only in the narrative link `terminology.hl7.org/7.1.0` (F1) vs `7.5.0` (W1f) for NamingSystem-uri: F4, pre-existing (round 1 showed master flipping between these for this bundle). 0 files with that version masked.
+
+### HL7/imaging-service-request-ig
+- Template hl7.fhir.template#current (no script-inputs): every int.jar watch step fell back to master's Rapido path, same modes and times as master.
+- Edits: W1a architecture.md, W1b n/a, W1c new pagecontent/StructureDefinition-imaging-practitioner-intro.md (Complete Build "files added or removed", as master), W1d n/a (no includes/menu file; menu in sushi-config), W1e/W1f qa-new.md + sushi-config pages, W2 Practitioner profile Description, W3 practitioner family name (also in the create-order Bundle), W4/W5 new Practitioner instance (.fsh), W6 revert. All markers found/absent as expected.
+- QA identical everywhere (195/225/244, 669 messages).
+- Raw: R1 vs I1 2 files (F3 .index.db), R1 vs I2 76, I1 vs I2 74, F1 vs W1f 70, F2 vs W2 4, I1 vs W6 0, R1 vs W6 2 (F3).
+- The 74/70 files are Bundle-example-order-bundle and ImagingStudy-example-requested-procedure-imaging-study (json/ttl/xml, en/*.html, .md, ai.zip, examples.*.zip, packages, package.db): NamingSystem-dui narrative link `terminology.hl7.org/7.5.0` vs `5.0.0` and display `DICOM Unique Id` vs `DUI` (F4, pre-existing, same as round 1). The 4 in F2 vs W2 are codesystem-ref-all-list.csv "used by" order with a quoted field (masked once quotes are ignored).
+- THO-normalised: R1 vs I2 2 (F3), I1 vs I2 0, F1 vs W1f 0, F2 vs W2 0.
