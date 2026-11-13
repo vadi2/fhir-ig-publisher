@@ -1,6 +1,6 @@
 # QA round 2 results, shard s8
 
-Status: Phase C running (4 of 7 IGs done); Phase D queued.
+Status: Phase C builds done for all 7; master watch for TWCMIG/ch-emr and Phase D rerunning (first launch passed a relative jar path and did not build).
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (jar sha256 4cfad5d75546efb3...)
 - int.jar: qa/page-only-ready 5111080dd56c99f6aa6b1ad62a56978f9d0959bb (jar sha256 166cb202a37b87b5...)
@@ -14,7 +14,7 @@ Status: Phase C running (4 of 7 IGs done); Phase D queued.
 | HL7/reg-workflow-pharma | ff82d32 | 7600m | 79 | 1/0/0/0 | 63 | 66 | int first:67 W1a:33 W1c:29 W1d:49 W1e:47 W1f:47 restart:50 W2:54 restart:48 W3:41 W4:52 W5:54 W6:53; master first:67 W1a:33 W1c:33 W1d:53 W1e:52 W1f:51 restart:56 W2:59 restart:64 W3:49 W4:62 W5:57 W6:56 | 64 | 64 | 70 | QA equal in every build and step, all edits reached output. W1f=F1, W2=F2, W6=F6=I1 (0 files). R1 vs I1/I2: only P5 (.index.db rows in en.tgz: R1 0, int 43) |
 | HL7/fhir-us-ndh | f56330f | 7600m | 315 | 0/11/13/0 | 151 | 125 | int first:142 W1a:62 W1c:63 W1d:61 W1e:111 W1f:116 restart:97 W2:114 restart:94 W3:91 W4:114 W5:110 W6:109; master first:138 W1a:67 W1c:58 W1d:56 W1e:108 W1f:109 restart:101 W2:123 restart:105 W3:93 W4:124 W5:116 W6:119 | 128 | 133 | 132 | pre-existing only. QA equal (24 messages) in every build and step, all edits reached output. Every differing entry (76 to 88 per pair, incl. W6 vs I1 and W2 vs F2, int against int) is P1 (search parameter / OrganizationAffiliationRoleVS resolved to plan-net or ndh copy: SD-ndh pages, package.db CodeSystemListRefs), P2 (THO 6.1.0 vs 6.2.0 in Organization-Social-Towson-Food NamingSystem-npi link) or P5 (.index.db). No P3 (NPI text) in any build |
 | hl7au/au-fhir-base | 2855355 | 7600m | 196 | 122/465/233/0 | | | | | | | pending |
-| nricmig/Nricm_TWCMIG | 28d2f42 | 7600m | 291 | 6/2/490/0 | | | | | | | pending |
+| nricmig/Nricm_TWCMIG | 28d2f42 | 7600m | 291 | 6/2/490/0 | 277 | 239 | int first:267 W1a:129 W1d:123 W1e:204 W1f:197 restart:173 W2:200 restart:168 W3:178 W4:192 W5:197 W6:192; master: rerun queued | 253 | 246 | 249 | QA equal (498 messages) in every build and step. W1f=F1, W2=F2, W6=F6 (0 files). R1 vs I1/I2: only P5. W3 check missed (QA2S8W3 not in Patient-PatientTWCM-min.html): the FSH example has a hand-written narrative, so the edited name only reaches json/xml; step defect, master to confirm |
 | hl7ch/ch-emr | 2c23945 | 7600m | 164 | 288/130/818/1 | | | | | | | pending |
 
 ## Notes
