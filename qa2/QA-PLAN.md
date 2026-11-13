@@ -56,3 +56,13 @@ Phases B/C never reached the page rebuild: no real template declares `script-inp
 5. F1 = int full build (no watch) of the sources after W1f; F2 after the final W1a. Compare W1f vs F1 and final vs F2 with the round masks: output files and qa.xml issue sets. Any difference not in F1-F6 known lists = REGRESSION (stale page, missing page, wrong menu/toc, QA message lost or added).
 6. Also once per shard: edit a file listed in script-inputs (e.g. menu.xml) and confirm a full build, output correct.
 Results: "## Phase D" section in qa2/results-<shard>.md, one table row per IG plus notes.
+
+## Ready ref moved (22:20)
+qa/page-only-ready = e6a0c6a2 (PR vadi2#56; adds: a template with active content that doesn't declare drops inherited script-inputs). Phase D not started yet: rebuild int.jar from e6a0c6a2. Already running on 5111080: finish it, record the sha; the change only matters when a declaration is inherited.
+
+## Phase E: incremental Jekyll (PR vadi2#55, perf4/jekyll-blackbox 760868b, stacked on #56), shards s4, s6, s8 after Phase D
+Build int2.jar from perf4/jekyll-blackbox. Same declared template copies as Phase D, same IGs (skip ones whose watch can't reach a page rebuild, e.g. persistent tx failures; say why).
+1. int2 `-rapido -watch`: first build; W1a; W1a again (second edit to the same page); W1b; W1d (an `input/includes` fragment that pages include); W1c; W1e; W1f; W2; W1a. Log per step: Rapido mode and Jekyll mode (incremental or full, and the reason for full), Jekyll seconds, step seconds, edit visible in output.
+2. After W1a(2nd), W1f and the final W1a: F = int full build (no watch) of the same sources; compare output and qa.xml issue sets with the round masks. Any diff not in the known lists = REGRESSION (stale page, a page that includes the edited fragment not re-rendered, missing/extra file).
+3. Timing: int (Phase D) vs int2 per page step, same IG and edits.
+Results: "## Phase E" in qa2/results-<shard>.md.
