@@ -252,3 +252,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 07:08 tick: s1 DONE (8 IGs; DHP FAIL = F5: master watch MW survived W4, int OOM-killed at W4 because resident Jekyll (PR #48 base commits e85860f2/ae762436/26aaf1ac) reached 4.45 GB vs master 3.7 GB per-step; java RSS same). F5 not fixed: falls under Vadim's 'keep resident Jekyll' decision, raised with him. All QA and fix sessions done; watcher trigger deleted.
 - 07:12 core #25: 'Run SQL on FHIR Tests' red = gh-pages publish step 403 on the fork (all tests pass); red on fork master too, not this PR's. No GitHub comment (Vadim: no comments unless asked).
 - 07:20 Vadim: F5 explained (kept Jekyll ~3 s vs ~73 s fresh per rebuild; costs 3.5-4.5 GB held all session). Decision: keep. F5 closed as known memory cost, not fixed.
+- 12:00 Vadim: all good. Core #25 check-ins stopped, unsubscribed. Work complete.
