@@ -67,3 +67,19 @@ page or an intro file. F1/F2/F6 = int full builds of a pristine copy with the ed
 - I1 = I2 = W6 = F6; F1 = W1f; F2 = W2. I1/I2/W6 vs R1: only `.index.db` ResourceList in hl7.fhir.uv.crmi.en.tgz
   (R1 0, int 129; master watch W6 also 129): F3, pre-existing.
 - verdict: **same** (pre-existing diffs: F3 .index.db).
+
+## omnifhir/lars @ 39e03bf
+- heap 7600m. QA 0 / 18 / 14 in every build. Template #custom-template (local, base fhir.base.template; no
+  script-inputs).
+- times (s): R1 222, I1 250, I2 189, F1 178, F2 169, F6 164.
+  Watch int: first 192, W1a 126.7, W1b 123.2, W1d 118.1 (Differential, 25 of 118), W1e 144.2, W1f 143.2, W2 152.8
+  (Complete, "changed: ig"), W3 142.2 (Differential), W4 156.3, W5 155.8, W6 151.3 (Complete).
+  Watch master: first 178, W1a 131.7, W1b 130.7, W1d 129.2, W1e 147.2, W1f 146.7, W2 145.7, W3 134.7, W4 146.2,
+  W5 144.2, W6 150.3 (same build kinds). W1c n/a. (Round 1's L2 needed #1466, which is not in this branch: W2 is a
+  Complete Build here on both jars.)
+- every edit reached output/.
+- I1 = I2; I1/I2 vs R1: only `.index.db` ResourceList in package.tgz (F3). Every watch snapshot (W1f, W2, W6) differs
+  from every full build (F1, F2, F6, I1, R1) in one place: the column order in
+  StructureDefinition-organization-lars-mappings.html (watch: LabMonthlyReportModel first; full builds:
+  LabDailyReportModel first). Master's watch W6 differs from R1 the same way: round 1's L3, pre-existing.
+- verdict: **same** (pre-existing diffs: F3 .index.db, L3 mappings column order in watch builds).
