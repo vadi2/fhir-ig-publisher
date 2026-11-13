@@ -63,6 +63,9 @@ public class PageRebuild {
   private static final String[] CUSTOM_CONTENT_MARKERS = {"{% sql", "{% fragment", "{% json", "{% class-diagram", "{% uml",
       "{% multi-map", "{% dataset", "{%!", "[[[", "validationRule"};
 
+  private static final String JEKYLL_CACHE = ".jekyll-cache";
+  private static final String RAPIDO_STATE = "_rapido";
+
   private static class Stamp {
     private final long size;
     private final FileTime modified;
@@ -262,7 +265,7 @@ public class PageRebuild {
    * output folder
    */
   public void afterJekyll() throws IOException {
-    outputAfterJekyll = list(Paths.get(pf.outputDir), null);
+    outputAfterJekyll = list(Paths.get(pf.outputDir));
     jekyllOutputs = new HashSet<>(outputAfterJekyll.keySet());
   }
 
@@ -271,7 +274,7 @@ public class PageRebuild {
    * (e.g. a page's front matter gives it another name now): what the package step wrote lists them
    */
   public void checkJekyllOutputs() throws IOException {
-    if (!list(Paths.get(pf.outputDir), null).keySet().equals(jekyllOutputs)) {
+    if (!list(Paths.get(pf.outputDir)).keySet().equals(jekyllOutputs)) {
       throw new IOException("Jekyll wrote other files than in the last build");
     }
   }
@@ -283,7 +286,7 @@ public class PageRebuild {
   public void afterPackage() throws IOException {
     capture();
     Path out = Paths.get(pf.outputDir);
-    Map<Path, Stamp> now = list(out, null);
+    Map<Path, Stamp> now = list(out);
     for (Path p : outputAfterJekyll.keySet()) {
       if (!now.containsKey(p)) {
         notReusable("the package step deleted " + p);
@@ -644,12 +647,8 @@ public class PageRebuild {
     return list(temp, folders, skip);
   }
 
-  private static final String JEKYLL_CACHE = ".jekyll-cache";
-
-  private static final String RAPIDO_STATE = "_rapido";
-
-  private static Map<Path, Stamp> list(Path root, Set<Path> folders) throws IOException {
-    return list(root, folders, Collections.emptySet());
+  private static Map<Path, Stamp> list(Path root) throws IOException {
+    return list(root, null, Collections.emptySet());
   }
 
   /**
@@ -664,7 +663,7 @@ public class PageRebuild {
     Files.walkFileTree(root, new SimpleFileVisitor<Path>() {
       @Override
       public FileVisitResult preVisitDirectory(Path dir, BasicFileAttributes attrs) {
-        if (!skip.isEmpty() && skip.contains(dir.toAbsolutePath().normalize())) {
+        if (skip.contains(dir.toAbsolutePath().normalize())) {
           return FileVisitResult.SKIP_SUBTREE;
         }
         if (folders != null && !dir.equals(root)) {

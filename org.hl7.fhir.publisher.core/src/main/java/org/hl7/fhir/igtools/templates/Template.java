@@ -766,7 +766,7 @@ public class Template {
     if (targetOnJekyll != null) {
       return "the template runs a script before Jekyll";
     }
-    if (!configuration.has(SCRIPT_INPUTS) || !configuration.get(SCRIPT_INPUTS).isJsonArray()) {
+    if (!declaresScriptInputs()) {
       return "the template doesn't declare what its scripts read (" + SCRIPT_INPUTS + " in its config.json)";
     }
     return null;
@@ -775,12 +775,16 @@ public class Template {
   /** The files and folders that the template declares its scripts read (see whyNoPageRebuild()) */
   public List<String> getScriptInputs() throws IOException {
     List<String> res = new ArrayList<>();
-    if (configuration.has(SCRIPT_INPUTS) && configuration.get(SCRIPT_INPUTS).isJsonArray()) {
+    if (declaresScriptInputs()) {
       for (String s : configuration.getStrings(SCRIPT_INPUTS)) {
         res.add(Utilities.path(root, s));
       }
     }
     return res;
+  }
+
+  private boolean declaresScriptInputs() {
+    return configuration.has(SCRIPT_INPUTS) && configuration.get(SCRIPT_INPUTS).isJsonArray();
   }
 
   public Map<String, List<ValidationMessage>> onCheckEvent(IWorkerContext context, ImplementationGuide ig) throws IOException, FHIRException {

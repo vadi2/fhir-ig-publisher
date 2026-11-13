@@ -21,7 +21,6 @@ import org.hl7.fhir.model.core.ImplementationGuide;
 import org.hl7.fhir.services.context.IWorkerContext;
 import org.hl7.fhir.utilities.FileUtilities;
 import org.hl7.fhir.utilities.logging.ILoggingService;
-import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 

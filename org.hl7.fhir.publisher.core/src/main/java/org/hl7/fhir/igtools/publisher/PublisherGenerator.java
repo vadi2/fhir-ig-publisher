@@ -555,12 +555,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       pageRebuild.notReusable("the IG has page factories");
     }
     // (the loader has taken out the folders that don't exist, such as the default pages folder)
-    for (String d : pf.pagesDirs) {
-      if (!isWatched(d)) {
-        pageRebuild.notReusable("the pages in " + d + " are outside the folders that are watched");
-      }
-    }
-    for (String d : pf.prePagesDirs) {
+    List<String> pageDirs = new ArrayList<>(pf.pagesDirs);
+    pageDirs.addAll(pf.prePagesDirs);
+    for (String d : pageDirs) {
       if (!isWatched(d)) {
         pageRebuild.notReusable("the pages in " + d + " are outside the folders that are watched");
       }
