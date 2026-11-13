@@ -4658,14 +4658,25 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * works out which, before Jekyll runs
    */
   private void prepareJekyll() throws IOException {
-    if (incrementalJekyll() != null && !settings.isSimplifierMode() && !settings.isGenerationOff()) {
-      String why = incrementalJekyll().prepare(Paths.get(pf.tempDir));
-      log(why == null ? "Jekyll: incremental build ("+incrementalJekyll().getChanged()+" files changed, all in _includes)" : "Jekyll: renders every page ("+why+")");
+    IncrementalJekyll incremental = incrementalJekyll();
+    if (incremental != null && !settings.isSimplifierMode() && !settings.isGenerationOff()) {
+      Path source = Paths.get(pf.tempDir);
+      String why;
+      try {
+        why = incremental.prepare(source);
+      } catch (IOException e) {
+        // Jekyll renders every page
+        incremental.failed(source);
+        why = "unable to compare the temp folder with Jekyll's last run: " + e.getMessage();
+      }
+      log(why == null ? "Jekyll: incremental build ("+incremental.getChanged()+" files changed, all in _includes)" : "Jekyll: renders every page ("+why+")");
     }
   }
 
-  private IncrementalJekyll incrementalJekyll() {
-    return pf.watchOutputDir != null ? pf.incrementalJekyll : null;
+  private IncrementalJekyll incrementalJekyll() throws IOException {
+    // (a command other than jekyll, such as bundle exec jekyll, can load plugins)
+    return pf.watchOutputDir != null && pf.incrementalJekyll != null && "jekyll".equals(settings.getJekyllCommand())
+        && IncrementalJekyll.writesToSite(Paths.get(pf.tempDir)) ? pf.incrementalJekyll : null;
   }
 
   private boolean runJekyll() throws IOException, InterruptedException {
@@ -4680,6 +4691,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       options = "build --incremental";
     }
 
+    // false if Jekyll returned an error after it said it had succeeded (the build goes on)
+    boolean jekyllSucceeded = true;
     DefaultExecutor exec = new DefaultExecutor();
     exec.setExitValue(0);
     MyFilterHandler pumpHandler = new MyFilterHandler();
@@ -4734,19 +4747,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         exec.execute(commandLine);
       }
       tts.end();
-      if (incremental != null) {
-        incremental.succeeded(source);
-        copySite(incremental, source);
-      }
     } catch (IOException ioex) {
       tts.end();
-      if (incremental != null) {
-        incremental.failed(source);
-      }
       if (pumpHandler.observedToSucceed) {
-        if (incremental != null) {
-          copySite(incremental, source);
-        }
+        jekyllSucceeded = false;
         if (watchdog.killedProcess()) {
           log("Jekyll timeout exceeded: " + Long.toString(pf.jekyllTimeout /1000) + " seconds");
         }
@@ -4756,6 +4760,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           pageRebuild.notReusable("Jekyll returned an error");
         }
       } else {
+        if (incremental != null) {
+          incremental.failed(source);
+        }
         log("Jekyll has failed. Complete output from running Jekyll: " + pumpHandler.getBufferString());
         if (watchdog.killedProcess()) {
           log("Jekyll timeout exceeded: " + Long.toString(pf.jekyllTimeout /1000) + " seconds");
@@ -4765,12 +4772,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         throw ioex;
       }
     }
+    if (incremental != null) {
+      copySite(incremental, source, jekyllSucceeded);
+    }
     return true;
   }
 
-  private void copySite(IncrementalJekyll incremental, Path source) throws IOException {
+  private void copySite(IncrementalJekyll incremental, Path source, boolean succeeded) throws IOException {
     long start = System.nanoTime();
-    int n = incremental.copySite(source.resolve(IncrementalJekyll.SITE), Paths.get(pf.outputDir));
+    int n = incremental.finished(source, succeeded, Paths.get(pf.outputDir));
     log("Copied "+n+" files from "+ IncrementalJekyll.SITE +" to "+ pf.outputDir +" ("+DurationUtil.presentDuration(System.nanoTime() - start)+")");
   }
 

@@ -297,7 +297,7 @@ class PageRebuildTest {
 
   @Test
   void prepareTempLeavesWhatJekyllsIncrementalBuildKeepsAlone() throws IOException {
-    // Jekyll's own output and its record (see IncrementalJekyll): each run of Jekyll writes them again
+    // Jekyll's output and what its incremental build keeps (see IncrementalJekyll): not Jekyll's input
     write("temp/" + IncrementalJekyll.SITE + "/index.html", "<html/>");
     write("temp/" + IncrementalJekyll.STATE + "/" + IncrementalJekyll.METADATA, "old");
     state.beforeJekyll();

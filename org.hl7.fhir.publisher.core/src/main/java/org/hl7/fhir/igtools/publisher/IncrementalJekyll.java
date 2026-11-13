@@ -2,6 +2,7 @@ package org.hl7.fhir.igtools.publisher;
 
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileVisitResult;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -13,9 +14,9 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Function;
 import java.util.regex.Pattern;
 
 import org.apache.commons.io.FileUtils;
@@ -62,8 +63,13 @@ public class IncrementalJekyll {
    * settings in _config.yml that load plugins, or make Jekyll read other folders that start with an underscore (a
    * folder that it doesn't read, such as _rapido, isn't followed here)
    */
-  private static final Pattern UNSAFE_CONFIG = Pattern.compile("^(plugins|gems|plugins_dir|whitelist|collections|include|includes_dir|layouts_dir|data_dir|source)\\s*:", Pattern.MULTILINE);
+  private static final Pattern KEEP_FILES = Pattern.compile("^keep_files\\s*[:=]", Pattern.MULTILINE);
+  private static final Pattern UNSAFE_CONFIG = Pattern.compile("^(plugins|gems|plugins_dir|whitelist|collections|include|includes_dir|layouts_dir|data_dir|source|theme)\\s*[:=]", Pattern.MULTILINE);
 
+  /**
+   * A file in the source folder. A file that hasn't changed since the last run keeps the same instance, so a changed
+   * file is one whose Source isn't the one in {@link #sources}
+   */
   static final class Source {
     final long size;
     final FileTime modified;
@@ -97,6 +103,16 @@ public class IncrementalJekyll {
   /** for each file copied from SITE to the staging folder: its stamp in SITE and that of the copy */
   private Map<String, Stamp[]> copied = new HashMap<>();
   private int changed;
+  private final Function<String, String> env;
+
+  public IncrementalJekyll() {
+    this(System::getenv);
+  }
+
+  /** env: the environment variables (Jekyll loads plugins through Bundler when BUNDLE_GEMFILE is set) */
+  IncrementalJekyll(Function<String, String> env) {
+    this.env = env;
+  }
 
   /**
    * Before Jekyll runs: works out whether this run can be incremental, and if not, deletes .jekyll-metadata. Files
@@ -105,6 +121,7 @@ public class IncrementalJekyll {
    * @return null if the run can be incremental, or why it can't
    */
   public String prepare(Path source) throws IOException {
+    changed = 0;
     Map<String, Source> now = new HashMap<>();
     String why = listSources(source, now);
     pending = now;
@@ -132,7 +149,7 @@ public class IncrementalJekyll {
     }
   }
 
-  /** how many files the last {@link #prepare} found changed (all in _includes if it was incremental) */
+  /** how many files in _includes the last {@link #prepare} found changed, if it found the run can be incremental */
   public int getChanged() {
     return changed;
   }
@@ -212,7 +229,6 @@ public class IncrementalJekyll {
   }
 
   private String whyNotIncremental(Path source, Map<String, Source> now) throws IOException {
-    changed = 0;
     if (sources == null) {
       return "no earlier Jekyll run in this session";
     }
@@ -222,11 +238,10 @@ public class IncrementalJekyll {
     if (!Files.isDirectory(source.resolve(SITE))) {
       return "no " + SITE;
     }
-    if (Files.exists(source.resolve("_plugins")) || Files.exists(source.resolve("Gemfile")) || System.getenv("BUNDLE_GEMFILE") != null) {
+    if (Files.exists(source.resolve("_plugins")) || Files.exists(source.resolve("Gemfile")) || env.apply("BUNDLE_GEMFILE") != null) {
       return "the site can have plugins";
     }
-    Path config = source.resolve("_config.yml");
-    if (Files.isRegularFile(config) && UNSAFE_CONFIG.matcher(Files.readString(config)).find()) {
+    if (UNSAFE_CONFIG.matcher(config(source)).find()) {
       return "_config.yml has settings that Jekyll's incremental build doesn't follow";
     }
     for (Map.Entry<String, Source> e : now.entrySet()) {
@@ -257,6 +272,41 @@ public class IncrementalJekyll {
     return name.equals(METADATA);
   }
 
+  /**
+   * Whether Jekyll can write to {@link #SITE}: not when _config.yml sets keep_files (what Jekyll leaves in its
+   * destination), which copySite() doesn't follow. Jekyll then writes to the staging folder, without --incremental
+   */
+  public static boolean writesToSite(Path source) throws IOException {
+    return !KEEP_FILES.matcher(config(source)).find();
+  }
+
+  /** Jekyll's configuration: the first of the files it reads by default that is there */
+  private static String config(Path source) throws IOException {
+    for (String name : new String[] {"_config.yml", "_config.yaml", "_config.toml"}) {
+      Path config = source.resolve(name);
+      if (Files.isRegularFile(config)) {
+        return new String(Files.readAllBytes(config), StandardCharsets.ISO_8859_1);
+      }
+    }
+    return "";
+  }
+
+  /**
+   * Jekyll has run: if it succeeded, the next run compares with what this one saw; if it returned an error (and the
+   * build goes on with what it wrote), the next run renders every page. Either way the staging folder gets what it
+   * wrote.
+   *
+   * @return how many files were copied to the staging folder
+   */
+  public int finished(Path source, boolean succeeded, Path staging) throws IOException {
+    if (succeeded) {
+      succeeded(source);
+    } else {
+      failed(source);
+    }
+    return copySite(source.resolve(SITE), staging);
+  }
+
   /** what clearing the temp folder in watch mode leaves */
   public static boolean kept(String name) {
     return name.equals(SITE) || name.equals(STATE) || name.equals(PublisherIGLoader.WATCH_OUTPUT_STAGING);
@@ -281,6 +331,9 @@ public class IncrementalJekyll {
         Files.delete(staging.resolve(rel));
       }
     }
+    // folders that Jekyll didn't write, including those that are now files (deepest first)
+    stagedFolders.keySet().stream().filter(rel -> !keptByJekyll(rel) && !Files.isDirectory(site.resolve(rel)))
+        .sorted((a, b) -> b.length() - a.length()).forEach(rel -> FileUtils.deleteQuietly(staging.resolve(rel).toFile()));
     Map<String, Stamp[]> nowCopied = new HashMap<>();
     int count = 0;
     for (Map.Entry<String, BasicFileAttributes> e : siteFiles.entrySet()) {
@@ -293,18 +346,16 @@ public class IncrementalJekyll {
       }
       Path to = staging.resolve(rel);
       Files.createDirectories(to.getParent());
-      Files.copy(site.resolve(rel), to, StandardCopyOption.REPLACE_EXISTING);
+      // with Jekyll's time (it gives a static file its source's)
+      Files.copy(site.resolve(rel), to, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
       nowCopied.put(rel, new Stamp[] {new Stamp(e.getValue()), new Stamp(Files.readAttributes(to, BasicFileAttributes.class))});
       count++;
     }
     copied = nowCopied;
-    // folders that Jekyll didn't write (deepest first)
-    stagedFolders.keySet().stream().filter(rel -> !keptByJekyll(rel) && !Files.isDirectory(site.resolve(rel)))
-        .sorted((a, b) -> b.length() - a.length()).forEach(rel -> FileUtils.deleteQuietly(staging.resolve(rel).toFile()));
     return count;
   }
 
-  /** Jekyll's keep_files (.git and .svn by default): what it leaves in its destination */
+  /** Jekyll's default keep_files (.git and .svn): what it leaves in its destination (see writesToSite) */
   private static boolean keptByJekyll(String rel) {
     return rel.startsWith(".git") || rel.startsWith(".svn");
   }
@@ -348,10 +399,5 @@ public class IncrementalJekyll {
     } catch (NoSuchAlgorithmException e) {
       throw new IllegalStateException(e);
     }
-  }
-
-  /** the arguments for jekyll build */
-  public static List<String> buildArguments(String destination) {
-    return List.of("build", "--incremental", "--destination", destination);
   }
 }

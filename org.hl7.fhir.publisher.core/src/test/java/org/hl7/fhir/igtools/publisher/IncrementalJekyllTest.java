@@ -11,6 +11,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
+import java.util.HashMap;
+import java.util.Map;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -21,7 +23,8 @@ class IncrementalJekyllTest {
   @TempDir
   Path temp;
 
-  private final IncrementalJekyll jekyll = new IncrementalJekyll();
+  private final Map<String, String> env = new HashMap<>();
+  private final IncrementalJekyll jekyll = new IncrementalJekyll(env::get);
   private static final FileTime OLD = FileTime.from(Instant.parse("2026-01-01T00:00:00Z"));
 
   @BeforeEach
@@ -189,6 +192,106 @@ class IncrementalJekyllTest {
   }
 
   @Test
+  void aGemfileMakesEveryRunComplete() throws IOException {
+    ranOnce();
+    write("Gemfile", "source 'https://rubygems.org'");
+    assertEquals("the site can have plugins", jekyll.prepare(temp));
+  }
+
+  @Test
+  void bundlerMakesEveryRunComplete() throws IOException {
+    ranOnce();
+    env.put("BUNDLE_GEMFILE", "/somewhere/Gemfile");
+    assertEquals("the site can have plugins", jekyll.prepare(temp));
+  }
+
+  @Test
+  void configThatJekyllsIncrementalBuildDoesntFollow() throws IOException {
+    for (String key : new String[] {"gems", "plugins_dir", "whitelist", "include", "includes_dir", "layouts_dir", "data_dir", "source"}) {
+      IncrementalJekyll j = new IncrementalJekyll(env::get);
+      write("_config.yml", key + ": x\n");
+      assertEquals("no earlier Jekyll run in this session", j.prepare(temp));
+      write(IncrementalJekyll.METADATA, "jekyll's record");
+      write(IncrementalJekyll.SITE + "/index.html", "rendered");
+      j.succeeded(temp);
+      assertEquals("_config.yml has settings that Jekyll's incremental build doesn't follow", j.prepare(temp), key);
+    }
+  }
+
+  @Test
+  void somethingThatIsntAFileMakesTheRunComplete() throws IOException {
+    ranOnce();
+    Files.createSymbolicLink(temp.resolve("_includes/link.md"), temp.resolve("_includes/index.md"));
+    assertTrue(jekyll.prepare(temp).startsWith("Jekyll's source folder has something that isn't a file or a folder"));
+  }
+
+  @Test
+  void theConfigCanBeYamlOrToml() throws IOException {
+    Files.delete(temp.resolve("_config.yml"));
+    write("_config.yaml", "theme: minima\n");
+    ranOnce();
+    assertEquals("_config.yml has settings that Jekyll's incremental build doesn't follow", jekyll.prepare(temp));
+    Files.delete(temp.resolve("_config.yaml"));
+    write("_config.toml", "keep_files = [\"x\"]\n");
+    assertFalse(IncrementalJekyll.writesToSite(temp));
+  }
+
+  @Test
+  void aFolderInTheStagingFolderThatIsNowAFile() throws IOException {
+    Path site = temp.resolve("site");
+    Path staging = temp.resolve("staging");
+    Files.createDirectories(site);
+    Files.writeString(site.resolve("x"), "a file now");
+    Files.createDirectories(staging.resolve("x/y"));
+    Files.writeString(staging.resolve("x/y/z.html"), "was in a folder");
+    assertEquals(1, jekyll.copySite(site, staging));
+    assertEquals("a file now", Files.readString(staging.resolve("x")));
+  }
+
+  @Test
+  void theCopyKeepsTheTimeJekyllGaveTheFile() throws IOException {
+    Path site = temp.resolve("site");
+    Files.createDirectories(site);
+    Files.writeString(site.resolve("logo.png"), "a static file");
+    Files.setLastModifiedTime(site.resolve("logo.png"), OLD);
+    Path staging = temp.resolve("staging");
+    jekyll.copySite(site, staging);
+    assertEquals(OLD, Files.getLastModifiedTime(staging.resolve("logo.png")));
+  }
+
+  @Test
+  void keepFilesMeansJekyllWritesToTheStagingFolder() throws IOException {
+    assertTrue(IncrementalJekyll.writesToSite(temp));
+    write("_config.yml", "keep_files: [.git, extra]\n");
+    assertFalse(IncrementalJekyll.writesToSite(temp));
+  }
+
+  @Test
+  void whenJekyllSucceeds() throws IOException {
+    ranOnce();
+    assertNull(jekyll.prepare(temp));
+    jekyll.beforeRun(temp);
+    Path staging = temp.resolve(PublisherIGLoader.WATCH_OUTPUT_STAGING);
+    assertEquals(1, jekyll.finished(temp, true, staging));
+    assertEquals("rendered", Files.readString(staging.resolve("index.html")));
+    assertTrue(Files.exists(temp.resolve(IncrementalJekyll.STATE).resolve(IncrementalJekyll.METADATA)));
+    assertNull(jekyll.prepare(temp));
+  }
+
+  @Test
+  void whenJekyllReturnsAnErrorButTheBuildGoesOn() throws IOException {
+    ranOnce();
+    assertNull(jekyll.prepare(temp));
+    jekyll.beforeRun(temp);
+    Path staging = temp.resolve(PublisherIGLoader.WATCH_OUTPUT_STAGING);
+    assertEquals(1, jekyll.finished(temp, false, staging));
+    assertEquals("rendered", Files.readString(staging.resolve("index.html")));
+    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
+    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.STATE).resolve(IncrementalJekyll.METADATA)));
+    assertEquals("no earlier Jekyll run in this session", jekyll.prepare(temp));
+  }
+
+  @Test
   void configThatLoadsPluginsMakesEveryRunComplete() throws IOException {
     write("_config.yml", "plugins:\n  - jekyll-sitemap\n");
     ranOnce();
@@ -223,7 +326,7 @@ class IncrementalJekyllTest {
     ran();
     assertNull(jekyll.prepare(temp));
     ran();
-    // a failure between runs (the build failed before Jekyll, say) forgets what Jekyll kept
+    // what an earlier run kept goes too
     jekyll.failed(temp);
     assertFalse(Files.exists(temp.resolve(IncrementalJekyll.STATE).resolve(IncrementalJekyll.METADATA)));
   }
