@@ -10,7 +10,7 @@ Status: Phase C in progress (dis, phd done).
 | IG | commit | heap | R1 s | R1 qa e/w/h | I1 | I2 | W first, W1..W6 | F1 | F2 | F6 | qa | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | IHE/ITI.DIS | 5a37d30b52 | 7600m | 123 | 0/23/119 | 61 | 63 | int 66, 28/27/47/45/44/33/48/45/46; master 67, 30/26/46/44/45/35/47/45/49 (W1a,W1d,W1e,W1f,W2,W3,W4,W5,W6; all edits seen on both) | 65 | 65 | 65 | 0/23/119 in every build, issue sets equal | same; pre-existing diffs: F4 THO version in ImagingStudy-study-42 NamingSystem link, F3 .index.db rows, used-by list order |
-| hl7germany/medication-ig-de-r4 | 06c8d75d78 | 7600m | 213 | 1673/2112/815 | | | | | | | pending |
+| hl7germany/medication-ig-de-r4 | 06c8d75d78 | 7600m | 213 | 1673/2112/815 | 149 | 146 | int 144, 90/90/89/132/135/134/110/138/138/144; master 158, 89/89/91/140/147/144/121/142/141/141 (W1a,W1c,W1d,W1e,W1f,W2,W3,W4,W5,W6; all edits seen on both) | 151 | 152 | 153 | 1673/2112/815 in every build, issue sets equal (4580) | same; pre-existing diffs: F3 .index.db rows (R1 vs int) |
 | HL7/davinci-pdex-formulary | 549af4d87a | 7600m | 471 | 0/0/22 | | | | | | | pending |
 | ahdis/ch-ekm | ed239c8251 | 7600m | 312 | 799/8363/4466 (98 broken links) | | | | | | | pending |
 | HL7/phd | 565d3336a2 | 7600m | 98 | 0/0/2 | 104 | 89 | int 105, 41/37/36/66/64/55/48/67/68/57; master 106, 42/38/38/71/72/61/51/72/67/58 (W1a,W1c,W1d,W1e,W1f,W2,W3,W4,W5,W6; all edits seen on both) | 104 | 99 | 104 | 0/0/2 in every build, issue sets equal | same; pre-existing diffs: "Child profiles" list order of PhdBaseObservation, F3 .index.db rows, used-by list order |
@@ -37,4 +37,9 @@ Method: one `-rapido -watch` session per jar runs every step without a restart; 
 - Content: R1-I1 and R1-I2 differ only in .index.db ResourceList rows (F3, empty in R1). Every int-int comparison (I1-I2, W1f-F1, W2-F2, W6-F6, W6-I1) has no content diff, only order-only files.
 - W1b (changes.xml) marker not in output on either jar: input/pagecontent/changes.xml is not a page in sushi-config. Test artifact.
 - W4 (new QaNew.fsh patient) failed SUSHI on both jars: my test instance lacks the required age extension. Test artifact. Both jars recovered at W5. int logged "Complete Build (the last build didn't finish)" there, which is correct.
+
+### medde
+- Template: local custom-template on fhir.base.template, no script-inputs, so int does a Complete Build for every edit, as master does. Times match master.
+- QA counts and all 4580 issues equal in every comparison.
+- Content: R1 vs I1/I2 differ only in .index.db ResourceList rows (F3). Every int-int comparison: no content diff, order only.
 
