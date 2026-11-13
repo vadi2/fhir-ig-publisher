@@ -1,16 +1,16 @@
 # QA round 2 results: shard s3
 
-Status: Phase C running (1 of 8 IGs done).
+Status: Phase C running (5 of 8 IGs done).
 
 Reference jar: HL7 master 2ccca17946. Integration jar: `qa/page-only-ready` 5111080dd5. Heap 7600m for every IG. VM 15 GB / 4 CPU, swap 12 GB (not 16: the 30 GB disk allowance is shared with outputs).
 
 | IG | commit | heap | R1 | R1 QA (e/w/h) | I1 | I2 | W1a..W6 | F1 | F2 | F6 | verdict |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | hl7-eu/xshare-ips-plus | adb1067250 | 7600m | 76 s (R1b 31 s, equal after masking) | 0/5/5 | 29 s, 0/5/5, = R1 | 27 s, 0/5/5, = R1 | int 12/12/-/18/18/18/19/19/19/18/17 s, master 16/13/-/18/18/19/19/21/20/19/18 s; all edits seen | 27 s, = W1f | 27 s, = W2 | 28 s, = W6; W6 = I1 | same |
-| FHIR/MADFSH | 0c4b725767 | 7600m | 152 s | 4/16/3 | | | | | | | pending |
-| HL7/us-fhir-ps | c20fdb208c | 7600m | 97 s | 0/7/21 | | | | | | | pending |
-| hl7-eu/phoenix-sact | f9246ccc86 | 7600m | 59 s | 0/2/77 | | | | | | | pending |
-| savannahghi/healthy-route-ig | 8de83993a5 | 7600m | 150 s | 4/217/862 | | | | | | | pending |
+| FHIR/MADFSH | 0c4b725767 | 7600m | 152 s | 4/16/3 | 38 s, 4/16/3, = R1 | 32 s, 4/16/3, = R1 | int 16/-/-/23/25/23/24/-/25/23/22 s, master 18/-/-/23/24/24/26/-/28/25/26 s; all edits seen | 33 s, = W1f | 33 s, = W2 | 32 s, = W6; W6 = I1 | same |
+| HL7/us-fhir-ps | c20fdb208c | 7600m | 97 s | 0/7/21 | 61 s, 0/7/21, = R1 | 59 s, 0/7/21, = R1 | int 29/-/27/39/37/36/48/39/41/38/37 s, master 30/-/31/41/38/39/49/44/43/41/43 s; all edits seen | 56 s, = W1f | 58 s, = W2 | 58 s, = W6; W6 = I1 | pre-existing diffs: F4 only (NamingSystem uri/CLIA/us-npi link, title and label from a random terminology.hl7.org version, in R1 vs I1/I2, W1f vs F, W6 vs F; masked) |
+| hl7-eu/phoenix-sact | f9246ccc86 | 7600m | 59 s | 0/2/77 | 58 s, 0/2/77, = R1 | 51 s, 0/2/77, = R1 | int 24/-/-/21/37/35/41/35/42/40/37 s, master 29/-/-/23/48/42/46/35/40/37/37 s; all edits seen | 49 s, = W1f | 51 s, = W2 | 49 s, = W6; W6 = I1 | same |
+| savannahghi/healthy-route-ig | 8de83993a5 | 7600m | 150 s | 4/217/862 | 97 s, 4/217/862, = R1 | 90 s, 4/217/862, = R1 | int 42/-/-/59/58/59/61/49/61/61/61 s, master 40/-/-/63/67/63/64/54/64/62/63 s; all edits seen | 70 s, = W1f | 76 s, = W2 | 78 s, = W6; W6 = I1 | same |
 | TEHIK-EE/ig-ee-vris | ff7c9a820f | 7600m | 164 s (R1b 131 s, equal after masking) | 135/856/212 | | | | | | | pending |
 | HL7/davinci-pct | 7d64232695 | 7600m | 304 s | 0/9/2 | | | | | | | pending |
 | Interop-Sante/hl7.fhir.fr.core | 0e518baa85 | 7600m | 306 s | 165/337/6283 | | | | | | | pending |
@@ -22,5 +22,5 @@ Reference jar: HL7 master 2ccca17946. Integration jar: `qa/page-only-ready` 5111
 
 ## Method notes
 - fr.core: template `https://github.com/Interop-Sante/ig-style` is not downloadable through the proxy (as in round 1); ig.ini points at a local clone (104d205) for every build, both jars.
-- Comparison masks as in round 1 (dates, UUIDs, run folder, archives per entry, package.db rows, line and "used by" order of `*-list.json` / `*-ref-*-list.csv`, qa*, fragment-usage-analysis.*, spec.internals, version.info, .index.db/.index.json, F4 NamingSystem links). Calibrated: two master builds each of xshare and vris compare equal.
+- Comparison masks as in round 1 (dates, UUIDs, run folder, archives per entry, package.db rows, line and "used by" order of `*-list.json` / `*-ref-*-list.csv`, qa*, fragment-usage-analysis.*, spec.internals, version.info, .index.db/.index.json, F4 NamingSystem links: the whole `NamingSystem-*.html` link incl. title and label, its terminology.hl7.org version, and the `sid/<x>#<label>#` display form). Calibrated: two master builds each of xshare and vris compare equal.
 - R1 kept as output.tgz + sha256 manifest + qa.json/qa.html + log; run folders deleted.
