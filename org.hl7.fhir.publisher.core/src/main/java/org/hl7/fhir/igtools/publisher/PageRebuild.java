@@ -628,8 +628,8 @@ public class PageRebuild {
   }
 
   /**
-   * The files in the temp folder that Jekyll reads (see list()): not Rapido's state (see RapidoTracker), which each build
-   * saves after Jekyll has run, a page rebuild too, nor, in watch mode, the staging folder the build writes its output
+   * The files in the temp folder that Jekyll reads (see list()): not Rapido's state (see RapidoTracker), which a complete
+   * build saves after Jekyll has run (a page rebuild leaves it as it was), nor, in watch mode, the staging folder the build writes its output
    * to (see PublisherIGLoader.setUpWatchOutput()), which the sync empties of what it moves into the output folder
    */
   private Map<Path, Stamp> listTemp(Set<Path> folders) throws IOException {
