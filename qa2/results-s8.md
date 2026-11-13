@@ -30,8 +30,10 @@ Status: Phase C builds done for all 7; master watch for TWCMIG/ch-emr and Phase 
 
 ## Phase D
 
-Declared template copies (script-inputs from qa2/script-inputs.md) in /home/user/qa/tpl-*, loaded via `<template>#current = <dir>` in ig.ini (TWCMIG: custom-template/config.json); both jars log "Load Template ... from local folder". Same edits as Phase C W1a..W1f and W2, then W1a again (W1a2). DF1/DF2 = int full builds of the W1f / W1a2 sources. Mode per step: P = Page Rebuild, C = Complete Build, D = Differential Build. Heap 7600m.
+Declared template copies (script-inputs from qa2/script-inputs.md) in /home/user/qa/tpl-*, loaded via `<template>#current = <dir>` in ig.ini (TWCMIG: custom-template/config.json); both jars log "Load Template ... from local folder". Same edits as Phase C W1a..W1f and W2, then W1a again (W1a2). DF1/DF2 = int full builds of the W1f / W1a2 sources. int.jar for Phase D is 5111080 (already running when the ref moved to e6a0c6a2). Mode per step: P = Page Rebuild, C = Complete Build, D = Differential Build. Heap 7600m.
 
 | IG | template (list) | int first / steps | master first / steps | W1f vs DF1 | W1a2 vs DF2 | notes |
 |---|---|---|---|---|---|---|
 | au-fhir-encounter | hl7.au.sparked (fhir2) | 48 / W1a:5P W1d:25C W1e:28C W1f:29C W2:23C W1a2:6P | 47 / W1a:25D W1d:22D W1e:27C W1f:26C W2:25D W1a2:22D | QA equal (169), 0 files (DF1 45 s) | QA equal, 0 files (DF2 46 s) | all edits visible; W1d (menu.xml, declared in fhir2 list) gives a Complete Build as required ("menu.xml is read by the template's scripts"); W2 Complete Build (resource change) |
+| IPTp | fhir.base (fhir.base) | 63 / W1a:15P W1d:53C W1e:56C W1f:49C W2:48C W1a2:15P | 64 / W1a:33D W1d:48C W1e:49C W1f:46C W2:45C W1a2:30D | QA equal (140), 0 files (DF1 65 s) | QA equal, 0 files (DF2 61 s) | all edits visible; W1d (sushi-config menu) Complete Build: "sushi-config.yaml is not a page" |
+| reg-workflow-pharma | hl7.vulcan (hl7.base) | 64 / W1a:14P W1c:14P W1d:53C W1e:49C W1f:48C W2:45C W1a2:14P | 62 / W1a:32D W1c:33D W1d:49C W1e:53C W1f:48C W2:53C W1a2:29D | QA equal (1), 0 files (DF1 61 s) | QA equal, 0 files (DF2 62 s) | all edits visible; W1c (intro-notes) Page Rebuild |
