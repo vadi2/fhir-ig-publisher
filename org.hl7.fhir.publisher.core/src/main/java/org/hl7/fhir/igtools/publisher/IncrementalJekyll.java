@@ -136,8 +136,7 @@ public class IncrementalJekyll {
       why = whyNotIncremental(source, now);
     }
     if (why != null) {
-      Files.deleteIfExists(source.resolve(METADATA));
-      Files.deleteIfExists(source.resolve(STATE).resolve(METADATA));
+      deleteMetadata(source);
     }
     return why;
   }
@@ -149,8 +148,7 @@ public class IncrementalJekyll {
   public void beforeRun(Path source) throws IOException {
     Path kept = source.resolve(STATE).resolve(METADATA);
     if (pending == null) {
-      Files.deleteIfExists(kept);
-      Files.deleteIfExists(source.resolve(METADATA));
+      deleteMetadata(source);
     } else if (Files.exists(kept)) {
       Files.move(kept, source.resolve(METADATA), StandardCopyOption.REPLACE_EXISTING);
     }
@@ -177,6 +175,11 @@ public class IncrementalJekyll {
   public void failed(Path source) throws IOException {
     sources = null;
     pending = null;
+    deleteMetadata(source);
+  }
+
+  /** without .jekyll-metadata, Jekyll renders every page */
+  private static void deleteMetadata(Path source) throws IOException {
     Files.deleteIfExists(source.resolve(METADATA));
     Files.deleteIfExists(source.resolve(STATE).resolve(METADATA));
   }
@@ -199,7 +202,7 @@ public class IncrementalJekyll {
 
       @Override
       public FileVisitResult visitFile(Path file, BasicFileAttributes attrs) throws IOException {
-        if (file.getParent().equals(source) && isOwnFile(file.getFileName().toString())) {
+        if (file.getParent().equals(source) && file.getFileName().toString().equals(METADATA)) {
           return FileVisitResult.CONTINUE;
         }
         if (!attrs.isRegularFile()) {
@@ -269,11 +272,7 @@ public class IncrementalJekyll {
 
   /** the folders in the temp folder that the build keeps for this, or that aren't Jekyll's source */
   private static boolean isOwnFolder(String name) {
-    return name.equals(SITE) || name.equals(STATE) || name.equals(CACHE) || name.equals(PublisherIGLoader.WATCH_OUTPUT_STAGING);
-  }
-
-  private static boolean isOwnFile(String name) {
-    return name.equals(METADATA);
+    return kept(name) || name.equals(CACHE);
   }
 
   /**

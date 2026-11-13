@@ -4660,31 +4660,30 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * works out which, before Jekyll runs
    */
   private void prepareJekyll() throws IOException {
-    if (settings.isSimplifierMode() || settings.isGenerationOff()) {
+    if (settings.isSimplifierMode() || settings.isGenerationOff() || !watchJekyll()) {
       return;
     }
-    String unknown = watchJekyll() ? IncrementalJekyll.unknownConfig(Paths.get(pf.tempDir)) : null;
+    Path source = Paths.get(pf.tempDir);
+    String unknown = IncrementalJekyll.unknownConfig(source);
     if (unknown != null) {
       log("Jekyll: renders every page, in the staging folder (a setting that the incremental build isn't known to follow: " + unknown + ")");
+      return;
     }
-    IncrementalJekyll incremental = incrementalJekyll();
-    if (incremental != null) {
-      Path source = Paths.get(pf.tempDir);
-      String why;
+    IncrementalJekyll incremental = pf.incrementalJekyll;
+    String why;
+    try {
+      why = incremental.prepare(source);
+    } catch (IOException e) {
+      // Jekyll renders every page
       try {
-        why = incremental.prepare(source);
-      } catch (IOException e) {
-        // Jekyll renders every page
-        try {
-          incremental.failed(source);
-        } catch (IOException e2) {
-          e.addSuppressed(e2);
-          throw e;
-        }
-        why = "unable to compare the temp folder with Jekyll's last run: " + e.getMessage();
+        incremental.failed(source);
+      } catch (IOException e2) {
+        e.addSuppressed(e2);
+        throw e;
       }
-      log(why == null ? "Jekyll: incremental build ("+incremental.getChanged()+" files in _includes added, changed or deleted)" : "Jekyll: renders every page ("+why+")");
+      why = "unable to compare the temp folder with Jekyll's last run: " + e.getMessage();
     }
+    log(why == null ? "Jekyll: incremental build ("+incremental.getChanged()+" files in _includes added, changed or deleted)" : "Jekyll: renders every page ("+why+")");
   }
 
   private IncrementalJekyll incrementalJekyll() throws IOException {
