@@ -103,7 +103,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.sql.SQLException;
@@ -113,6 +112,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Future;
+import java.util.function.Predicate;
 import java.util.concurrent.FutureTask;
 
 import static org.hl7.fhir.igtools.publisher.Publisher.*;
@@ -4873,32 +4873,34 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     Path staged = Paths.get(pf.outputDir);
     Path target = Paths.get(pf.watchOutputDir);
     PublisherFields fields = pf;
-    // what the build writes from now on is left for the sync; and if Jekyll didn't say what it wrote, so is what the
-    // last build left in the staging folder, which the package step writes again (a file being written over can look
-    // as it was, but empty, until its first write). The times are the file system's, which may not be this clock's
-    FileTime[] now = stagingClock(staged);
-    FileTime asOf = now[0];
-    FileTime since = written == null && pf.stagedOutputKept
-        ? FileTime.from(now[1].toInstant().minusNanos(System.nanoTime() - pf.watchBuildStarted).minusSeconds(1)) : null;
-    startEarlyPublish(() -> publishPages(fields, staged, target, written, since, asOf));
+    // what the build writes from now on is left for the sync. And if Jekyll didn't say what it wrote, so is what the last
+    // build left in the staging folder that isn't Jekyll's (a page, or a file copied from its source folder): the
+    // package step writes its files over those, and a file being written over can look as it was, but empty, until its
+    // first write. (Their times can't tell: Jekyll gives a copied file its source's, and renames change the others')
+    FileTime asOf = stagingClock(staged);
+    Predicate<String> leftOut = AIProcessor::isRenderedForAiOnly;
+    if (written == null && pf.stagedOutputKept) {
+      Path source = Paths.get(pf.tempDir);
+      leftOut = leftOut.or(rel -> !rel.endsWith(".html") && !Files.isRegularFile(source.resolve(rel)));
+    }
+    Predicate<String> notCopied = leftOut;
+    startEarlyPublish(() -> publishPages(fields, staged, target, written, notCopied, asOf));
   }
 
   /**
-   * what time it is on the file system the staging folder is on, as the modification time and the change time (see
-   * OutputFolderSync.changeTime()) of a file made next to it now; this clock's if that can't be done
+   * what time it is on the file system the staging folder is on (which may not be this clock's), as the modification
+   * time of a file made next to it now; this clock's if that can't be done
    */
-  private FileTime[] stagingClock(Path staged) {
+  private static FileTime stagingClock(Path staged) {
     try {
       Path marker = Files.createTempFile(staged.toAbsolutePath().getParent(), ".early-publish", "");
       try {
-        BasicFileAttributes a = Files.readAttributes(marker, BasicFileAttributes.class);
-        return new FileTime[] {a.lastModifiedTime(), OutputFolderSync.changeTime(marker, a)};
+        return Files.getLastModifiedTime(marker);
       } finally {
         Files.deleteIfExists(marker);
       }
     } catch (IOException | RuntimeException e) {
-      FileTime t = FileTime.from(Instant.now());
-      return new FileTime[] {t, t};
+      return FileTime.from(Instant.now());
     }
   }
 
@@ -4920,11 +4922,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     earlyPublish = task;
   }
 
-  private void publishPages(PublisherFields fields, Path staged, Path target, List<Path> files, FileTime since, FileTime asOf) {
+  private void publishPages(PublisherFields fields, Path staged, Path target, List<Path> files, Predicate<String> leftOut, FileTime asOf) {
     long start = System.nanoTime();
     OutputFolderSync.Result r;
     try {
-      r = OutputFolderSync.publish(staged, target, files, AIProcessor::isRenderedForAiOnly, earlyPages, since, asOf);
+      r = OutputFolderSync.publish(staged, target, files, leftOut, earlyPages, asOf);
     } catch (IOException e) {
       log("Unable to put the pages in " + target + " yet (it is updated when the build has finished): " + e);
       earlyPages.clear();
