@@ -71,3 +71,27 @@ own dependency record knows that (an IG page can `{% include %}` another page's 
   files out of staging. So Jekyll gets its own destination `temp/pages/.watch-jekyll` (Jekyll skips dot names:
   checked, output identical to a full build elsewhere, 0 diffs) and the build gets a copy in staging (all 20,698
   output files: 3.6 s; per rebuild only what changed since the last copy, by stamps).
+
+## Decision
+(b), stacked on `perf4/watch-page-only` (5111080): on HL7 master alone a rebuild always changes `_data` (the build
+minute in `_data/fhir.json`, resource dates), so only the page-only rebuild (which writes just the page's files in
+`_includes`) can be incremental. (a) not implemented: it needs to know every page that includes a changed fragment,
+which only Jekyll's own record knows.
+Rule: incremental only if Jekyll's last run in the session succeeded, `.jekyll-metadata` and `.watch-jekyll` exist,
+no `_plugins`/`Gemfile`/`BUNDLE_GEMFILE`, no plugin/collection/include/dir keys in `_config.yml`, and every file
+added/changed/deleted since (by size+mtime, then SHA-256) is under `_includes/`. `_config.yml` with `keep_files`:
+Jekyll writes to staging as before. Integration found on the way: `PublisherGenerator.cleanOutput` deletes top-level
+temp files the build didn't write (so `.jekyll-metadata` is parked in `.watch-jekyll-state`), and PageRebuild's temp
+record must skip Jekyll's folders and be taken after mtimes are reset.
+
+## Equivalence (change jar, -rapido -watch: complete build, then a page edit = Page Rebuild; then a full `jekyll build` of the same temp/pages compared with `.watch-jekyll`)
+Templates made to declare `script-inputs` (thin local child template, as for the page-only bench), else no page rebuild.
+| IG | template | page rebuild Jekyll | files | diffs |
+|---|---|---|---|---|
+| uz.dhp.core (4 page rebuilds) | fhir2.base.template | incremental, 8.2 / 6.4 / 5.1 s (complete: 70.7 s) | 21,312 | 0 |
+| ChitSR/sample-ig | hl7.au.fhir.template | incremental, 2 files | 1,201 | 0 |
+| HL7/aitransparency-ig | hl7.fhir.template | incremental, 2 files | 2,594 | 0 |
+| IHE/ITI.DIS | local child of ihe.fhir.template | incremental, 1 file | 1,803 | 0 |
+| hl7au/au-fhir-encounter | hl7.au.sparked.template | incremental, 2 files | 1,251 | 0 |
+| hl7-eu/xshare-ips-plus | local child of fhir.base.template | incremental, 1 file | 695 | 0 |
+(The only other difference seen: `full-ig.zip`, which the publisher writes into temp after Jekyll and the page rebuild removes before it.)
