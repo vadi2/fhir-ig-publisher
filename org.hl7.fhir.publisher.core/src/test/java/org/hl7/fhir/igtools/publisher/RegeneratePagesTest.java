@@ -488,4 +488,43 @@ class RegeneratePagesTest {
     assertEquals("# Home, edited", read("temp/_includes/index.md"));
     assertEquals(new ArrayList<>(Collections.singletonList(temp("_includes/index.md").toLowerCase())), new ArrayList<>(pf.allOutputs));
   }
+
+  @Test
+  void notForAPageThatNowUsesTheResources() throws Exception {
+    write("input/pagecontent/index.md", "# Home\n\n{% sql SELECT * FROM Resources %}");
+    IOException e = assertThrows(IOException.class, () -> gen.regeneratePages(Collections.singletonList(page)));
+    assertTrue(e.getMessage().endsWith("now has content that depends on the resources"), e.getMessage());
+  }
+
+  @Test
+  void aWatchBuildRecordsThePagesThatUseTheResources() throws Exception {
+    pf.generatingDatabase = false;
+    write("input/pagecontent/index.md", "# Home\n\n{% uml x %}");
+    build();
+    // not in a build that isn't followed by a page rebuild
+    assertTrue(pf.pagesWithCustomContent.isEmpty());
+    PageRebuild state = new PageRebuild();
+    state.setPf(pf);
+    gen.setPageRebuild(state);
+    build();
+    assertEquals(Collections.singleton(page), pf.pagesWithCustomContent);
+  }
+
+  @Test
+  void theSearchFormIsFilledInAsInTheBuild() throws Exception {
+    gen = new PublisherGenerator(new PublisherSettings());
+    gen.setPf(pf);
+    pf.publishedIg = new org.hl7.fhir.model.core.ImplementationGuide().setTitle("My IG");
+    write("input/pagecontent/searchform.html", "<form title=\"{{title}}\" action=\"{{url}}\">2</form>");
+    FetchedFile form = new FetchedFile("input/pagecontent/searchform.html", "pagecontent/searchform.html");
+    form.setPath(dir.resolve("input/pagecontent/searchform.html").toString());
+    form.setRelativePath("searchform.html");
+    form.setProcessMode(FetchedFile.PROCESS_NONE);
+    pf.allOutputs.add(temp("searchform.html").toLowerCase());
+    form.getOutputNames().add(temp("searchform.html"));
+    write("temp/searchform.html", "<form title=\"My IG\" action=\"x\">1</form>");
+    gen.regeneratePages(Collections.singletonList(form));
+    String res = read("temp/searchform.html");
+    assertTrue(res.startsWith("<form title=\"My IG\" action=\"file://"), res);
+  }
 }

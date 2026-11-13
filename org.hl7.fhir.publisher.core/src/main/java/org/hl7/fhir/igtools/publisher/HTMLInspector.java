@@ -351,7 +351,9 @@ public class HTMLInspector {
   /**
    * A new inspector with the same set up as this one, and what was given to it before it checked anything (the links to
    * check, the manual pages, the exceptions and comparison files so far), but nothing it found when checking: watch mode
-   * uses it to check the output again after a page-only change (see PageRebuild)
+   * uses it to check the output again after a page-only change (see PageRebuild). It copies what is set before the
+   * package step; what PublisherGenerator.finishGenerate() sets after it (the language settings, the requirements
+   * folder) is set again on the copy there
    */
   public HTMLInspector copyForRecheck() throws IOException {
     HTMLInspector res = new HTMLInspector(context, rootFolder, specs, linkSpecs, log, canonical, packageId, version, trackedFragments, sources,

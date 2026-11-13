@@ -188,8 +188,12 @@ class PageRebuildTest {
   @Test
   void notWhenFilesAreAddedOrRemoved() throws IOException {
     built();
-    assertNull(state.pagesFor(changes(() -> write("input/pagecontent/new.md", "new")), new ArrayList<>()));
-    assertNull(state.pagesFor(changes(() -> Files.delete(dir.resolve("input/pagecontent/index.md"))), new ArrayList<>()));
+    List<String> reason = new ArrayList<>();
+    assertNull(state.pagesFor(changes(() -> write("input/pagecontent/new.md", "new")), reason));
+    assertEquals("files were added or removed", reason.get(0));
+    reason.clear();
+    assertNull(state.pagesFor(changes(() -> Files.delete(dir.resolve("input/pagecontent/index.md"))), reason));
+    assertEquals("files were added or removed", reason.get(0));
   }
 
   @Test
@@ -218,6 +222,20 @@ class PageRebuildTest {
     List<String> reason = new ArrayList<>();
     assertNull(state.pagesFor(changes(() -> write("input/pagecontent/index.md", "# 3")), reason));
     assertTrue(reason.get(0).endsWith("is also read as something other than a page"), reason.get(0));
+  }
+
+  /** a second page rebuild starts from the temp folder as the first one left it before Jekyll */
+  @Test
+  void prepareTempTwiceInARow() throws IOException {
+    state.beforeJekyll();
+    for (String edit : new String[] {"# Home, edited", "# Home, edited again"}) {
+      write("temp/full-ig.zip", "zip");
+      write("temp/index.md", edit);
+      Files.setLastModifiedTime(dir.resolve("temp/index.md"), FileTime.fromMillis(System.currentTimeMillis() + edit.length() * 1000L));
+      state.prepareTemp(Collections.singletonList(dir.resolve("temp/index.md").toString()));
+      assertFalse(Files.exists(dir.resolve("temp/full-ig.zip")));
+      assertEquals(edit, read("temp/index.md"));
+    }
   }
 
   @Test
@@ -682,5 +700,21 @@ class PageRebuildTest {
   void plainContentFromBytes() {
     assertTrue(PageRebuild.isPlainContent("Embrüo".getBytes(StandardCharsets.UTF_8)));
     assertFalse(PageRebuild.isPlainContent("x [[[y]]]".getBytes(StandardCharsets.UTF_8)));
+  }
+
+  /** the html checks mark the fragments they find used: a page rebuild starts again from what the build had marked */
+  @Test
+  void theFragmentsUsedArePutBack() throws IOException {
+    PublisherBase.FragmentUseRecord used = new PublisherGenerator(new PublisherSettings()).new FragmentUseRecord();
+    PublisherBase.FragmentUseRecord unused = new PublisherGenerator(new PublisherSettings()).new FragmentUseRecord();
+    used.used = true;
+    pf.fragmentUses.put("a", used);
+    pf.fragmentUses.put("b", unused);
+    built();
+    used.used = false;
+    unused.used = true;
+    state.restore();
+    assertTrue(used.used);
+    assertFalse(unused.used);
   }
 }

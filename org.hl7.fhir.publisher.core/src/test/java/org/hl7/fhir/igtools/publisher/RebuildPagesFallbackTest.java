@@ -3,6 +3,7 @@ package org.hl7.fhir.igtools.publisher;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
@@ -105,5 +106,50 @@ class RebuildPagesFallbackTest {
     assertNull(f.get(p));
     assertEquals("Rapido Mode: the page rebuild failed (java.lang.Error: Output file x is being generated more than once), so doing a complete build",
         log.get(log.size() - 1));
+  }
+
+  /** running out of memory isn't something a complete build would help with */
+  @Test
+  void notWhenThePageRebuildRunsOutOfMemory() throws Exception {
+    boolean[] discarded = {false};
+    PublisherFields pf = new PublisherFields();
+    pf.vsCache = dir.toString();
+    pf.logger = new ILoggingService() {
+      public void logMessage(String message) {
+      }
+
+      public void logDebugMessage(LogCategory category, String message) {
+      }
+    };
+    PageRebuild state = new PageRebuild() {
+      @Override
+      public List<FetchedFile> pagesFor(SourceSnapshot.Changes changes, List<String> reason) {
+        return new ArrayList<>();
+      }
+
+      @Override
+      public PublisherFields getPf() {
+        return pf;
+      }
+
+      @Override
+      public void restore() {
+        throw new OutOfMemoryError("Java heap space");
+      }
+
+      @Override
+      public void discard() {
+        discarded[0] = true;
+      }
+    };
+    Publisher p = new Publisher();
+    p.setPf(pf);
+    Field f = Publisher.class.getDeclaredField("pageRebuild");
+    f.setAccessible(true);
+    f.set(p, state);
+
+    assertThrows(OutOfMemoryError.class, () -> p.rebuildPages(new WatchSession(dir, Collections.emptyList())));
+    assertTrue(discarded[0]);
+    assertNull(f.get(p));
   }
 }

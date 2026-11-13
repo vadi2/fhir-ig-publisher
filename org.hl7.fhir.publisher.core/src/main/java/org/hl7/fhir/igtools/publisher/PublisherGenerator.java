@@ -216,6 +216,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   private PageRebuild pageRebuild;
   // while regeneratePages() writes the pages again
   private boolean regeneratingPages;
+  // whether the last Jekyll run returned an error after it said it had succeeded
+  boolean jekyllReturnedError;
 
   public void setPageRebuild(PageRebuild pageRebuild) {
     this.pageRebuild = pageRebuild;
@@ -580,7 +582,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       pageRebuild.notReusable("the terminology is unloaded early (tx-unload-early)");
     }
     if (pf.template != null) {
-      String reason = pf.template.whyScriptsMayReadPages();
+      String reason = pf.template.whyNoPageRebuild();
       if (reason != null) {
         pageRebuild.notReusable(reason);
       } else {
@@ -642,6 +644,10 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
         int count = pf.allOutputs.size();
         generateHtmlOutputs(f, false, null, null);
+        if (dsts.contains(Utilities.path(pf.tempDir, "searchform.html"))) {
+          // as the build does before Jekyll
+          fixSearchForm();
+        }
         if (pf.allOutputs.size() != count + dsts.size()) {
           throw new IOException("The page " + f.getPath() + " could not be written again");
         }
@@ -717,13 +723,15 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
 
   /**
    * Once Jekyll has run: the template's check. In a page rebuild, what it reported in the build is among the messages
-   * put back, so it must report the same; and the package step's files, which Jekyll removed, are put back
+   * put back, so it must report the same, Jekyll must have written the same files, and the package step's files, which
+   * Jekyll removed, are put back
    */
   void afterJekyll(PageRebuild replay) throws IOException {
     if (replay != null) {
       if (pf.template != null) {
         replay.checkOnCheckMessages(pf.template.onCheckEvent(pf.context, pf.publishedIg));
       }
+      replay.checkJekyllOutputs();
       replay.restorePackageOutputs();
     } else {
       if (!settings.isGenerationOff()) {
@@ -749,9 +757,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       keepForPageRebuild(() -> pageRebuild.beforeJekyll());
     }
 
+    jekyllReturnedError = false;
     boolean jekyllOk = runTool();
-    if (replay != null && !jekyllOk) {
-      throw new IOException("Jekyll failed");
+    if (replay != null && (!jekyllOk || jekyllReturnedError)) {
+      // its output may be incomplete: a complete build tells
+      throw new IOException(jekyllOk ? "Jekyll returned an error" : "Jekyll failed");
     }
     if (jekyllOk) {
       afterJekyll(replay);
@@ -937,13 +947,20 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (!pf.txUnloadEarly) {
       // default path: terminology stayed loaded through HTML inspection (so conformance
       // statement rendering works); unload it now that the inspector is complete.
-      if (pageRebuild != null && pageRebuild.mayBeReusable()) {
-        // a page rebuild that follows checks the html again with it (see PageRebuild.discard())
-        pageRebuild.unloadContextWhenDiscarded();
-      } else if (replay == null) {
-        pf.context.unload();
-        System.gc();
-      }
+      unloadContext(replay);
+    }
+  }
+
+  /**
+   * Unloads the context once the html checks are done, unless a page rebuild may follow (it checks the html again with
+   * it: PageRebuild.discard() unloads it), or this is one
+   */
+  void unloadContext(PageRebuild replay) {
+    if (pageRebuild != null && pageRebuild.isKept()) {
+      pageRebuild.unloadContextWhenDiscarded();
+    } else if (replay == null) {
+      pf.context.unload();
+      System.gc();
     }
   }
 
@@ -4565,7 +4582,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
-  private boolean runTool() throws Exception {
+  boolean runTool() throws Exception {
     if (settings.isSimplifierMode()) {
       return true;
     }
@@ -4698,6 +4715,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           log("Jekyll timeout exceeded: " + Long.toString(pf.jekyllTimeout /1000) + " seconds");
         }
         log("Jekyll claimed to succeed, but returned an error. Proceeding anyway");
+        jekyllReturnedError = true;
         if (pageRebuild != null) {
           pageRebuild.notReusable("Jekyll returned an error");
         }

@@ -4,6 +4,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.io.IOException;
@@ -18,6 +21,7 @@ import java.util.List;
 import java.util.Map;
 
 import org.hl7.fhir.igtools.templates.Template;
+import org.hl7.fhir.standalone.context.SimpleWorkerContext;
 import org.hl7.fhir.utilities.TimeTracker;
 import org.hl7.fhir.utilities.validation.ValidationMessage;
 import org.hl7.fhir.utilities.validation.ValidationMessage.IssueSeverity;
@@ -136,5 +140,74 @@ class PageRebuildAfterJekyllTest {
     gen.keepForPageRebuild(() -> {
       throw new AssertionError("not expected");
     });
+  }
+
+  @Test
+  void withoutWatchModeTheContextIsUnloadedAsBefore() {
+    pf.context = mock(SimpleWorkerContext.class);
+    gen.setPageRebuild(null);
+    gen.unloadContext(null);
+    verify(pf.context, times(1)).unload();
+  }
+
+  @Test
+  void theContextStaysLoadedForAPageRebuildThatMayFollow() throws IOException {
+    pf.context = mock(SimpleWorkerContext.class);
+    build();
+    gen.unloadContext(null);
+    verify(pf.context, never()).unload();
+    // nor does a page rebuild unload it: the next one checks the html again with it
+    gen.setPageRebuild(null);
+    gen.unloadContext(state);
+    verify(pf.context, never()).unload();
+    state.discard();
+    verify(pf.context, times(1)).unload();
+  }
+
+  @Test
+  void theContextIsUnloadedAfterABuildThatKeptNothing() {
+    // e.g. Jekyll failed, so the build didn't get to the package step
+    pf.context = mock(SimpleWorkerContext.class);
+    gen.unloadContext(null);
+    verify(pf.context, times(1)).unload();
+    pf.context = mock(SimpleWorkerContext.class);
+    state.notReusable("the template doesn't declare what its scripts read");
+    gen.unloadContext(null);
+    verify(pf.context, times(1)).unload();
+  }
+
+  /** a generator whose Jekyll run ends as given */
+  private PublisherGenerator jekyll(boolean ok, boolean returnedError) {
+    PublisherGenerator res = new PublisherGenerator(new PublisherSettings()) {
+      @Override
+      boolean runTool() {
+        jekyllReturnedError = returnedError;
+        return ok;
+      }
+    };
+    res.setPf(pf);
+    return res;
+  }
+
+  @Test
+  void aPageRebuildFailsIfJekyllFailsOrReturnsAnError() throws IOException {
+    build();
+    jekyllRuns();
+    IOException e = assertThrows(IOException.class, () -> jekyll(false, false).finishGenerate(state));
+    assertEquals("Jekyll failed", e.getMessage());
+    e = assertThrows(IOException.class, () -> jekyll(true, true).finishGenerate(state));
+    assertEquals("Jekyll returned an error", e.getMessage());
+  }
+
+  /** e.g. a page whose front matter gives it a permalink now: the package lists the pages */
+  @Test
+  void aPageRebuildFailsIfJekyllWritesOtherFiles() throws IOException {
+    build();
+    jekyllRuns();
+    Files.delete(dir.resolve("output/index.html"));
+    write("output/home.html", "<html/>");
+    gen.setPageRebuild(null);
+    IOException e = assertThrows(IOException.class, () -> gen.afterJekyll(state));
+    assertEquals("Jekyll wrote other files than in the last build", e.getMessage());
   }
 }

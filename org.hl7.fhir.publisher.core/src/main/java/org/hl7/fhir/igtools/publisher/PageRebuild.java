@@ -43,7 +43,7 @@ import org.hl7.fhir.utilities.validation.ValidationMessage;
  *   full-ig.zip) can be taken out again, and Jekyll sees exactly what it saw the first time</li>
  *   <li>after the package step, a copy of the files it wrote to the output folder (package.tgz, the zips...), which
  *   Jekyll removes from the output folder when it runs again: a page-only change can't change them, because nothing in
- *   them depends on page content</li>
+ *   them depends on page content (but the names of the files Jekyll writes: the rebuild checks they're the same)</li>
  *   <li>and then, before the html checks, the messages (the build's, and each file's and resource's), which the html
  *   checks and qa add to, and how many of them the suppressed messages had matched; a fresh copy of the html
  *   inspector, which collects what it found as it checks; and which fragments the inspector marked as used</li>
@@ -56,7 +56,9 @@ public class PageRebuild {
 
   /**
    * Text in a page that makes the publisher do more than copy it (see PublisherGenerator.processCustomLiquid()): these
-   * pages are checked against, or depend on, the resources, so a change to one is not a page-only change
+   * pages are checked against, or depend on, the resources, so a change to one is not a page-only change. Not
+   * "{% lang-fragment": it includes a fragment that is in the temp folder already, and a page rebuild processes it as
+   * the build did
    */
   private static final String[] CUSTOM_CONTENT_MARKERS = {"{% sql", "{% fragment", "{% json", "{% class-diagram", "{% uml",
       "{% multi-map", "{% dataset", "{%!", "[[[", "validationRule"};
@@ -104,6 +106,8 @@ public class PageRebuild {
   private Map<Path, Stamp> tempFiles;
   private Set<Path> tempFolders;
   private Map<Path, Stamp> outputAfterJekyll;
+  /** the files in the output folder when Jekyll and the template's check had run in the build */
+  private Set<Path> jekyllOutputs;
   private Path stashFolder;
   private final List<Path> stashed = new ArrayList<>();
   private boolean captured;
@@ -149,6 +153,11 @@ public class PageRebuild {
   /** False if the build has already found why its state can't be reused */
   public boolean mayBeReusable() {
     return notReusable == null;
+  }
+
+  /** Whether the build has kept all a page rebuild needs, and found no reason it can't be reused (so far) */
+  public boolean isKept() {
+    return captured && notReusable == null;
   }
 
   public String getNotReusable() {
@@ -254,6 +263,17 @@ public class PageRebuild {
    */
   public void afterJekyll() throws IOException {
     outputAfterJekyll = list(Paths.get(pf.outputDir), null);
+    jekyllOutputs = new HashSet<>(outputAfterJekyll.keySet());
+  }
+
+  /**
+   * Throws an exception if Jekyll and the template's check wrote other files in the page rebuild than in the build
+   * (e.g. a page's front matter gives it another name now): what the package step wrote lists them
+   */
+  public void checkJekyllOutputs() throws IOException {
+    if (!list(Paths.get(pf.outputDir), null).keySet().equals(jekyllOutputs)) {
+      throw new IOException("Jekyll wrote other files than in the last build");
+    }
   }
 
   /**

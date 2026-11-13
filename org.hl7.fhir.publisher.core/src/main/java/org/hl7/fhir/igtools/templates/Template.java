@@ -88,7 +88,7 @@ public class Template {
   public static final int IG_ANY = 1;
   public static final int IG_NO_RESOURCE = 2;
   private static final boolean USE_R5_IG_FORMAT = false;
-  /** see whyScriptsMayReadPages() */
+  /** see whyNoPageRebuild() */
   private static final String SCRIPT_INPUTS = "script-inputs";
   
   private NpmPackage pack;
@@ -759,7 +759,7 @@ public class Template {
    * temp folder, which has the pages in it, so a template that has one gets a complete build too. (The onCheck script
    * runs again in a page rebuild)
    */
-  public String whyScriptsMayReadPages() {
+  public String whyNoPageRebuild() {
     if (script == null) {
       return null;
     }
@@ -772,10 +772,10 @@ public class Template {
     return null;
   }
 
-  /** The files and folders that the template declares its scripts read (see whyScriptsMayReadPages()) */
+  /** The files and folders that the template declares its scripts read (see whyNoPageRebuild()) */
   public List<String> getScriptInputs() throws IOException {
     List<String> res = new ArrayList<>();
-    if (configuration.has(SCRIPT_INPUTS)) {
+    if (configuration.has(SCRIPT_INPUTS) && configuration.get(SCRIPT_INPUTS).isJsonArray()) {
       for (String s : configuration.getStrings(SCRIPT_INPUTS)) {
         res.add(Utilities.path(root, s));
       }
