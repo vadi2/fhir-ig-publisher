@@ -103,11 +103,16 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 
 import static org.hl7.fhir.igtools.publisher.Publisher.*;
 
@@ -236,8 +241,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   // watch mode: the files that were put in the output folder before a build had finished, as they were then (a
   // digest, by path in the output folder): see publishPagesEarly()
   private final Map<String, String> earlyPages = new HashMap<>();
-  // whether the memory that generating the outputs used is reclaimed once Jekyll has run, not before
-  private boolean reclaimAfterJekyll;
+  // watch mode: the copy of the pages into the output folder that is running (see publishPagesEarly()), or null
+  private Future<?> earlyPublish;
   // watch mode: where the html-checked versions of the output files that Jekyll wrote again for the template's check
   // are kept meanwhile (null: none), and those files (relative to the output folder)
   private Path checkedStash;
@@ -246,16 +251,6 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   /** Watch mode: whether Jekyll is kept running for this build's site, and writes only what changed next time */
   public boolean keepsJekyllRunning() {
     return jekyllDriver != null && jekyllDriver.isRunningFor(new File(pf.tempDir).getAbsolutePath(), new File(pf.outputDir).getAbsolutePath());
-  }
-
-  /**
-   * Whether the full garbage collection that follows generating the outputs waits until Jekyll has rendered the
-   * pages (and, in watch mode, they are in the output folder: see publishPagesEarly()). It makes room for the Jekyll
-   * that a build starts; a Jekyll kept running has its memory already, and the pages don't depend on it, so the
-   * author doesn't wait for it
-   */
-  boolean reclaimsMemoryAfterJekyll() {
-    return keepsJekyllRunning();
   }
 
   public void setWatchTools(JekyllDriver jekyllDriver, FullIgZip fullIgZip) {
@@ -532,11 +527,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     for (RelatedIG ig : pf.relatedIGs) {
       ig.dump();
     }
-    reclaimAfterJekyll = reclaimsMemoryAfterJekyll();
-    if (!reclaimAfterJekyll) {
-      System.gc();
-      printMemUsage();
-    }
+    System.gc();
+    printMemUsage();
 
     if (pageRebuild != null) {
       try {
@@ -839,17 +831,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     if (jekyllOk) {
       publishPagesEarly(jekyllWritten);
     }
-    // (before the full garbage collection too: a file saved while the build ran doesn't wait for it)
     TailWatch.Step afterPages = replay == null ? TailWatch.Step.PACKAGES : TailWatch.Step.AI;
-    if (givesWayBefore(afterPages)) {
-      reclaimAfterJekyll = false;
-      releasePackages(replay);
-      return;
-    }
-    if (reclaimAfterJekyll) {
-      reclaimAfterJekyll = false;
-      System.gc();
-      printMemUsage();
+    if (replay != null) {
+      // a page rebuild goes straight on to the AI step and the html checks, which wait for the pages anyway: once they
+      // are up, it can give way to a change
+      awaitEarlyPublish();
     }
     if (givesWayBefore(afterPages)) {
       releasePackages(replay);
@@ -951,6 +937,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
         generateZips(df);
       }
+      // (the AI step changes the pages that may still be being copied; and once they are up, the build can give way)
+      awaitEarlyPublish();
       if (givesWayBefore(TailWatch.Step.AI)) {
         return;
       }
@@ -966,6 +954,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
     }
 
+    // the AI step and the html checks change the pages that may still be being copied
+    awaitEarlyPublish();
     log("Checking Output HTML");
     String statusMessage;
     Map<String, String> statusMessages = new HashMap<>();
@@ -4858,9 +4848,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
    * one that is as Jekyll wrote it for the last build is left as that build's html checks made it (see earlyPages).
    * Nothing is put there if Jekyll returned an error, though it said that it had finished.
    *
+   * The copy runs on a thread of its own while the build goes on (on a large IG it is tens of seconds of disk work that
+   * the end of the build shouldn't wait for); see awaitEarlyPublish() for what waits for it.
+   *
    * @param files the output files Jekyll wrote (in the staging folder), or null if it wrote all of them
    */
   void publishPagesEarly(Set<String> files) {
+    awaitEarlyPublish();
     if (pf.watchOutputDir == null || settings.isGenerationOff() || settings.isSimplifierMode()) {
       return;
     }
@@ -4869,34 +4863,56 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       earlyPages.clear();
       return;
     }
-    long start = System.nanoTime();
-    List<Path> written = null;
+    List<Path> written = files == null ? null : new ArrayList<>();
     if (files != null) {
-      written = new ArrayList<>();
       for (String f : files) {
         written.add(Paths.get(f));
       }
     }
+    Path staged = Paths.get(pf.outputDir);
+    Path target = Paths.get(pf.watchOutputDir);
+    PublisherFields fields = pf;
+    // what the build writes from now on is left for the sync; and if Jekyll didn't say what it wrote, so is what the
+    // last build left in the staging folder, which the package step writes again (a file being written over can look
+    // as it was, but empty, until its first write)
+    Instant now = Instant.now();
+    FileTime asOf = FileTime.from(now);
+    FileTime since = written == null && pf.stagedOutputKept
+        ? FileTime.from(now.minusNanos(System.nanoTime() - pf.watchBuildStarted).minusSeconds(1)) : null;
+    startEarlyPublish(() -> publishPages(fields, staged, target, written, since, asOf));
+  }
+
+  /** runs the copy of the pages on a thread of its own: see awaitEarlyPublish() */
+  void startEarlyPublish(Runnable copy) {
+    FutureTask<Void> task = new FutureTask<>(copy, null);
+    Thread t = new Thread(task, "ig-early-publish");
+    t.setDaemon(true);
+    t.start();
+    earlyPublish = task;
+  }
+
+  private void publishPages(PublisherFields fields, Path staged, Path target, List<Path> files, FileTime since, FileTime asOf) {
+    long start = System.nanoTime();
     OutputFolderSync.Result r;
     try {
-      r = OutputFolderSync.publish(Paths.get(pf.outputDir), Paths.get(pf.watchOutputDir), written, AIProcessor::isRenderedForAiOnly, earlyPages);
+      r = OutputFolderSync.publish(staged, target, files, AIProcessor::isRenderedForAiOnly, earlyPages, since, asOf);
     } catch (IOException e) {
-      log("Unable to put the pages in " + pf.watchOutputDir + " yet (it is updated when the build has finished): " + e);
+      log("Unable to put the pages in " + target + " yet (it is updated when the build has finished): " + e);
       earlyPages.clear();
       return;
     }
     if (r.getWritten() > 0) {
-      pf.watchPagesPublished = true;
+      fields.watchPagesPublished = true;
     }
-    if (pf.watchTail != null && r.getFailures().isEmpty()) {
+    if (fields.watchTail != null && r.getFailures().isEmpty()) {
       // the author has the pages: what's left of the build can give way to the next change
-      pf.watchTail.pagesPublished();
+      fields.watchTail.pagesPublished();
     }
     for (String s : r.getFailures()) {
       log("  " + s);
     }
     long now = System.nanoTime();
-    log("The pages are up in " + pf.watchOutputDir + ", " + DurationUtil.presentDuration(now - pf.watchBuildStarted) + " after the build started: "
+    log("The pages are up in " + target + ", " + DurationUtil.presentDuration(now - fields.watchBuildStarted) + " after the build started: "
         + r.getWritten() + " written, " + r.getUnchanged() + " unchanged"
         + (r.getFailures().isEmpty() ? "" : ", " + r.getFailures().size() + " failed")
         + " (" + DurationUtil.presentDuration(now - start) + "). They are as Jekyll rendered them: the html checks, the packages and the qa pages follow");
@@ -4925,12 +4941,40 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /**
+   * Waits until the pages that publishPagesEarly() is putting in the output folder are there: before anything changes
+   * the files it copies (the AI step, the html checks, the next Jekyll run), and before the output folder is synced or
+   * a failure is recorded there
+   */
+  void awaitEarlyPublish() {
+    Future<?> f = earlyPublish;
+    if (f == null) {
+      return;
+    }
+    earlyPublish = null;
+    try {
+      f.get();
+    } catch (InterruptedException e) {
+      Thread.currentThread().interrupt();
+    } catch (ExecutionException e) {
+      // a bug, or an Error: it fails the build, as when the copy wasn't on a thread of its own
+      earlyPages.clear();
+      Throwable cause = e.getCause();
+      if (cause instanceof Error err) {
+        throw err;
+      }
+      throw cause instanceof RuntimeException re ? re : new RuntimeException(cause);
+    }
+  }
+
   /** Jekyll said that it had finished, and then returned an error: the build goes on with what it wrote */
   void jekyllReturnedAnError() {
     jekyllInDoubt = true;
   }
 
   private boolean runTool(PageRebuild replay) throws Exception {
+    // Jekyll writes the pages the last build may still be copying
+    awaitEarlyPublish();
     jekyllWritten = null;
     jekyllInDoubt = false;
     if (settings.isSimplifierMode()) {

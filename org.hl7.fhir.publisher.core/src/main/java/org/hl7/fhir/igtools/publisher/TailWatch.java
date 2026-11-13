@@ -71,7 +71,8 @@ class TailWatch {
   private final boolean pageRebuild;
   private final Function<SourceSnapshot.Changes, String> whyFinish;
   private final Consumer<String> log;
-  private boolean enabled;
+  // (set by the thread that copies the pages)
+  private volatile boolean enabled;
   private boolean started;
   private boolean closed;
   private Step abandonedBefore;

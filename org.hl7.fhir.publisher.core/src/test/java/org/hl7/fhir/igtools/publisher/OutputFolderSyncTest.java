@@ -9,12 +9,15 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
@@ -599,6 +602,65 @@ class OutputFolderSyncTest {
     write(staged, "b.html", "b, as Jekyll wrote it");
     assertEquals(1, OutputFolderSync.publish(staged, target(), List.of(staged.resolve("b.html")), null, offered).getWritten());
     assertEquals("b, as Jekyll wrote it", read(target(), "b.html"));
+  }
+
+  @Test
+  void publishingLeavesAFileTheBuildWroteSinceForTheSync() throws IOException {
+    Path staged = staged();
+    Map<String, String> offered = new HashMap<>();
+    writeOld(staged, "a.html", "a, as Jekyll wrote it");
+    // the package step has written the last build's package again
+    write(staged, "package.tgz", "this build's package");
+    write(target(), "package.tgz", "the last build's package");
+    OutputFolderSync.Result r = OutputFolderSync.publish(staged, target(), null, null, offered, null, FileTime.from(Instant.parse("2021-01-01T00:00:00Z")));
+
+    assertEquals(1, r.getWritten());
+    assertEquals("a, as Jekyll wrote it", read(target(), "a.html"));
+    assertEquals("the last build's package", read(target(), "package.tgz"));
+    assertEquals(Set.of("a.html"), offered.keySet());
+  }
+
+  @Test
+  void publishingLeavesWhatTheLastBuildLeftForTheSyncWhenToldTo() throws Exception {
+    Path staged = staged();
+    byte[] last = new byte[8 << 20];
+    Arrays.fill(last, (byte) 'o');
+    byte[] next = new byte[8 << 20];
+    Arrays.fill(next, (byte) 'n');
+    for (int i = 0; i < 10; i++) {
+      // the last build's package, left in the staging folder, as in the target
+      Files.write(staged.resolve("package.tgz"), last);
+      Files.setLastModifiedTime(staged.resolve("package.tgz"), OLD);
+      Files.createDirectories(target());
+      Files.write(target().resolve("package.tgz"), last);
+      write(staged, "a.html", "a, as Jekyll wrote it for build " + i);
+      FileTime since = FileTime.from(Instant.now().minusSeconds(60));
+      FileTime asOf = FileTime.from(Instant.now());
+      Map<String, String> offered = new HashMap<>();
+      OutputFolderSync.Result[] r = new OutputFolderSync.Result[1];
+      Thread copy = new Thread(() -> {
+        try {
+          r[0] = OutputFolderSync.publish(staged, target(), null, null, offered, since, asOf);
+        } catch (IOException e) {
+          throw new UncheckedIOException(e);
+        }
+      });
+      copy.start();
+      // (later than asOf, as the build's package step is)
+      Thread.sleep(20);
+      // the package step writes it again, a block at a time (a file being written over is empty, and may still have
+      // its old time, until its first write)
+      try (OutputStream out = Files.newOutputStream(staged.resolve("package.tgz"))) {
+        for (int k = 0; k < 8; k++) {
+          out.write(next, k << 20, 1 << 20);
+        }
+      }
+      copy.join();
+      assertTrue(Arrays.equals(last, Files.readAllBytes(target().resolve("package.tgz"))), "the package in the target was changed");
+      assertEquals("a, as Jekyll wrote it for build " + i, read(target(), "a.html"));
+      assertEquals(1, r[0].getWritten());
+      assertEquals(Set.of("a.html"), offered.keySet());
+    }
   }
 
   @Test

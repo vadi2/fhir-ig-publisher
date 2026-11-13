@@ -901,6 +901,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     if (pf.watchOutputDir == null) {
       return;
     }
+    generator.awaitEarlyPublish();
     long start = System.nanoTime();
     OutputFolderSync.Result r;
     try {
@@ -927,6 +928,8 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     if (pf == null || pf.watchOutputDir == null) {
       return;
     }
+    // whether pages were put in the output folder is known once their copy has finished
+    generator.awaitEarlyPublish();
     if (pf.watchOutputSynced) {
       // it failed after the output folder was brought up to date
       return;
