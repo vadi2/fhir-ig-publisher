@@ -1,6 +1,6 @@
 # QA round 2 results, shard s2
 
-Status: Phase C in progress (3 of 6 IGs done); Phase D after.
+Status: Phase C in progress (4 of 6 IGs done); Phase D after.
 
 Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar only rebuilds pages when the template has no script or declares `script-inputs` in its config.json (Template.whyNoPageRebuild). fhir2.base.template (#current and #0.1.0), which every template here extends, has scripts/ant.xml (onLoad/onGenerate/onCheck) and no script-inputs; hl7.base and hl7.be.fhir add their own ant scripts. So every watch rebuild logs "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then does the usual Differential/Complete build, as master does. These runs show the branch changes nothing when the feature is off; they don't exercise the page rebuild itself.
 
@@ -13,7 +13,7 @@ Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar onl
 | HL7/aitransparency-ig | 6d0a39f | 7600m | 134 | 0/0/0 | 61 | 51 | W1a 25/22, W1c 45/43, W1e 42/39, W1f 37/40, W2 42/39, W3 31/32, W4 39/43, W5 41/39, W6 40/37 (all edits shown) | 56 | 55 | = I1 | same: no page rebuild here (template has scripts without script-inputs, so every watch build is Complete/Differential as on master); only known pre-existing diffs |
 | FHIR/ig-guidance | a9d8a94 | 7600m | 81 | 77/53/40 | 43 | 39 | W1a 55/49, W1b 52/46, W1c 50/44, W1d 49/48, W1e 49/50, W1f 52/50, W2 50/46, W3 48/48, W4 50/47, W5 46/49, W6 54/48 (all edits shown; times include the build already running in the log loop) | 38 | 39 | = I1 | same: no page rebuild here (template scripts without script-inputs, and the BloodPressureGenerator.log loop); every diff is in the master-vs-master noise set |
 | hl7-be/medication | 6b4450d | 7600m | 114 | 4/39/93 | 73 | 81 | W1a 33/31, W1b 36/32, W1c 31/28, W1d 29/28, W1e 52/55, W1f 51/51, W2 51/50, W3 48/39, W4 50/56, W5 51/52, W6 51/51 (all edits shown) | 72 | 68 | = I1 | same: no page rebuild (hl7.be.fhir template script, no script-inputs); only known pre-existing diffs |
-| hl7au/au-fhir-ps | 4d0b69d | 7600m | 348 | 1928/346/2244 | | | | | | | |
+| hl7au/au-fhir-ps | 4d0b69d | 7600m | 348 | 1928/346/2244 | 214 | 122 | W1a 109/104, W1b 106/101, W1c 102/95, W1d 101/99, W1d2 102/93, W1e 97/97, W1f 104/105, W2 109/99, W3 97/92, W4 101/96, W5 102/101, W6 99/104 (all edits shown except W1b, on both jars: see notes) | 219 | 179 | = I1 | same: no page rebuild (template script without script-inputs, and tx failures force Complete Build every time on both jars); only known pre-existing diffs |
 | KIP-infrastructure/implementation-guide | 5b5773c | 7600m | 262 | 40/2349/3539 | | | | | | | |
 | uzinfocom-org/digital-health-integration | 4ff5446 | 7600m | 1262 | 25/363/7650 | | | | | | | |
 | sfaassn2025-source/VFS-IG | f5e0831 | | | | | | | | | | skip: SUSHI errors at HEAD in round 1 (4afd1fe); not re-run |
@@ -37,3 +37,10 @@ Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar onl
 ### be-medication
 - Watch: W1a..W1d Differential Build (31 of 80 files), W1e..W6 Complete Build (changed: ig, or files added/removed), on both jars.
 - R1 vs I1/I2: package/.index.db in the en.tgz (known F3) and, for I2, qa-txservers.html use count. F1 vs W1f, F2 vs W2, I1 vs W6: qa-txservers.html use count only. Masked besides the plan list: order of *-ref-list.json/csv "used by" entries.
+
+### au-ps
+- Watch: every rebuild on both jars is "Complete Build (terminology server calls failed in the last build (94))"; 94 tx.fhir.org calls fail in every build. int also logs the script-inputs reason first. This matters for Phase D: even with script-inputs declared, au-ps will not reach a page rebuild while those tx failures persist.
+- W1b (edit input/pagecontent/downloads.xml) not seen in downloads.html on either jar: the IG also has input/pagecontent/downloads.md, which supplies that page. Spec problem, not a regression.
+- R1 vs I1: en.tgz package/.index.db (known F3), package.db, Signature data in Bundle-aups-referral-endoconsult-autogen (signing time), terminology.hl7.org 5.5.0 vs 7.1.0 in NamingSystem links in the narratives of Bundle-aups-gpvisit-retrieval and -referral-endoconsult-autogen (known, master too). R1 vs I2 adds qa-txservers count; the 5.5.0/7.1.0 diff goes away (warm cache).
+- F1 vs W1f, F2 vs W2, I1 vs W6: the same kinds only (Signature time, package.db, qa-txservers count, and in F2 vs W2 the terminology.hl7.org link version). QA counts and message sets equal. No stale output.
+
