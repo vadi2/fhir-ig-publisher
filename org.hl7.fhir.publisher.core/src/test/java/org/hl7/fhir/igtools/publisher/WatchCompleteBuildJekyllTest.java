@@ -1,11 +1,13 @@
 package org.hl7.fhir.igtools.publisher;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.contains;
 import static org.mockito.ArgumentMatchers.startsWith;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
@@ -19,8 +21,14 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.io.OutputStream;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Set;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.CountDownLatch;
 
 import org.hl7.fhir.igtools.templates.Template;
 import org.hl7.fhir.utilities.logging.ILoggingService;
@@ -244,5 +252,241 @@ class WatchCompleteBuildJekyllTest {
     assertTrue(driver.build(temp, out, 20_000, s -> {}).isOk());
     write("temp/a.html", "a3");
     assertEquals(Arrays.asList("a.html"), g.changedSources(temp, out));
+  }
+
+  @Test
+  void whatFailsTheCopyOfThePagesFailsTheBuildWhenItWaitsForIt() {
+    PublisherGenerator g = generator(null);
+    g.startEarlyPublish(() -> {
+      throw new IllegalStateException("a bug in the copy");
+    });
+    RuntimeException e = assertThrows(RuntimeException.class, g::awaitEarlyPublish);
+    assertTrue(e.getCause() instanceof IllegalStateException);
+    assertTrue(e.getMessage().startsWith("Unable to put the pages in "), e.getMessage());
+    g.startEarlyPublish(() -> {
+      throw new OutOfMemoryError("out of memory in the copy");
+    });
+    assertThrows(OutOfMemoryError.class, g::awaitEarlyPublish);
+    // and it is only thrown once
+    g.awaitEarlyPublish();
+  }
+
+  @Test
+  void anInterruptDoesntCutShortTheWaitForTheCopy() throws Exception {
+    PublisherGenerator g = generator(null);
+    CountDownLatch release = new CountDownLatch(1);
+    AtomicBoolean copied = new AtomicBoolean();
+    g.startEarlyPublish(() -> {
+      try {
+        release.await();
+      } catch (InterruptedException e) {
+        throw new IllegalStateException(e);
+      }
+      copied.set(true);
+    });
+    new Thread(() -> {
+      try {
+        Thread.sleep(200);
+      } catch (InterruptedException e) {
+        // released at once
+      }
+      release.countDown();
+    }).start();
+    // (as TailWatch, for one, leaves it)
+    Thread.currentThread().interrupt();
+    g.awaitEarlyPublish();
+    assertTrue(copied.get(), "the wait returned while the copy was still running");
+    assertTrue(Thread.interrupted(), "the interrupt is kept");
+  }
+
+  @Test
+  void aCopyThatFailsPartWayCountsAsHavingPutPagesThere() {
+    PublisherGenerator g = generator(null);
+    pf.watchPagesPublished = false;
+    g.startEarlyPublish(() -> {
+      throw new IllegalStateException("after some of the pages");
+    });
+    assertThrows(RuntimeException.class, g::awaitEarlyPublish);
+    assertTrue(pf.watchPagesPublished);
+  }
+
+  @Test
+  void aBuildThatHasFailedGetsWhatFailedTheCopyWithoutItBeingThrown() {
+    PublisherGenerator g = generator(null);
+    IllegalStateException bug = new IllegalStateException("a bug in the copy");
+    g.startEarlyPublish(() -> {
+      throw bug;
+    });
+    assertEquals(bug, g.finishEarlyPublish());
+    assertEquals(null, g.finishEarlyPublish());
+  }
+
+  @Test
+  void whenJekyllDidntSayWhatItWroteOnlyItsFilesAreCopiedFromAKeptStagingFolder() throws Exception {
+    pf.stagedOutputKept = true;
+    // a stylesheet Jekyll copied again, with its source's time
+    write("temp/assets/site.css", "new css");
+    write("temp/.watch-output/assets/site.css", "new css");
+    Files.setLastModifiedTime(dir.resolve("temp/.watch-output/assets/site.css"), FileTime.from(Instant.parse("2020-01-01T00:00:00Z")));
+    write("output/assets/site.css", "old css");
+    write("temp/.watch-output/a.html", "a2");
+    // the last build's package, which the package step writes again meanwhile
+    byte[] last = new byte[8 << 20];
+    Arrays.fill(last, (byte) 'o');
+    byte[] next = new byte[8 << 20];
+    Arrays.fill(next, (byte) 'n');
+    Path staged = dir.resolve("temp/.watch-output/package.r4.tgz");
+    Files.write(staged, last);
+    Files.write(dir.resolve("output/package.r4.tgz"), last);
+
+    PublisherGenerator g = generator(null);
+    g.publishPagesEarly(null);
+    try (OutputStream o = Files.newOutputStream(staged)) {
+      for (int k = 0; k < 8; k++) {
+        o.write(next, k << 20, 1 << 20);
+      }
+    }
+    g.awaitEarlyPublish();
+
+    assertEquals("new css", output("assets/site.css"));
+    assertEquals("a2", output("a.html"));
+    assertTrue(Arrays.equals(last, Files.readAllBytes(dir.resolve("output/package.r4.tgz"))), "the package in the output folder was changed");
+  }
+
+  /** puts the pages in the output folder, and waits until they are there (the copy runs while the build goes on) */
+  private static void publishEarly(PublisherGenerator g, Set<String> files) {
+    g.publishPagesEarly(files);
+    g.awaitEarlyPublish();
+  }
+
+  private String output(String rel) throws IOException {
+    return new String(Files.readAllBytes(Paths.get(pf.watchOutputDir, rel)), StandardCharsets.UTF_8);
+  }
+
+  @Test
+  void thePagesJekyllWroteAreInTheOutputFolderBeforeTheBuildHasFinished() throws Exception {
+    write("temp/.watch-output/en/a.html", "a, rendered again");
+    write("temp/.watch-output/en/b.html", "b, as the last html check left it");
+    write("output/en/a.html", "a");
+    write("output/en/b.html", "b");
+    write("output/package.tgz", "the last build's");
+    write("output/qa.json", "{}");
+    pf.watchBuildStarted = System.nanoTime();
+
+    publishEarly(generator(null), Collections.singleton(Paths.get(out, "en", "a.html").toString()));
+
+    assertEquals("a, rendered again", output("en/a.html"));
+    assertEquals("b", output("en/b.html"));
+    assertEquals("the last build's", output("package.tgz"));
+    assertEquals("{}", output("qa.json"));
+    assertTrue(pf.watchPagesPublished);
+    assertFalse(pf.watchOutputSynced);
+    // the staging folder still has the page, for the html checks and the sync at the end
+    assertTrue(new File(out, "en/a.html").exists());
+    verify(pf.logger).logMessage(startsWith("The pages are up in " + pf.watchOutputDir + ", "));
+  }
+
+  @Test
+  void whenJekyllWroteTheWholeSiteAllOfItIsPutInTheOutputFolder() throws Exception {
+    write("temp/.watch-output/index.html", "home");
+    write("temp/.watch-output/en/a.html", "a");
+    write("temp/.watch-output/en/a.ai.html", "what the AI step makes a.md from, and deletes");
+    write("output/gone.html", "a page the build no longer makes");
+
+    publishEarly(generator(null), null);
+
+    assertEquals("home", output("index.html"));
+    assertEquals("a", output("en/a.html"));
+    assertFalse(new File(pf.watchOutputDir, "en/a.ai.html").exists());
+    // (deleted by the sync at the end of the build)
+    assertEquals("a page the build no longer makes", output("gone.html"));
+    assertTrue(pf.watchPagesPublished);
+  }
+
+  @Test
+  void pagesThatJekyllWroteAsTheyWereLeaveTheOutputFolderTheLastBuilds() throws Exception {
+    write("temp/.watch-output/a.html", "a");
+    write("output/a.html", "a");
+
+    publishEarly(generator(null), Collections.singleton(Paths.get(out, "a.html").toString()));
+
+    // so a failure after this still says that the pages are those of the last build that succeeded
+    assertFalse(pf.watchPagesPublished);
+  }
+
+  @Test
+  void nothingIsPutInTheOutputFolderEarlyIfJekyllDidntRenderTheSite() throws Exception {
+    write("temp/.watch-output/a.html", "a2");
+    write("output/a.html", "a");
+
+    settings.setGenerationOff(true);
+    publishEarly(generator(null), null);
+    settings.setGenerationOff(false);
+    settings.setSimplifierMode(true);
+    publishEarly(generator(null), null);
+    settings.setSimplifierMode(false);
+    // not watch mode: the build writes to the output folder itself
+    String output = pf.watchOutputDir;
+    pf.watchOutputDir = null;
+    publishEarly(generator(null), null);
+    pf.watchOutputDir = output;
+
+    assertEquals("a", output("a.html"));
+    assertFalse(pf.watchPagesPublished);
+  }
+
+  @Test
+  void nothingIsPutInTheOutputFolderEarlyIfJekyllReturnedAnError() throws Exception {
+    write("temp/.watch-output/a.html", "a2, or half of it");
+    write("output/a.html", "a");
+    PublisherGenerator g = generator(null);
+    g.jekyllReturnedAnError();
+
+    publishEarly(g, null);
+
+    assertEquals("a", output("a.html"));
+    assertFalse(pf.watchPagesPublished);
+  }
+
+  @Test
+  void aPageJekyllWroteAgainAsItWasStaysAsTheLastBuildsHtmlChecksLeftIt() throws Exception {
+    write("temp/.watch-output/a.html", "a, as Jekyll wrote it");
+    PublisherGenerator g = generator(null);
+    publishEarly(g, null);
+    // the rest of that build, and its sync
+    write("output/a.html", "a, html checked");
+    pf.watchPagesPublished = false;
+
+    // the next build: Jekyll renders the whole site again
+    publishEarly(g, null);
+
+    assertEquals("a, html checked", output("a.html"));
+    assertFalse(pf.watchPagesPublished);
+  }
+
+  @Test
+  void anOutputFolderThatCantBeWrittenToEarlyDoesntFailTheBuild() throws Exception {
+    write("temp/.watch-output/a.html", "a2");
+    write("blocked", "a file where the output folder's parent would be");
+    pf.watchOutputDir = dir.resolve("blocked").resolve("output").toString();
+
+    publishEarly(generator(null), null);
+
+    assertFalse(pf.watchPagesPublished);
+    verify(pf.logger).logMessage(startsWith("Unable to put the pages in " + pf.watchOutputDir + " yet"));
+  }
+
+  @Test
+  void whatCantBePutInTheOutputFolderEarlyDoesntFailTheBuild() throws Exception {
+    write("temp/.watch-output/a/page.html", "a is a folder now");
+    write("temp/.watch-output/b.html", "b2");
+    write("output/a", "a file");
+    write("output/b.html", "b");
+
+    publishEarly(generator(null), null);
+
+    assertEquals("b2", output("b.html"));
+    verify(pf.logger).logMessage(startsWith("  Unable to update a"));
+    verify(pf.logger).logMessage(contains("1 written, 0 unchanged, 1 failed"));
   }
 }

@@ -1,5 +1,6 @@
 package org.hl7.fhir.igtools.publisher;
 
+import com.google.common.util.concurrent.Uninterruptibles;
 import org.apache.commons.exec.CommandLine;
 import org.apache.commons.exec.DefaultExecutor;
 import org.apache.commons.exec.ExecuteWatchdog;
@@ -103,11 +104,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.function.Predicate;
+import java.util.concurrent.FutureTask;
 
 import static org.hl7.fhir.igtools.publisher.Publisher.*;
 
@@ -231,6 +238,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
   private List<String> changedTempFiles;
   // the files in the output folder that the last Jekyll run wrote (null: all of them)
   private Set<String> jekyllWritten;
+  // whether the last Jekyll run returned an error, though it said that it had finished
+  private boolean jekyllInDoubt;
+  // watch mode: the files that were put in the output folder before a build had finished, as they were then (a
+  // digest, by path in the output folder): see publishPagesEarly()
+  private final Map<String, String> earlyPages = new HashMap<>();
+  // watch mode: the copy of the pages into the output folder that is running (see publishPagesEarly()), or null
+  private Future<?> earlyPublish;
   // watch mode: where the html-checked versions of the output files that Jekyll wrote again for the template's check
   // are kept meanwhile (null: none), and those files (relative to the output folder)
   private Path checkedStash;
@@ -805,6 +819,9 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         replay.dropCheckedPackageOutputs();
       }
     }
+    if (jekyllOk) {
+      publishPagesEarly(jekyllWritten);
+    }
     if (jekyllOk && replay == null) {
       keepForPageRebuild(() -> pageRebuild.afterJekyll());
       if (!settings.isGenerationOff()) {
@@ -904,6 +921,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
     }
 
+    // the AI step and the html checks change the pages that may still be being copied
+    awaitEarlyPublish();
     log("Checking Output HTML");
     String statusMessage;
     Map<String, String> statusMessages = new HashMap<>();
@@ -4779,8 +4798,161 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /**
+   * Watch mode: Jekyll has rendered the pages, so the ones it wrote go into the output folder now, rather than when the
+   * build has finished: what follows (the template's check, the packages and zips, the html checks, the AI step, the
+   * qa pages) is most of a rebuild, and the author is waiting for a page. They are as Jekyll wrote them: what the html
+   * checks change in a page (the publish box, links, heading levels) comes with the sync at the end of the build, which
+   * compares the whole output folder with what the build made, as it always did. If the build fails after this, the
+   * output folder keeps these pages (see Publisher.recordWatchFailure()). In a page rebuild, the files Jekyll wrote
+   * again only for the template's check have their html-checked content back by now, which the output folder has.
+   * The .ai.html pages aren't put there: the AI step deletes them.
+   *
+   * Jekyll writes a page again whenever it renders it, changed or not (all of them, when it renders the whole site):
+   * one that is as Jekyll wrote it for the last build is left as that build's html checks made it (see earlyPages).
+   * Nothing is put there if Jekyll returned an error, though it said that it had finished.
+   *
+   * The copy runs on a thread of its own while the build goes on (on a large IG it is tens of seconds of disk work that
+   * the end of the build shouldn't wait for); see awaitEarlyPublish() for what waits for it.
+   *
+   * @param files the output files Jekyll wrote (in the staging folder), or null if it wrote all of them
+   */
+  void publishPagesEarly(Set<String> files) {
+    awaitEarlyPublish();
+    if (pf.watchOutputDir == null || settings.isGenerationOff() || settings.isSimplifierMode()) {
+      return;
+    }
+    if (jekyllInDoubt) {
+      // what the sync puts in the output folder for these pages isn't what was last put there here
+      earlyPages.clear();
+      return;
+    }
+    List<Path> written = files == null ? null : new ArrayList<>();
+    if (files != null) {
+      for (String f : files) {
+        written.add(Paths.get(f));
+      }
+    }
+    Path staged = Paths.get(pf.outputDir);
+    Path target = Paths.get(pf.watchOutputDir);
+    PublisherFields fields = pf;
+    // what the build writes from now on is left for the sync. And if Jekyll didn't say what it wrote, so is what the last
+    // build left in the staging folder that isn't Jekyll's (a page, or a file copied from its source folder): the
+    // package step writes its files over those, and a file being written over can look as it was, but empty, until its
+    // first write. (Their times can't tell: Jekyll gives a copied file its source's, and renames change the others')
+    FileTime asOf = stagingClock(staged);
+    Predicate<String> leftOut = AIProcessor::isRenderedForAiOnly;
+    if (written == null && pf.stagedOutputKept) {
+      Path source = Paths.get(pf.tempDir);
+      leftOut = leftOut.or(rel -> !rel.endsWith(".html") && !Files.isRegularFile(source.resolve(rel)));
+    }
+    Predicate<String> notCopied = leftOut;
+    startEarlyPublish(() -> publishPages(fields, staged, target, written, notCopied, asOf));
+  }
+
+  /**
+   * what time it is on the file system the staging folder is on (which may not be this clock's), as the modification
+   * time of a file made next to it now; this clock's if that can't be done
+   */
+  private static FileTime stagingClock(Path staged) {
+    try {
+      Path marker = Files.createTempFile(staged.toAbsolutePath().getParent(), ".early-publish", "");
+      try {
+        return Files.getLastModifiedTime(marker);
+      } finally {
+        Files.deleteIfExists(marker);
+      }
+    } catch (IOException | RuntimeException e) {
+      return FileTime.from(Instant.now());
+    }
+  }
+
+  /** runs the copy of the pages on a thread of its own: see awaitEarlyPublish() */
+  void startEarlyPublish(Runnable copy) {
+    PublisherFields fields = pf;
+    FutureTask<Void> task = new FutureTask<>(() -> {
+      try {
+        copy.run();
+      } catch (RuntimeException | Error e) {
+        // it may have put some of the pages there
+        fields.watchPagesPublished = true;
+        throw e;
+      }
+    }, null);
+    Thread t = new Thread(task, "ig-early-publish");
+    t.setDaemon(true);
+    t.start();
+    earlyPublish = task;
+  }
+
+  private void publishPages(PublisherFields fields, Path staged, Path target, List<Path> files, Predicate<String> leftOut, FileTime asOf) {
+    long start = System.nanoTime();
+    OutputFolderSync.Result r;
+    try {
+      r = OutputFolderSync.publish(staged, target, files, leftOut, earlyPages, asOf);
+    } catch (IOException e) {
+      log("Unable to put the pages in " + target + " yet (it is updated when the build has finished): " + e);
+      earlyPages.clear();
+      return;
+    }
+    if (r.getWritten() > 0) {
+      fields.watchPagesPublished = true;
+    }
+    for (String s : r.getFailures()) {
+      log("  " + s);
+    }
+    long now = System.nanoTime();
+    log("The pages are up in " + target + ", " + DurationUtil.presentDuration(now - fields.watchBuildStarted) + " after the build started: "
+        + r.getWritten() + " written, " + r.getUnchanged() + " unchanged"
+        + (r.getFailures().isEmpty() ? "" : ", " + r.getFailures().size() + " failed")
+        + " (" + DurationUtil.presentDuration(now - start) + "). They are as Jekyll rendered them: the html checks, the packages and the qa pages follow");
+  }
+
+  /**
+   * Waits until the pages that publishPagesEarly() is putting in the output folder are there: before anything changes
+   * the files it copies (the AI step, the html checks, the next Jekyll run), and before the output folder is synced or
+   * a failure is recorded there
+   */
+  void awaitEarlyPublish() {
+    Throwable failure = finishEarlyPublish();
+    if (failure instanceof Error err) {
+      throw err;
+    }
+    if (failure != null) {
+      throw new RuntimeException("Unable to put the pages in " + pf.watchOutputDir + ": " + failure, failure);
+    }
+  }
+
+  /**
+   * As awaitEarlyPublish(), but what failed the copy (a bug, or an Error) is returned rather than thrown (null: nothing),
+   * for a build that has failed already. The wait isn't cut short by an interrupt (the copy would go on unwatched), which
+   * is kept for what follows
+   */
+  Throwable finishEarlyPublish() {
+    Future<?> f = earlyPublish;
+    if (f == null) {
+      return null;
+    }
+    earlyPublish = null;
+    try {
+      Uninterruptibles.getUninterruptibly(f);
+      return null;
+    } catch (ExecutionException e) {
+      earlyPages.clear();
+      return e.getCause();
+    }
+  }
+
+  /** Jekyll said that it had finished, and then returned an error: the build goes on with what it wrote */
+  void jekyllReturnedAnError() {
+    jekyllInDoubt = true;
+  }
+
   private boolean runTool(PageRebuild replay) throws Exception {
+    // Jekyll writes the pages the last build may still be copying
+    awaitEarlyPublish();
     jekyllWritten = null;
+    jekyllInDoubt = false;
     if (settings.isSimplifierMode()) {
       return true;
     }
@@ -5203,6 +5375,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
           log("Jekyll timeout exceeded: " + Long.toString(pf.jekyllTimeout /1000) + " seconds");
         }
         log("Jekyll claimed to succeed, but returned an error. Proceeding anyway");
+        jekyllReturnedAnError();
         if (pageRebuild != null) {
           pageRebuild.notReusable("Jekyll returned an error");
         }

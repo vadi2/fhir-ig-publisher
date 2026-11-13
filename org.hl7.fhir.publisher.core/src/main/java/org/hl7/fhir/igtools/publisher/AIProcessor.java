@@ -422,6 +422,13 @@ public class AIProcessor {
   }
 
   /**
+   * Whether an output file is one that Jekyll renders only for this step: it makes the page's .md from it and deletes it
+   */
+  public static boolean isRenderedForAiOnly(String filename) {
+    return filename.endsWith(".ai.html");
+  }
+
+  /**
    * process this on a per language basis
    *
    * @param langs

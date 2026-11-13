@@ -3,6 +3,7 @@ package org.hl7.fhir.igtools.publisher;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
+import java.math.BigInteger;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.FileVisitResult;
@@ -11,8 +12,12 @@ import java.nio.file.Path;
 import java.nio.file.SimpleFileVisitor;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
+import java.nio.file.attribute.FileTime;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -20,6 +25,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Predicate;
 
 /**
  * Brings a folder up to date with a freshly built copy of it, touching only what differs. In watch mode the build
@@ -172,6 +178,103 @@ public class OutputFolderSync {
   }
 
   /**
+   * Copies into the target the files of the staging folder that are new or changed there, before the build that writes
+   * to the staging folder has finished (in watch mode: the pages, once Jekyll has rendered them). Nothing is deleted,
+   * qa.json is left for the sync that follows when the build has finished (what waits for it to change then finds the
+   * whole output in place), and the files stay in the staging folder. As in a sync, a file is replaced in one rename,
+   * and one whose content is the same is left alone.
+   *
+   * @param files the files to copy, in the staging folder (those that aren't there, or aren't files, are skipped), or
+   *              null for every file in it
+   * @param leftOut tells, by its path relative to the staging folder, a file that isn't copied (null: none)
+   * @param offered what the calls before this one copied to the target, by relative path (a digest of the content),
+   *              kept up to date here; or null. A file that is as it was then, and still in the target, isn't
+   *              looked at again: the target has it, or what the build made of it since (the html checks change
+   *              the pages Jekyll wrote), which a copy would put back to how it was before
+   */
+  public static Result publish(Path staged, Path target, Collection<Path> files, Predicate<String> leftOut,
+      Map<String, String> offered) throws IOException {
+    return publish(staged, target, files, leftOut, offered, null);
+  }
+
+  /**
+   * As publish(staged, target, files, leftOut, offered), while the build goes on writing to the staging folder: a file
+   * last modified after asOf (null: no bound), or that changes while it is copied, is left for the sync, so that what is
+   * only partly written doesn't get into the target
+   */
+  public static Result publish(Path staged, Path target, Collection<Path> files, Predicate<String> leftOut,
+      Map<String, String> offered, FileTime asOf) throws IOException {
+    Result result = new Result();
+    // the files are named under the staging folder as it was given, which may be reached through a link
+    Path given = staged.toAbsolutePath().normalize();
+    staged = staged.toRealPath();
+    // (a folder that is a link is one already: creating it fails before Java 20)
+    if (!Files.isDirectory(target)) {
+      Files.createDirectories(target);
+    }
+    target = target.toRealPath();
+    if (staged.startsWith(target) || target.startsWith(staged)) {
+      throw new IOException("The folder " + target + " holds, or is inside, the staging folder " + staged);
+    }
+    Set<String> rels = new TreeSet<>();
+    if (files == null) {
+      Map<String, BasicFileAttributes> all = new HashMap<>();
+      list(staged, all, new HashSet<>(), null);
+      rels.addAll(all.keySet());
+    } else {
+      for (Path f : files) {
+        Path p = given.resolve(f).normalize();
+        if (p.startsWith(given) && Files.isRegularFile(p)) {
+          rels.add(given.relativize(p).toString());
+        }
+      }
+    }
+    rels.remove(QA_JSON);
+    if (leftOut != null) {
+      rels.removeIf(leftOut);
+    }
+    byte[] ba = new byte[BUFFER];
+    byte[] bb = new byte[BUFFER];
+    Set<Path> dirs = new HashSet<>();
+    for (String rel : rels) {
+      Path from = staged.resolve(rel);
+      Path to = target.resolve(rel);
+      try {
+        BasicFileAttributes was = Files.readAttributes(from, BasicFileAttributes.class);
+        if (asOf != null && was.lastModifiedTime().compareTo(asOf) > 0) {
+          continue;
+        }
+        String digest = offered == null ? null : digest(from, ba);
+        boolean there = Files.isRegularFile(to);
+        if (there && digest != null && digest.equals(offered.get(rel))) {
+          result.unchanged++;
+          continue;
+        }
+        if (dirs.add(to.getParent())) {
+          Files.createDirectories(to.getParent());
+        }
+        if (there && Files.size(to) == Files.size(from) && sameContent(from, to, ba, bb)) {
+          // (not noted as offered: it may be what the build made of the file, put back in the staging folder)
+          result.unchanged++;
+        } else if (copy(from, to, asOf == null ? null : was)) {
+          result.written++;
+          if (digest != null) {
+            offered.put(rel, digest);
+          }
+        } else if (offered != null) {
+          offered.remove(rel);
+        }
+      } catch (IOException ex) {
+        if (offered != null) {
+          offered.remove(rel);
+        }
+        result.failures.add("Unable to update " + rel + ": " + describe(ex));
+      }
+    }
+    return result;
+  }
+
+  /**
    * the files and folders under root, by their path relative to it. If result is given, an entry that can't be read is
    * reported there and left out, else it fails the listing
    */
@@ -200,6 +303,22 @@ public class OutputFolderSync {
         return FileVisitResult.CONTINUE;
       }
     });
+  }
+
+  private static String digest(Path file, byte[] buffer) throws IOException {
+    MessageDigest md;
+    try {
+      md = MessageDigest.getInstance("SHA-256");
+    } catch (NoSuchAlgorithmException e) {
+      throw new IOException(e);
+    }
+    try (InputStream in = Files.newInputStream(file)) {
+      int n;
+      while ((n = in.read(buffer)) > 0) {
+        md.update(buffer, 0, n);
+      }
+    }
+    return new BigInteger(1, md.digest()).toString(16);
   }
 
   private static boolean sameContent(Path a, Path b, byte[] ba, byte[] bb) throws IOException {
@@ -232,27 +351,46 @@ public class OutputFolderSync {
 
   /** replaces a file with a copy of another, in one rename: the copy is made next to it first */
   static void copy(Path from, Path to) throws IOException {
+    copy(from, to, null);
+  }
+
+  /**
+   * As copy(from, to), unless from no longer has the attributes was (null: no check) once the copy is made: then the
+   * copy is dropped, and false returned
+   */
+  private static boolean copy(Path from, Path to, BasicFileAttributes was) throws IOException {
     try {
-      copyOver(from, to);
+      return copyOver(from, to, was);
     } catch (AccessDeniedException e) {
       // a read-only file can't be replaced on Windows
       if (!makeWritable(to)) {
         throw e;
       }
-      copyOver(from, to);
+      return copyOver(from, to, was);
     }
   }
 
-  private static void copyOver(Path from, Path to) throws IOException {
+  private static boolean copyOver(Path from, Path to, BasicFileAttributes was) throws IOException {
     // (a copy left by a sync that stopped is stale, and deleted by the next)
     Path copy = to.resolveSibling(".sync-" + to.getFileName());
     Files.copy(from, copy, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.COPY_ATTRIBUTES);
     try {
+      if (was != null && !isAsItWas(from, was)) {
+        Files.delete(copy);
+        return false;
+      }
       Files.move(copy, to, StandardCopyOption.ATOMIC_MOVE);
+      return true;
     } catch (IOException ex) {
       Files.deleteIfExists(copy);
       throw ex;
     }
+  }
+
+  /** whether a file has not been written since it had these attributes */
+  private static boolean isAsItWas(Path file, BasicFileAttributes was) throws IOException {
+    BasicFileAttributes now = Files.readAttributes(file, BasicFileAttributes.class);
+    return now.lastModifiedTime().equals(was.lastModifiedTime()) && now.size() == was.size();
   }
 
   private static void rename(Path from, Path to) throws IOException {
