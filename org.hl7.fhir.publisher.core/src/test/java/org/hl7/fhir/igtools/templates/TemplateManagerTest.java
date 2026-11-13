@@ -1,6 +1,7 @@
 package org.hl7.fhir.igtools.templates;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.fail;
 
@@ -8,6 +9,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Collections;
 
 import org.hl7.fhir.utilities.IniFile;
@@ -73,5 +75,56 @@ class TemplateManagerTest {
     tm.loadTemplateOverrides(new IniFile(dir.resolve("ig.ini").toString()), dir.toString());
     assertBrokenJson(assertThrows(Exception.class, () -> tm.loadTemplate("my.template#1.0.0", dir.toString(), "x.y", false, false, false)));
     assertEquals(Collections.singletonList(folder("override")), tm.getLocalFolders());
+  }
+
+  private static final String SCRIPT = "\"script\": \"scripts/ant.xml\", \"targets\": {\"onGenerate\": \"onGenerate\"}, \"otherScripts\": []";
+
+  /** a template whose base template declares that its scripts read input/data */
+  private Template childOf(String childConfig, String... childFiles) throws IOException {
+    write("base/package/package.json", "{\"name\": \"base.t\", \"version\": \"1.0.0\", \"type\": \"fhir.template\"}");
+    write("base/config.json", "{" + SCRIPT + ", \"script-inputs\": [\"input/data\"]}");
+    write("base/scripts/ant.xml", "<project/>");
+    write("child/package/package.json", "{\"name\": \"child.t\", \"version\": \"1.0.0\", \"type\": \"fhir.template\", "
+        + "\"base\": \"base.t\", \"dependencies\": {\"base.t\": \"1.0.0\"}}");
+    if (childConfig != null) {
+      write("child/config.json", childConfig);
+    }
+    for (String f : childFiles) {
+      write("child/" + f, "<project/>");
+    }
+    write("ig.ini", "[IG]\nig = input/ig.xml\ntemplate = child.t#1.0.0\nchild.t = child\nbase.t = base\n");
+    TemplateManager tm = manager();
+    tm.loadTemplateOverrides(new IniFile(dir.resolve("ig.ini").toString()), dir.toString());
+    return tm.loadTemplate("child.t#1.0.0", dir.toString(), "x.y", false, false, false);
+  }
+
+  private String inIg(String path) {
+    return dir.resolve(path).toFile().getAbsolutePath();
+  }
+
+  @Test
+  void aChildWithoutScriptsKeepsTheDeclaration() throws IOException {
+    Template t = childOf(null, "includes/fragment.xml");
+    assertNull(t.whyNoPageRebuild());
+    assertEquals(Collections.singletonList(inIg("input/data")), t.getScriptInputs());
+  }
+
+  @Test
+  void aChildThatNamesAScriptAndDeclaresAddsToTheDeclaration() throws IOException {
+    Template t = childOf("{\"script\": \"scripts/child.xml\", \"otherScripts\": [], \"script-inputs\": [\"package-list.json\"]}", "scripts/child.xml");
+    assertNull(t.whyNoPageRebuild());
+    assertEquals(Arrays.asList(inIg("input/data"), inIg("package-list.json")), t.getScriptInputs());
+  }
+
+  @Test
+  void aChildThatNamesAScriptWithoutDeclaringDropsTheDeclaration() throws IOException {
+    Template t = childOf("{\"script\": \"scripts/child.xml\", \"otherScripts\": []}", "scripts/child.xml");
+    assertEquals("the template doesn't declare what its scripts read (script-inputs in its config.json)", t.whyNoPageRebuild());
+  }
+
+  @Test
+  void aChildThatOverwritesTheAntScriptDropsTheDeclaration() throws IOException {
+    Template t = childOf(null, "scripts/ant.xml");
+    assertEquals("the template doesn't declare what its scripts read (script-inputs in its config.json)", t.whyNoPageRebuild());
   }
 }
