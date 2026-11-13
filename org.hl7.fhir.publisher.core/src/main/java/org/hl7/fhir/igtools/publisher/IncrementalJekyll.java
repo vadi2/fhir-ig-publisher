@@ -39,7 +39,8 @@ import org.apache.commons.io.FileUtils;
  *
  * <p>Jekyll writes to a folder of its own in the temp folder ({@link #SITE}; Jekyll doesn't read names that start
  * with a dot), and the build gets a copy of it in the staging folder: the html check fills in the publish box of the
- * pages there in place, and the pages that Jekyll doesn't render again have to be as Jekyll wrote them.
+ * pages there in place, and the pages that Jekyll doesn't render again have to be as Jekyll wrote them. Between
+ * runs, .jekyll-metadata is kept in {@link #STATE}.
  */
 public class IncrementalJekyll {
 
@@ -47,6 +48,11 @@ public class IncrementalJekyll {
   public static final String SITE = ".watch-jekyll";
   /** what Jekyll's last incremental run recorded, in its source folder (the temp folder) */
   public static final String METADATA = ".jekyll-metadata";
+  /**
+   * where .jekyll-metadata is kept between runs, in the temp folder: the build deletes the files at the top of the
+   * temp folder that it didn't write (PublisherGenerator.cleanOutput)
+   */
+  public static final String STATE = ".watch-jekyll-state";
   private static final String CACHE = ".jekyll-cache";
 
   /** the folders that Jekyll reads although their names start with an underscore */
@@ -98,6 +104,10 @@ public class IncrementalJekyll {
    * @return null if the run can be incremental, or why it can't
    */
   public String prepare(Path source) throws IOException {
+    Path kept = source.resolve(STATE).resolve(METADATA);
+    if (Files.exists(kept)) {
+      Files.move(kept, source.resolve(METADATA), StandardCopyOption.REPLACE_EXISTING);
+    }
     Map<String, Source> now = new HashMap<>();
     String why = listSources(source, now);
     pending = now;
@@ -115,10 +125,15 @@ public class IncrementalJekyll {
     return changed;
   }
 
-  /** Jekyll succeeded: the next run compares with what this one saw */
-  public void succeeded() {
+  /** Jekyll succeeded: the next run compares with what this one saw, and gets what Jekyll recorded */
+  public void succeeded(Path source) throws IOException {
     sources = pending;
     pending = null;
+    Path metadata = source.resolve(METADATA);
+    if (Files.exists(metadata)) {
+      Files.createDirectories(source.resolve(STATE));
+      Files.move(metadata, source.resolve(STATE).resolve(METADATA), StandardCopyOption.REPLACE_EXISTING);
+    }
   }
 
   /** Jekyll failed: the next run renders every page */
@@ -126,6 +141,7 @@ public class IncrementalJekyll {
     sources = null;
     pending = null;
     Files.deleteIfExists(source.resolve(METADATA));
+    Files.deleteIfExists(source.resolve(STATE).resolve(METADATA));
   }
 
   private String listSources(Path source, Map<String, Source> now) throws IOException {
@@ -221,7 +237,7 @@ public class IncrementalJekyll {
 
   /** the folders in the temp folder that the build keeps for this, or that aren't Jekyll's source */
   private static boolean isOwnFolder(String name) {
-    return name.equals(SITE) || name.equals(CACHE) || name.equals(PublisherIGLoader.WATCH_OUTPUT_STAGING);
+    return name.equals(SITE) || name.equals(STATE) || name.equals(CACHE) || name.equals(PublisherIGLoader.WATCH_OUTPUT_STAGING);
   }
 
   private static boolean isOwnFile(String name) {
@@ -230,7 +246,7 @@ public class IncrementalJekyll {
 
   /** what clearing the temp folder in watch mode leaves */
   public static boolean kept(String name) {
-    return name.equals(SITE) || name.equals(METADATA) || name.equals(PublisherIGLoader.WATCH_OUTPUT_STAGING);
+    return name.equals(SITE) || name.equals(STATE) || name.equals(PublisherIGLoader.WATCH_OUTPUT_STAGING);
   }
 
   /**

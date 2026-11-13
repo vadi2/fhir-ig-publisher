@@ -4718,7 +4718,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       }
       tts.end();
       if (incremental != null) {
-        incremental.succeeded();
+        incremental.succeeded(source);
         copySite(incremental, source);
       }
     } catch (IOException ioex) {

@@ -37,9 +37,14 @@ class IncrementalJekyllTest {
   /** a first run that succeeded, as Jekyll leaves it */
   private void ranOnce() throws IOException {
     assertEquals("no earlier Jekyll run in this session", jekyll.prepare(temp));
-    jekyll.succeeded();
+    ran();
+  }
+
+  /** what Jekyll writes, then the run succeeded */
+  private void ran() throws IOException {
     write(IncrementalJekyll.METADATA, "jekyll's record");
     write(IncrementalJekyll.SITE + "/index.html", "rendered");
+    jekyll.succeeded(temp);
   }
 
   private Path write(String rel, String content) throws IOException {
@@ -61,9 +66,10 @@ class IncrementalJekyllTest {
 
   @Test
   void theFirstRunRendersEveryPage() throws IOException {
-    write(IncrementalJekyll.METADATA, "from another session");
+    write(IncrementalJekyll.STATE + "/" + IncrementalJekyll.METADATA, "from another session");
     assertEquals("no earlier Jekyll run in this session", jekyll.prepare(temp));
     assertFalse(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
+    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.STATE).resolve(IncrementalJekyll.METADATA)));
   }
 
   @Test
@@ -71,6 +77,15 @@ class IncrementalJekyllTest {
     ranOnce();
     assertNull(jekyll.prepare(temp));
     assertEquals(0, jekyll.getChanged());
+    assertEquals("jekyll's record", Files.readString(temp.resolve(IncrementalJekyll.METADATA)));
+  }
+
+  @Test
+  void jekyllsRecordIsKeptOutOfTheWayBetweenRuns() throws IOException {
+    ranOnce();
+    // the build deletes the files at the top of the temp folder that it didn't write
+    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
+    assertNull(jekyll.prepare(temp));
     assertTrue(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
   }
 
@@ -102,7 +117,7 @@ class IncrementalJekyllTest {
     assertNull(jekyll.prepare(temp));
     assertNotEquals(OLD, Files.getLastModifiedTime(include));
     // and the next run compares with it
-    jekyll.succeeded();
+    ran();
     assertNull(jekyll.prepare(temp));
     assertEquals(0, jekyll.getChanged());
   }
@@ -127,12 +142,10 @@ class IncrementalJekyllTest {
     ranOnce();
     rewrite("index.html", "---\n---\nother");
     assertEquals("changed: index.html", jekyll.prepare(temp));
-    jekyll.succeeded();
-    write(IncrementalJekyll.METADATA, "jekyll's record");
+    ran();
     rewrite("en/new.html", "---\n---\n");
     assertEquals("added: en/new.html", jekyll.prepare(temp));
-    jekyll.succeeded();
-    write(IncrementalJekyll.METADATA, "jekyll's record");
+    ran();
     Files.delete(temp.resolve("en/new.html"));
     assertEquals("deleted: en/new.html", jekyll.prepare(temp));
   }
@@ -172,10 +185,9 @@ class IncrementalJekyllTest {
   @Test
   void withoutJekyllsRecordOrOutputEveryPageIsRendered() throws IOException {
     ranOnce();
-    Files.delete(temp.resolve(IncrementalJekyll.METADATA));
+    Files.delete(temp.resolve(IncrementalJekyll.STATE).resolve(IncrementalJekyll.METADATA));
     assertEquals("no " + IncrementalJekyll.METADATA, jekyll.prepare(temp));
-    jekyll.succeeded();
-    write(IncrementalJekyll.METADATA, "jekyll's record");
+    ran();
     Files.delete(temp.resolve(IncrementalJekyll.SITE + "/index.html"));
     Files.delete(temp.resolve(IncrementalJekyll.SITE));
     assertEquals("no " + IncrementalJekyll.SITE, jekyll.prepare(temp));
@@ -187,8 +199,13 @@ class IncrementalJekyllTest {
     assertNull(jekyll.prepare(temp));
     jekyll.failed(temp);
     assertFalse(Files.exists(temp.resolve(IncrementalJekyll.METADATA)));
-    write(IncrementalJekyll.METADATA, "jekyll's record");
     assertEquals("no earlier Jekyll run in this session", jekyll.prepare(temp));
+    ran();
+    assertNull(jekyll.prepare(temp));
+    ran();
+    // a failure between runs (the build failed before Jekyll, say) forgets what Jekyll kept
+    jekyll.failed(temp);
+    assertFalse(Files.exists(temp.resolve(IncrementalJekyll.STATE).resolve(IncrementalJekyll.METADATA)));
   }
 
   @Test
