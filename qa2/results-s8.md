@@ -27,3 +27,11 @@ Status: Phase C builds done for all 7; master watch for TWCMIG/ch-emr and Phase 
 - P5 (pre-existing in round 1, intermittent): package `.index.db` ResourceList has 0 rows in some builds. au-fhir-encounter R1 0 rows, I1/I2 2 rows; rwp R1 0, I1/I2 43. Master rerun of encounter pending.
 
 - R1 QA counts match round 1 except au-fhir-base 122 errors (123 in round 1). au-fhir-base, rwp and ch-emr are at newer commits than in round 1.
+
+## Phase D
+
+Declared template copies (script-inputs from qa2/script-inputs.md) in /home/user/qa/tpl-*, loaded via `<template>#current = <dir>` in ig.ini (TWCMIG: custom-template/config.json); both jars log "Load Template ... from local folder". Same edits as Phase C W1a..W1f and W2, then W1a again (W1a2). DF1/DF2 = int full builds of the W1f / W1a2 sources. Mode per step: P = Page Rebuild, C = Complete Build, D = Differential Build. Heap 7600m.
+
+| IG | template (list) | int first / steps | master first / steps | W1f vs DF1 | W1a2 vs DF2 | notes |
+|---|---|---|---|---|---|---|
+| au-fhir-encounter | hl7.au.sparked (fhir2) | 48 / W1a:5P W1d:25C W1e:28C W1f:29C W2:23C W1a2:6P | 47 / W1a:25D W1d:22D W1e:27C W1f:26C W2:25D W1a2:22D | QA equal (169), 0 files (DF1 45 s) | QA equal, 0 files (DF2 46 s) | all edits visible; W1d (menu.xml, declared in fhir2 list) gives a Complete Build as required ("menu.xml is read by the template's scripts"); W2 Complete Build (resource change) |
