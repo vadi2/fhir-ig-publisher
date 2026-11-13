@@ -15,7 +15,7 @@ Read from the ant scripts of the #current packages on build.fhir.org (13 Nov 202
 Notes
 - Nothing in these scripts reads pages or `input/data` (fhir2's copy of `input/data` is commented out), so a page edit is never in a declared path.
 - Davinci's onCheck also reads `output/en/index.html` and the pages named in menu.xml. That needs no declaration: a page rebuild runs onCheck again and falls back to a complete build if its messages differ from the build's. It reads `output/`, not the watch staging folder, so under -watch it sees the previous build's pages on both jars.
-- Inherited declarations (fix on perf4/watch-page-only, after the bench): a declaration covers the scripts of its template and the ones before it. A template that names a script, targets or otherScripts, or overwrites an ant script, without declaring, drops the declarations before it. So a declaration in hl7.base alone would not cover davinci; declare on the template the IG names.
+- Inherited declarations (on perf4/watch-page-only from e6a0c6a2): a declaration covers the scripts of its template and the ones before it. A template with active content (names a script, targets or otherScripts, overwrites an ant script, or ships files outside the allowlist) that doesn't declare drops the declarations before it. So a declaration in hl7.base alone would not cover davinci; declare on the template the IG names.
 - Local templates built on these: their base's list, plus what their own scripts read. A local template with its own script must declare.
 
 ## Recipe for a QA shard
