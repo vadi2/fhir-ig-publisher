@@ -30,7 +30,7 @@
 | HL7/imaging-service-request-ig | 78 | 195/225/244 | 74 | 195/225/244 | 78 / 78 | 195/225/244 each | 80; 37 65 64 60 60 44 61 60 58 (no W1b, W1d) | 86; 40 70 66 64 64 46 66 67 65 | same (pre-existing diffs only) |
 | RIVO-Noord/zorgviewer-ig | 118 | 669/137/128 | 98 | 669/137/128 | 112 / 109 | 669/137/128 each | 118; 80 80 73 74 72 70 68 72 68 68 (no W1b) | 121; 78 71 71 70 69 72 69 (W4-W6 not run) | same (pre-existing diffs only) |
 | HL7/davinci-ra | 91 | 0/0/0 | 83 | 0/0/0 | 98 / 97 | n/a (watch build fails) | 86; 57 57 58 64 62 63 63 64 65 63 (every build failed) | 87; 62 56 60 65 64 64 68 (every build failed) | same for full builds; watch not comparable (pre-existing failure, both jars) |
-| hl7au/au-fhir-core | 153 | 62/220/47 | 110 | 62/220/47 | - | 62/220/47 each | 134; 101 98 97 98 102 101 103 107 104 104 (no W1b) | 140; 99 104 105 103 104 104 112 107 110 106 | same (pre-existing diffs only) |
+| hl7au/au-fhir-core | 153 | 62/220/47 | 110 | 62/220/47 | 128 / 128 | 62/220/47 each | 134; 101 98 97 98 102 101 103 107 104 104 (no W1b) | 140; 99 104 105 103 104 104 112 107 110 106 | same (pre-existing diffs only) |
 
 ### HL7Chile/MHD-CL
 - Template: local hl7chile-ig-template on hl7.fhir.template (ant/onCheck scripts, no script-inputs): every int.jar watch step logged "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then ran master's Rapido path (Differential for W1a/W1c/W3, Complete for the rest), same modes and times as master. Page-only rebuild never used here, as intended.
@@ -72,4 +72,3 @@
 - QA counts identical (62/220/47, 329 messages; environmental, CI 2/1/3). Watch builds: the duplicate-anchor warning of StructureDefinition-au-core-bloodpressure-definitions.html names temp/pages/.watch-output/en/ instead of output/en/ (F2, pre-existing, as round 1).
 - Raw: R1 vs I1 / I2 84 files, F1 vs W1f, F2 vs W2, I1 vs W6 82, I1 vs I2 0, R1 vs W6 6. The 82 are Composition-aups-minimal and DocumentReference-aups-basicsummary-data (and their html/zip/package copies): NamingSystem-uri link THO version (F4, pre-existing).
 - THO-normalised: R1 vs I1 6 = .index.db (F3) + comparison-v2.0.0/xx-3-Identifier-Identifier.html and xx-5-Address-Address.html (+ full-ig.zip copies), which show a Java stack trace (master too): line numbers differ with the code, and a watch build's frames differ from a full build's (Publisher.execute line 233 vs 243). Watch vs fresh build: only those 4 stack-trace files.
-- F1/F2 times: not recorded (meta lost; builds ran, outputs compared).
