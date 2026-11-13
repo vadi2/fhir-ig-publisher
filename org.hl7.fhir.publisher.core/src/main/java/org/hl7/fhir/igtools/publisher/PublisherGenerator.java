@@ -1,5 +1,6 @@
 package org.hl7.fhir.igtools.publisher;
 
+import com.google.common.util.concurrent.Uninterruptibles;
 import org.apache.commons.exec.CommandLine;
 import org.apache.commons.exec.DefaultExecutor;
 import org.apache.commons.exec.ExecuteWatchdog;
@@ -4933,23 +4934,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       return null;
     }
     earlyPublish = null;
-    boolean interrupted = false;
     try {
-      while (true) {
-        try {
-          f.get();
-          return null;
-        } catch (InterruptedException e) {
-          interrupted = true;
-        } catch (ExecutionException e) {
-          earlyPages.clear();
-          return e.getCause();
-        }
-      }
-    } finally {
-      if (interrupted) {
-        Thread.currentThread().interrupt();
-      }
+      Uninterruptibles.getUninterruptibly(f);
+      return null;
+    } catch (ExecutionException e) {
+      earlyPages.clear();
+      return e.getCause();
     }
   }
 
