@@ -31,7 +31,7 @@
 | RIVO-Noord/zorgviewer-ig | 118 | 669/137/128 | 98 | 669/137/128 | 112 / 109 | 669/137/128 each | 118; 80 80 73 74 72 70 68 72 68 68 (no W1b) | 121; 78 71 71 70 69 72 69 (W4-W6 not run) | same (pre-existing diffs only) |
 | HL7/davinci-ra | 91 | 0/0/0 | 83 | 0/0/0 | 98 / 97 | n/a (watch build fails) | 86; 57 57 58 64 62 63 63 64 65 63 (every build failed) | 87; 62 56 60 65 64 64 68 (every build failed) | same for full builds; watch not comparable (pre-existing failure, both jars) |
 | hl7au/au-fhir-core | 153 | 62/220/47 | 110 | 62/220/47 | 128 / 128 | 62/220/47 each | 134; 101 98 97 98 102 101 103 107 104 104 (no W1b) | 140; 99 104 105 103 104 104 112 107 110 106 | same (pre-existing diffs only) |
-| sfaassn2025-source/base | 346 | 0/3/2 | 350 | 0/3/2 | 315 / 323 | 0/3/2 each | 419; 219 209 207 210 315 316 311 247 306 306 307 | (master watch running) | same (pre-existing diffs only) |
+| sfaassn2025-source/base | 346 | 0/3/2 | 350 | 0/3/2 | 315 / 323 | 0/3/2 each | 419; 219 209 207 210 315 316 311 247 306 306 307 | 327; 269 204 201 222 302 300 300 231 307 300 296 | same (pre-existing diffs only) |
 
 ### HL7Chile/MHD-CL
 - Template: local hl7chile-ig-template on hl7.fhir.template (ant/onCheck scripts, no script-inputs): every int.jar watch step logged "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then ran master's Rapido path (Differential for W1a/W1c/W3, Complete for the rest), same modes and times as master. Page-only rebuild never used here, as intended.
@@ -80,4 +80,5 @@
 - W3/W4 marker checks failed, not a finding: Patient-pat-min.fsh has a hand-written narrative (text.div hard-codes the name), so the name edit never reaches the page; a fresh int.jar full build of the sources after W3 shows the same (marker absent, name as before). The edits did reach the resources (log: Patient-pat-min.json changed). All other markers found/absent as expected.
 - QA identical everywhere (0/3/2, 5 messages).
 - Output: R1 vs I1, R1 vs I2, R1 vs W6: only package .index.db ResourceList (F3, pre-existing). I1 vs I2, F1 vs W1f, F2 vs W2, I1 vs W6: 0 files (raw and THO-normalised).
+- Master watch: W1a was a Complete Build ("changed: date": the run crossed midnight), W1b-W1d and W3 Differential, the rest Complete; int.jar times within 10% of master.
 - The first watch run died in a container restart at W2 (21:10); it was rerun from scratch (times above are the rerun).
