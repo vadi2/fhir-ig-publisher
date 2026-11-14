@@ -134,3 +134,21 @@
 - Fallbacks seen and correct: non-page file ("is not a page"), files added/removed, template file, xml page ("is transformed"), declared script input ("is read by the template's scripts"), failed previous build ("the last build didn't finish").
 - No stale or missing page, no QA message lost or added: every watch checkpoint equals a fresh intD build of the same sources, up to F2 (watch QA paths), F4 (THO NamingSystem links), the SCT-edition warning on reused folders and comparison-page stack traces.
 - intD (e6a0c6a2) page-rebuilds despite failed terminology calls in the last build (zorgviewer, au-core); 3957c419 changes that. No output difference resulted here.
+
+## Phase E (incremental Jekyll, int2.jar)
+
+- int2.jar: perf4/jekyll-blackbox ccc22b21245579b5a9ab775bdb179c9b247b07d2 (merge of 3957c41; sha256 c45dabd3146d2b6bc1ba19d0edadf073775f8b33da4d128f50c8ff4bbcb2a0cc). Nothing was run on 760868b, so no confirmation rerun was needed.
+- Same declared template copies as Phase D. IGs: MHD-CL, readi, imaging-service-request-ig, base. Skipped: zorgviewer-ig and au-fhir-core (terminology calls fail on every build; with 3957c41 every step is a Complete Build, so no page rebuild), davinci-ra (watch fails on both jars).
+- W1g: none of the IGs has a Jekyll data source, so for MHD-CL and base the Phase E copies add `input/data/qa.json` (`{"value": ...}`), the IG parameter `path-data: input/data` (sushi-config) and `QA data value: {{ site.data.qa.value }}` on two pages; W1g edits the value.
+- Steps (in order): W1a, W1a2 (same page again), W1g, W1b, W1d (input/includes fragment, where the IG has one), W1c, W1e, W1f, W2, W1a3 (page again). EF-<step> = int2 full build of the sources after that step, compared with the watch output (EW) at W1a2, W1g, W1f, W1a3.
+- Columns: seconds, Rapido mode (PR page rebuild, Diff, CB) and Jekyll mode (inc = incremental, with Jekyll seconds).
+
+| IG | EW steps | EF vs EW | verdict |
+|---|---|---|---|
+| HL7Chile/MHD-CL | first 50; W1a 5 PR inc 0.06 s; W1a2 5 PR inc 0.07 s; W1g 26 Diff, Jekyll all pages; W1c 5 PR inc 0.29 s; W1e 28 CB; W1f 26 CB; W2 33 CB; W1a3 6 PR inc 0.07 s | 0 files at W1a2, W1g, W1f, W1a3; QA identical at W1a2, SCT-edition warning missing after the Complete Builds (pre-existing) | same |
+
+### Phase E: HL7Chile/MHD-CL
+- Every page edit: "Rapido Mode: Page Rebuild (1 page changed)" + "Jekyll: incremental build (1 files in _includes added, changed or deleted)", Jekyll 0.06-0.29 s (Phase D full Jekyll 0.5-0.7 s; step 5-6 s vs 6 s).
+- W1g (input/data/qa.json): "Rapido Mode: Complete Build (input/data/qa.json is also read as something other than a page)", then Rapido Differential and "Jekyll: renders every page (changed: StructureDefinition-ReferenciaDocumental.xml)": not incremental, as required (the reason Jekyll gives is another changed file from the Differential build, not the data file). Both pages show the new value, the old value is gone.
+- Complete Builds: "Jekyll: renders every page (changed: StructureDefinition-ListMhd.xlsx)".
+- All markers found/absent. EF vs EW: 0 output files at all four checkpoints.
