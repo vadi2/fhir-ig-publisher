@@ -66,3 +66,7 @@ Build int2.jar from perf4/jekyll-blackbox. Same declared template copies as Phas
 2. After W1a(2nd), W1f and the final W1a: F = int full build (no watch) of the same sources; compare output and qa.xml issue sets with the round masks. Any diff not in the known lists = REGRESSION (stale page, a page that includes the edited fragment not re-rendered, missing/extra file).
 3. Timing: int (Phase D) vs int2 per page step, same IG and edits.
 Results: "## Phase E" in qa2/results-<shard>.md.
+
+## Phase E update (02:20)
+- int2 head is now ccc22b2 (perf4/jekyll-blackbox merged with 3957c419; no Jekyll code changes in the merge). Use it for Phase E. Already done on 760868b: keep those results, then rerun one IG on ccc22b2 (W1a, W1d, W1a2 + compare) to confirm.
+- Add W1g where the IG has `input/data` (or another Jekyll `_data` source) that pages read: edit a value shown on a page. The page rebuild may happen, but Jekyll must NOT run incrementally (log should say full/all pages, with a reason); every page showing the value must change; compare with a full build. A page still showing the old value = REGRESSION.
