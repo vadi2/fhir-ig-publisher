@@ -1,6 +1,8 @@
 # QA round 2 results, shard utg
 
-Status: Phase C and D done; a master watch timing run (W1b, W1d) is still running (23:50).
+Summary: UTG same on int in every comparison. I1, I2, F1, F2, F6 equal R2 (QA counts and messages, every file after masking, apart from the known used-by order); every watch edit W1b..W6 reached output and W1f/W2/W6 equal fresh full builds. No regression. Phase D: the declared template loads (no fallback), but UTG can't reach a page rebuild: its pages are all transformed xml pages, and 6 tx calls fail on every build; menu.xml (declared) correctly gives a Complete Build. Watch rebuild times are the same on int and master (every rebuild is a Complete Build on both).
+
+Status: done
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951
 - int.jar: vadi2 qa/page-only-ready 5111080dd56c99f6aa6b1ad62a56978f9d0959bb
@@ -23,6 +25,8 @@ Status: Phase C and D done; a master watch timing run (W1b, W1d) is still runnin
 - Every int rebuild is a Complete Build. The log gives two reasons: "the template doesn't declare what its scripts read (script-inputs in its config.json)", then "terminology server calls failed in the last build (6)". The 6 calls fail on every build: tx.fhir.org "Unable to provide support for code system" (nubc-UB92, naics, epsg-crs, epsg-ca, mesh, hsloc, SCDHEC, EPSG). So declaring script-inputs (Phase D) can't reach a Page Rebuild on UTG at this commit.
 - W2 vs F2, W6 vs F6, F6 vs R2, W6 vs R2: QA counts and messages equal; files equal after masking apart from the used-by order (order only, known).
 - No FINDING in Phase C, so no master reruns were needed.
+- Templates: hl7.utg.template runs an ant script (ant-utg.xml, importing ant-hl7.xml) and declares no script-inputs, so int does a Complete Build ("the template doesn't declare what its scripts read"), as the plan requires.
+- Rebuild times, int vs master `-rapido -watch` (same heap, Phase C sources; master run MW: first build and W1b, W1d only): first 821 vs 831, W1b 878 vs 903, W1d 940 vs 904. Every rebuild is a Complete Build on both jars (master logs only the tx reason). They are the same within tx.fhir.org noise; round 1's +110 s on int (#42 early publish) is gone. QA 110/69/3 in every MW step.
 
 ## Phase D
 
