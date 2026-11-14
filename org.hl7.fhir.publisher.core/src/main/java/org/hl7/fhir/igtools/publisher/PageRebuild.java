@@ -311,6 +311,18 @@ public class PageRebuild {
   /** Called when the build (including qa) has finished without an error */
   public void finished() {
     complete = true;
+    checkTxFailures();
+  }
+
+  /**
+   * As Rapido does (see RapidoTracker.compareState()): after terminology calls that got no answer, in the build or in
+   * a page rebuild since, the next build asks the server again
+   */
+  public void checkTxFailures() {
+    int n = pf == null ? 0 : RapidoTracker.txFailures(pf);
+    if (n > 0) {
+      notReusable("terminology server calls failed in the last build (" + n + ")");
+    }
   }
 
   // --- the rebuild ---------------------------------------------------------------------------------------------------

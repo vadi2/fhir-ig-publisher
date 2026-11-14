@@ -11,6 +11,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
@@ -96,6 +97,18 @@ class PageRebuildTest {
     state.afterJekyll();
     state.afterPackage();
     state.finished();
+  }
+
+  @Test
+  void terminologyCallsThatFailAfterTheCheckInTheBuildAreCountedWhenItHasFinished() throws IOException {
+    pf.txFailures = mock(RapidoTracker.TxFailures.class);
+    state.checkTxFailures();
+    assertTrue(state.mayBeReusable());
+    // e.g. the expansions of the combined package
+    when(pf.txFailures.count()).thenReturn(1);
+    built();
+    assertEquals("terminology server calls failed in the last build (1)", state.getNotReusable());
+    assertFalse(state.isKept());
   }
 
   /** what changed since the snapshot was taken, once edit has run */

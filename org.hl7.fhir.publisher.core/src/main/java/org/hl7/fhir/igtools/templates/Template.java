@@ -89,7 +89,7 @@ public class Template {
   public static final int IG_NO_RESOURCE = 2;
   private static final boolean USE_R5_IG_FORMAT = false;
   /** see whyNoPageRebuild() */
-  private static final String SCRIPT_INPUTS = "script-inputs";
+  static final String SCRIPT_INPUTS = "script-inputs";
   
   private NpmPackage pack;
   private JsonObject configuration;

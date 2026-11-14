@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
+import org.mockito.Mockito;
 
 /**
  * What a page-only rebuild writes to the temp folder for a page in a translated IG: the page in each language, from
@@ -330,6 +331,18 @@ class RegeneratePagesTest {
       write("input/translations/ru/pagecontent/index.md", "# Главная страница");
       List<String> reason = new ArrayList<>();
       assertEquals(Collections.singletonList(page), state.pagesFor(SourceSnapshot.take(roots, before).changesSince(before), reason), reason.toString());
+    } finally {
+      state.discard();
+    }
+  }
+
+  @Test
+  void noPageRebuildAfterTerminologyCallsFailed() throws Exception {
+    pf.txFailures = Mockito.mock(RapidoTracker.TxFailures.class);
+    Mockito.when(pf.txFailures.count()).thenReturn(2);
+    PageRebuild state = checked();
+    try {
+      assertEquals("terminology server calls failed in the last build (2)", state.getNotReusable());
     } finally {
       state.discard();
     }

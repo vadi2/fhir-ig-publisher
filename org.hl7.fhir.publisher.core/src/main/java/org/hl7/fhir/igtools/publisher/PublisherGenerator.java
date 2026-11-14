@@ -579,6 +579,8 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       // the pages would be rendered again with the terminology unloaded
       pageRebuild.notReusable("the terminology is unloaded early (tx-unload-early)");
     }
+    // so far: then nothing is kept (counted again when the build has finished)
+    pageRebuild.checkTxFailures();
     if (pf.template != null) {
       String reason = pf.template.whyNoPageRebuild();
       if (reason != null) {
