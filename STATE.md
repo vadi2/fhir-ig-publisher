@@ -287,3 +287,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 09:15 tick: s1 Phase D spenser, consent-management, emedicinal, niis (niis downloads.xml "is transformed" = deliberate XML limit). s2 Phase D be-med, ig-guidance done; kip, au-ps, uz-integ left. s5 nw-gmsa F1/F2 done, master watch left. No regressions.
 - 09:25: archived 31 finished child sessions (round 5 done shards s3 s4 s6 s7 s8 utg, fix-1466, jekyll-blackbox; all round 3/4 sessions). Kept: dev (for regression fixes), s1, s2, s5.
 - 10:15 tick: s5 Phase D DONE all 8 IGs (page edits 2-8x faster than master; open item nw-gmsa package.db GenomicTestOrder refs, classifying; Phase C leftovers: plan-net/nw-gmsa watch, bfdr/nw-gmsa master watch). s2 Phase D kip done; au-ps, uz-integ left. s1 Phase D running. No regressions.
+- 11:15 tick: s1 Phase D US-Core. s2 Phase D au-ps done, uz-integ running (last). s5 nw-gmsa watch rerun at W6. No regressions.
