@@ -1,6 +1,6 @@
 # QA round 2 results, shard s4
 
-**Status: Phase C done (7/7 IGs, no regression). Phase D in progress (5/7), Phase E after it.**
+**Status: Phase C done (7/7 IGs, no regression). Phase D in progress (6/7), Phase E after it.**
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (sha256 56b2e4adb4af80ef5b495b3013b726df254243b5437eb500b2c7c6a5ae5b238f)
 - VM: 4 CPU, 15 GB, 8 GB swap. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx7600m -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org -package-cache-folder /home/user/qa/pcf`, fresh `cp -a` of the clone, no -threads.
@@ -96,6 +96,7 @@
 | HL7/imaging-service-request-ig | 86, W1a 13 PR, W1c 57 CB, W1e 55 CB, W1f 55 CB, W2 59 CB, W1a2 13 PR | 114, W1a 33 Diff, W1c 54 CB, W1e 52 CB, W1f 52 CB, W2 52 CB, W1a2 29 Diff | 78 / 65 | 70 raw (F4 NamingSystem-dui), 0 THO-normalised; QA same | 0 files; QA same | same; page edits 13 s |
 | RIVO-Noord/zorgviewer-ig | 106, W1a 17 PR, W1c 17 PR, W1d 18 PR, W1e 59 CB, W1f 56 CB, W2 56 CB, W1a2 17 PR | 94, W1a 58 CB, W1c 55 CB, W1d 53 CB, W1e 51 CB, W1f 53 CB, W2 52 CB, W1a2 52 CB | 94 / 99 | 0 files; QA 12 msgs path/column only (F2) | 0 files; QA same 12 (F2) | same; page edits 17 s vs ~70 s |
 | HL7/davinci-ra | 95, W1a 45 CB, W1c 48 CB, W1d 46 CB, W1e 48 CB, W1f 49 CB, W2 52 CB, W1a2 46 CB (every build failed) | 66, W1a 45 CB, W1c 46 CB, W1d 46 CB, W1e 51 CB, W1f 48 CB, W2 53 CB, W1a2 45 CB (every build failed) | 80 / 80 | n/a (watch output empty) | n/a | not comparable: watch fails on both jars (pre-existing); page rebuild unreachable |
+| hl7au/au-fhir-core | 115, W1a 20 PR, W1c 20 PR, W1d 20 PR, W1e 78 CB, W1f 75 CB, W2 75 CB, W1a2 20 PR, W7 75 CB | 108, W1a 76 CB, W1c 74 CB, W1d 77 CB, W1e 77 CB, W1f 76 CB, W2 72 CB, W1a2 73 CB, W7 73 CB | 106 / 115 | 4 files (comparison-page stack traces, noise); QA 1 msg path (F2) | same 4 + F2 | same; page edits 20 s |
 
 ### Phase D: HL7Chile/MHD-CL
 - Declaration picked up: W1a/W1c/W1a2 log "Rapido Mode: Page Rebuild (1 page changed)", Jekyll 0.5-0.7 s. W1d (template footer): "Complete Build (.../fragment-footer.html is not a page)"; W1e/W1f: "Complete Build (files were added or removed)"; W2: "Complete Build (.../docRef.fsh is not a page)". All edits visible/removed as expected.
@@ -117,3 +118,8 @@
 
 ### Phase D: HL7/davinci-ra
 - Declared copy loaded ("Load Template hl7.davinci.template#current from local folder /home/user/qa/tpl-hl7.davinci.template (override in ig.ini)"), but every watch build still fails at the template's onCheck (ant-davinci.xml:45 copies output/en/index.html, absent under -watch), on intD and on master (pre-existing, Phase C). intD then logs "Complete Build (the last build didn't finish)" / "(after failure)" each step, so the page rebuild is never reached: the correct fallback. Output stays empty, so DF1/DF2 (full builds, fine) have nothing to compare with. Skipped in Phase E for this reason.
+
+### Phase D: hl7au/au-fhir-core
+- Declared copy of hl7.au.sparked.template (fhir2.base list, includes input/includes/menu.xml). intD did Page Rebuilds for W1a, W1c (notes), W1d (nonnormative-example-boilerplate.md include) and W1a2 (20 s) despite the failed terminology calls of every build (as zorgviewer; the behaviour 3957c419 changes).
+- Plan step 6 (edit a declared script input): W7 edits input/includes/menu.xml: "Complete Build (.../input/includes/menu.xml is read by the template's scripts)", 75 s, the new menu item is in the output.
+- DF1 vs W1f and DF2 vs W1a2: QA identical except the bloodpressure duplicate-anchor warning path (temp/pages/.watch-output/en/ vs output/en/, F2); output 4 files = comparison-v2.0.0/xx-3-Identifier-Identifier.html and xx-5-Address-Address.html (+ full-ig.zip copies), Java stack trace on those pages (master too) whose frames differ between watch and full build (as Phase C). No stale page.
