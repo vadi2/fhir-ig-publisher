@@ -1,3 +1,9 @@
+**s6 summary: no regression.** Phases A, C, D, E done on 6 IGs (TW Core skipped: no public source). Phase C: all
+same as master (pre-existing diffs only). Phase D (5111080, declared templates): page rebuilds correct and 2-10x faster
+than master; lars xml page not a page rebuild (deliberate); eeqre tx-failure behaviour fixed on 3957c419 (checked).
+Phase E (760868b, confirmed on ccc22b2 with crmi): incremental Jekyll correct everywhere, Jekyll 3-12x faster on page
+steps; cqm page edits fall back to a full Jekyll run (explicit path-pages); W1g data edit runs a full Jekyll, correct.
+
 # QA round 2 results, shard s6
 
 Status: Phase C in progress. int.jar = `qa/page-only-ready` 5111080 (5 commits on master 2ccca17).
@@ -204,3 +210,13 @@ Notes
   complete builds (tx failures), so eeqre will be skipped in the rerun.
 - lars W1b stays a differential build ("downloads.xml is transformed"; dev.md: deliberate).
 - A container restart stopped the run during crmi EF2; EF2 and EF3 were redone from a fresh copy.
+
+### Phase E on ccc22b2 (perf4/jekyll-blackbox merged with 3957c419), crmi
+- Steps W1a, W1d (img.html), W1a2, W1g; full builds after W1a2 and W1g.
+- W1a 26.5 s, W1d 26.5 s, W1a2 27.5 s: Page Rebuild, Jekyll incremental (0.77, 1.07, 0.74 s), as on 760868b.
+- W1g edits `input/data/package-list.yml` (list[0].desc, which index.md shows through
+  `site.data.package-list.list[0].desc`; no other page reads it): 37.0 s, Page Rebuild, "Jekyll: renders every page
+  (changed: _data/package-list.yml)" (11.1 s). index.html has the new value.
+- Full builds equal the W1a2 and W1g snapshots (0 diffs, QA 17 / 25 / 235). Confirms the 760868b results; no regression.
+- No other IG of this shard has `input/data` that a page reads (cqm and cpg have package-list.yml, unused by pages;
+  eeqre, ucum, lars have none), so W1g ran on crmi only.
