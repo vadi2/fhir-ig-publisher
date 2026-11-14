@@ -1,6 +1,6 @@
 # QA round 2 results, shard s5
 
-Status: Phase C in progress (4 of 8 IGs done: tx-eco, cds-hooks, pocd, eu-lab; no regression so far, one open item on pocd being rechecked with master).
+Status (05:20 UTC): Phase C done for 7 of 8 IGs (nw-gmsa full builds done, watch lost to container restarts, rerun queued last); plan-net watch blocked by a pre-existing template failure (rerun with a full build first queued). Phase D done for tx-eco, cds-hooks, pocd, laboratory, smart-forms, bfdr; plan-net running (restarted at 05:17 after a container restart), nw-gmsa next. No regression so far; pocd and F3 items classified pre-existing by master reruns. W1b (xml pages) falls back by design ("is transformed").
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951
 - int.jar: qa/page-only-ready 5111080dd56c99f6aa6b1ad62a56978f9d0959bb (seen 17:12 UTC)
