@@ -295,3 +295,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 15:16 tick: s2 uz-integ master noise build M1 running. s5 nw-gmsa master watch rerunning from scratch. Both alive. No regressions.
 - 16:16 tick: s2 Phase C done for all IGs (W1c/W3 fail on both jars: spec issues), uz-integ Phase D int running. s5 nw-gmsa master rerun on W3, ~40m left. No regressions.
 - 17:16 tick: s5 Phase C/D done on all 8 IGs, no regression; plan-net watch 0 diffs; nw-gmsa master watch within 7%; last item: master rebuild to classify nw-gmsa package.db split. s2 uz-integ Phase D int halfway (W2). No regressions.
+- 18:16 tick: s5 done 17:45 (e5ab9c30), no regression; nw-gmsa package.db shared-id split classified pre-existing (master M2 vs M2b differ). s5 archived. s2 uz-integ Phase D: F1 matches master noise, F2 building. Only s2 left.
