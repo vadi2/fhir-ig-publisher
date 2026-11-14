@@ -93,7 +93,9 @@ page or an intro file. F1/F2/F6 = int full builds of a pristine copy with the ed
   (Differential), W6 100 (Differential). Its W4/W5 are not comparable: my first W4 added the example without an IG
   entry, and the HL7 template's onGenerate.jira.xslt stops on a resource with an empty name ("Found multiple
   candidates ... in previous jira-spec-info"; a template behaviour, both jars). W4 now also lists the example in
-  cqm.xml with a name; int ran that version. A master rerun with it is queued for the timings.
+  cqm.xml with a name; int ran that version. Master rerun with it: first 121, W1a 74.6, W1d 73.6 (Differential),
+  W1e 113.7, W1f 111.8 (Complete), W2 88.7, W3 89.2 (Differential), W4 112.8, W5 114.9 (Complete), W6 95.3
+  (Differential): same build kinds as int on every step.
 - every edit reached output/en/.
 - I1 vs R1: F3 `.index.db` (hl7.fhir.uv.cqm.en.tgz) and package.db CodeSystemListRefs (R4 vs THO 7.5.0 value set
   links), which also differ between I1 and I2, F2 and W2, F6 and W6 (round 1: resolution nondeterminism).
@@ -108,7 +110,8 @@ page or an intro file. F1/F2/F6 = int full builds of a pristine copy with the ed
 - times (s): R1 301, I1 251, I2 251, F1 234, F2 255, F6 272.
   Watch int: first 238, W1a 130.7, W1c 135.7, W1d 132.7 (Differential, 371 of 986), W1e 247.9, W1f 261.0, W2 272.0,
   W3 261.0, W4 246.5, W5 253.6, W6 253.6 (Complete, "changed: ig"). W1b n/a.
-  Watch master: first 267 (the first run was stopped after that to build int.jar; the rerun is queued after Phase D).
+  Watch master (rerun): first 242, W1a 125.7, W1c 120.2, W1d 119.7 (Differential, 371 of 986), W1e 226.8, W1f 223.9,
+  W2 214.9, W3 222.4, W4 224.0, W5 216.9, W6 227.5 (Complete, "changed: ig").
 - every edit reached output/en/.
 - I1 = I2 = W6 = F6; F1 = W1f; F2 = W2. I1/I2/W6 vs R1: only `.index.db` ResourceList in hl7.fhir.uv.cpg.en.tgz (F3).
 - verdict: **same** (pre-existing diffs: F3 .index.db).
@@ -154,6 +157,9 @@ Notes
 - eeqre: its builds have 227 failed terminology calls (fhir.ee systems). master answers every watch edit with
   "Complete Build (terminology server calls failed in the last build (227))"; int's page rebuild runs anyway and doesn't
   retry them. Output is the same as a full build here (same failures); noted because it is a behaviour change.
+- eeqre on 3957c419 (ready ref after the move; checked at the orchestrator's request): W1a and W1a2 only. Both log
+  "Complete Build (terminology server calls failed in the last build (227))", as master, 31.0 s each; full builds of
+  the same sources equal both snapshots. The tx behaviour change noted above is fixed there.
 - lars, master watch W1a2 (Differential) vs int W1a2 (Page Rebuild): the mappings column order (L3), the text of three
   twcore 0.3.2 StructureDefinitions in package-combined.tgz (trailing space, a relative vs R4 link), and one file entry
   in qa.html. int's W1a2 equals F2 in all three, so these are on master's differential side (Phase C's master watch
