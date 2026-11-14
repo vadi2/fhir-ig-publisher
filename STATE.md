@@ -293,3 +293,4 @@ Watcher: hourly check (get_session per session; nudge only via send_message for 
 - 14:15 tick: s1 Phase D 8/8 IGs (digital-health-ig page edit 218-232 s vs master 344-372 s; remainder is Jekyll 67 s, html check 90 s, zip 41 s), wrapping up. s5 Phase D done, Phase C leftovers (bfdr master watch timings in). s2 uz-integ master watch running. No regressions.
 - 15:11: s1 DONE (8 IGs, no regression), archived. Remaining: s2 uz-integ (Phase C master watch + Phase D), s5 Phase C leftovers (plan-net/nw-gmsa watch, nw-gmsa master watch).
 - 15:16 tick: s2 uz-integ master noise build M1 running. s5 nw-gmsa master watch rerunning from scratch. Both alive. No regressions.
+- 16:16 tick: s2 Phase C done for all IGs (W1c/W3 fail on both jars: spec issues), uz-integ Phase D int running. s5 nw-gmsa master rerun on W3, ~40m left. No regressions.
