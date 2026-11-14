@@ -158,3 +158,43 @@ Notes
   twcore 0.3.2 StructureDefinitions in package-combined.tgz (trailing space, a relative vs R4 link), and one file entry
   in qa.html. int's W1a2 equals F2 in all three, so these are on master's differential side (Phase C's master watch
   never had a differential step after a complete one on lars).
+
+## Phase E (int2 = perf4/jekyll-blackbox 760868b)
+- jar: 760868b, built when the plan named it. Its base is 5111080 (Phase D's int), not e6a0c6a2 or 3957c419. A rerun on
+  a head merged with 3957c419 follows when qa2/jekyll-blackbox.md names one. Same declared template copies, edits and
+  heap as Phase D.
+- steps: W1a, W1a2 (same page again), W1b (lars xml page), W1d (an `input/includes` fragment that pages include: ucum
+  results-run.md, crmi and cqm img.html, cpg profile-tables/artifact-profiles.html; eeqre and lars have none), W1c
+  (cpg intro-notes), W1e, W1f, W2, W1a3. EF1/EF2/EF3 = int2 full builds after W1a2, W1f, W1a3.
+- cells: step s / Jekyll s, mode (I = Jekyll incremental, A = Jekyll renders every page). Phase D int on the same
+  edit in brackets (step s / Jekyll s; Jekyll always renders every page there).
+
+| IG | W1a | W1a2 | W1b | W1d | W1c | W1e, W1f, W2 | W1a3 | EF1, EF2, EF3 vs watch | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| eeqre | 4.5 / 0.10 I (5.5 / 0.78) | 5.0 / 0.12 I | n/a | n/a | n/a | 51, 49, 49 C; Jekyll A 0.6 | 4.5 / 0.09 I (5.0 / 0.63) | equal, equal, equal | ok |
+| ucum | 7.0 / 0.39 I (7.5 / 1.32) | 7.0 / 0.39 I | n/a | 8.0 / 0.48 I (9.0 / 1.33) | n/a | 34, 30, 28 C; Jekyll A 1.4-1.7 | 7.5 / 0.40 I (8.0 / 1.71) | equal, equal, equal | ok |
+| crmi | 127.1 C (date) | 26.5 / 0.81 I (37.5 / 10.2) | n/a | 26.5 / 1.22 I | n/a | 131, 132, 131 C; Jekyll A 10.6 | 26.5 / 0.88 I (35.0 / 10.0) | equal, equal, equal | ok |
+| lars | 46.0 / 0.21 I (48.5 / 2.22) | 46.0 / 0.21 I | 118.6 D, Jekyll A 2.7 (123.2 / 2.33) | n/a | n/a | 142, 140, 143 C; Jekyll A 3.0-3.3 | 45.6 / 0.20 I (47.6 / 2.28) | L3 only, x3 | ok |
+| cqm | 35.5 / 12.4 A (35.5 / 10.6) | 37.5 / 12.3 A | n/a | 25.5 / 1.76 I | n/a | 119, 116 C, 95 D; Jekyll A ~12 | 34.1 / 11.9 A (36.6 / 11.8) | package.db only, x3 | ok, page edit not incremental |
+| cpg | 41.0 / 2.22 I (59.6 / 21.5) | 42.5 / 2.43 I | n/a | 43.5 / 2.66 I (66.5 / 24.3) | 40.5 / 2.53 I (66.5 / 24.1) | 243, 233, 227 C; Jekyll A 24-26 | 39.5 / 2.23 I (61.1 / 22.4) | equal, equal, equal | ok |
+
+First builds (s): eeqre 74, ucum 46, crmi 157, lars 175, cqm 135, cpg 243. EF1, EF2, EF3 (s): eeqre 67, 67, 70; ucum
+46, 47, 48; crmi 146, 205, 175; lars 159, 165, 200; cqm 128, 132, 134; cpg 214, 216, 235.
+
+Notes
+- No regression. Every edit reached output (both pages that include crmi's and cqm's img.html, cpg's
+  artifact-profiles.html, ucum's results-run.md). QA counts equal in every build. Every watch snapshot equals its full
+  build except the known lars L3 mappings column order and cqm package.db CodeSystemListRefs.
+- Jekyll on page steps: eeqre 0.7 -> 0.1 s, ucum 1.3 -> 0.4, crmi 10 -> 0.8, lars 2.2 -> 0.2, cpg 22 -> 2.3. Step time
+  drops by the same amount (cpg 60 -> 41 s, crmi 36 -> 26.5 s); on the small IGs the rest of the page rebuild dominates.
+  Complete and differential builds always render every page (reason logged: the first changed non-include file).
+- cqm page edits are not incremental: "Jekyll: renders every page (changed: glossary.md)". IncrementalJekyll only
+  takes changes under `_includes/`; cqm's IG resource sets `path-pages = input/pages` explicitly (crmi gets it from
+  sushi), and the edited page appears as `glossary.md` at the root of Jekyll's source, so the fallback is taken.
+  Correct output, no gain (12 s Jekyll as before). cqm's include edit (W1d) is incremental (1.8 s).
+- crmi W1a ran just after midnight: "Complete Build (the day changed since the last build)", as on master. W1a2 and
+  W1a3 are crmi's page steps.
+- eeqre reaches the page rebuild on this jar (its base predates 3957c419); with 3957c419 its watch edits become
+  complete builds (tx failures), so eeqre will be skipped in the rerun.
+- lars W1b stays a differential build ("downloads.xml is transformed"; dev.md: deliberate).
+- A container restart stopped the run during crmi EF2; EF2 and EF3 were redone from a fresh copy.
