@@ -1,6 +1,6 @@
 # QA round 2 results, shard s2
 
-Status: Phase D running on int e6a0c6a2 (aitransparency, be-medication, ig-guidance, kip, au-ps done; uz-integ running); then ig-guidance, kip, au-ps, and uz-integ (Phase C remainder + Phase D), delayed by 5 container restarts (01:18, 04:45, 05:17, 07:23, 07:50).
+Status: Phase C done for all IGs. Phase D on int e6a0c6a2 done for aitransparency, be-medication, ig-guidance, kip, au-ps; uz-integ running (started 15:34 UTC). Delayed by 7 container restarts (01:18, 04:45, 05:17, 07:23, 07:50, 11:00, 11:28) and one disk-full stop (11:50).
 
 Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar only rebuilds pages when the template has no script or declares `script-inputs` in its config.json (Template.whyNoPageRebuild). fhir2.base.template (#current and #0.1.0), which every template here extends, has scripts/ant.xml (onLoad/onGenerate/onCheck) and no script-inputs; hl7.base and hl7.be.fhir add their own ant scripts. So every watch rebuild logs "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then does the usual Differential/Complete build, as master does. These runs show the branch changes nothing when the feature is off; they don't exercise the page rebuild itself.
 
@@ -15,7 +15,7 @@ Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar onl
 | hl7-be/medication | 6b4450d | 7600m | 114 | 4/39/93 | 73 | 81 | W1a 33/31, W1b 36/32, W1c 31/28, W1d 29/28, W1e 52/55, W1f 51/51, W2 51/50, W3 48/39, W4 50/56, W5 51/52, W6 51/51 (all edits shown) | 72 | 68 | = I1 | same: no page rebuild (hl7.be.fhir template script, no script-inputs); only known pre-existing diffs |
 | hl7au/au-fhir-ps | 4d0b69d | 7600m | 348 | 1928/346/2244 | 214 | 122 | W1a 109/104, W1b 106/101, W1c 102/95, W1d 101/99, W1d2 102/93, W1e 97/97, W1f 104/105, W2 109/99, W3 97/92, W4 101/96, W5 102/101, W6 99/104 (all edits shown except W1b, on both jars: see notes) | 219 | 179 | = I1 | same: no page rebuild (template script without script-inputs, and tx failures force Complete Build every time on both jars); only known pre-existing diffs |
 | KIP-infrastructure/implementation-guide | 5b5773c | 7600m | 262 | 40/2349/3539 | 228 | 232 | W1a 168/163, W1c 260/254, W1e 245/241, W1f 247/246, W2 245/244, W3 185/182, W4 264/240, W5 240/234, W6 251/234 (all edits shown) | 216 | 222 | = I1 | same: no page rebuild (template script without script-inputs); only known pre-existing diffs |
-| uzinfocom-org/digital-health-integration | 4ff5446 | 7600m | 1262 | 25/363/7650 | | | | | | | |
+| uzinfocom-org/digital-health-integration | 4ff5446 | 7600m | 1262 | 25/363/7650 | 1083 | 950 | first 1043/1069, W1a 446/469, W1c 437/438, W1e 894/860, W1f 827/808, W2 889/920, W3 574/617, W4 863/831, W5 823/866, W6 803/857 (W1c and W3 checks fail on both jars, spec issues: see notes; other edits shown) | 984 | 1024 | = I1 | same: no page rebuild (template script without script-inputs); every diff is inside the master fresh-vs-warm noise set (M1 vs M2, 304 files) |
 | sfaassn2025-source/VFS-IG | f5e0831 | | | | | | | | | | skip: SUSHI errors at HEAD in round 1 (4afd1fe); not re-run |
 | sfaassn2025-source/CRA-IG | 90942c7 | | | | | | | | | | skip: SUSHI errors at HEAD in round 1 (7dc650f); not re-run |
 
@@ -49,6 +49,13 @@ Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar onl
 - Watch: W1a and W3 Differential Build (7 and 13 of 1037 files), the rest Complete Build, on both jars; int logs the script-inputs reason first. Times equal within noise (W4 264 vs 240 single sample).
 - R1 vs I1/I2: en.tgz package/.index.db (known F3, also inside full-ig.zip) and, for I2, qa-txservers count. F1 vs W1f, F2 vs W2, I1 vs W6: qa-txservers count only; QA counts and message sets equal. No stale output.
 
+
+### uz-integ
+- Watch runs split in two chunks per jar after container restarts (int WIa: first, W1a, W1c, W1e, W1f; WIb: W2..W6 from a fresh first build without the W1 edits; master WMa/WMb the same split). Modes equal on both jars: W1a, W1c, W3 Differential Build, the rest Complete Build; int logs the script-inputs reason first.
+- W1c check fails on both jars: the spec targets a form-096-encounter StructureDefinition intro, but the IG has no such StructureDefinition, so no page shows the edit. W3 check fails on both jars: patient-044-001 narrative renders name.text ("Yusupova Nodira Sharifovna"), so the edited given name never appears. Spec issues, not regressions.
+- R1 vs I1: 6 files (codesystem-list/valueset-list ordering, .index.db). R1 vs I2: 303 files. F1 vs W1f and F2 vs W2: 304 files each, the identical set; I1 vs W6: 116 files, a subset. QA counts (25/363/7650) and message sets equal everywhere.
+- Master M1 (fresh) vs M2 (warm, reused work folder) also differs in exactly those 304 files (ValueSet expansions, Bundle/CarePlan narratives, terminology.hl7.org 7.5.0 vs 7.4.0 link version, valueset-list.csv). Every int diff set is contained in it, so all of it is pre-existing fresh-vs-warm noise on master.
+- Compare of expansions.json/xml (70 to 88 MB) moved to GNU diff; difflib stalled on them.
 
 ## Phase D
 int = qa/page-only-ready e6a0c6a2 (intD.jar), master = 2ccca17. Each IG uses a local copy of its template (ig.ini `[IG]` override line `<template#ver> = /home/user/qa/tpl/<ig>-<template>`) whose config.json declares `script-inputs`. The leaf copy declares, so the e6a0c6a2 drop rule does not apply (logs show no drop). Lists: FHIR2 = input/examples, extensions, models, profiles, resources, structures, vocabulary, images-source, includes/menu.xml, fsh-generated/includes/menu.xml; HL7BASE = FHIR2 + package-list.json, publication-request.json (hl7.fhir.template). hl7.be.fhir and hl7.au.sparked/au.fhir use FHIR2 (my reading of their scripts). Steps from Phase C specs; W1a2 = a second edit to the W1a page after W2. Times in seconds from edit to the end of the rebuild.
