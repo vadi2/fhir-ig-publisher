@@ -39,7 +39,7 @@ Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar onl
 - R1 vs I1/I2: package/.index.db in the en.tgz (known F3) and, for I2, qa-txservers.html use count. F1 vs W1f, F2 vs W2, I1 vs W6: qa-txservers.html use count only. Masked besides the plan list: order of *-ref-list.json/csv "used by" entries.
 
 ### au-ps
-- Watch: every rebuild on both jars is "Complete Build (terminology server calls failed in the last build (94))"; 94 tx.fhir.org calls fail in every build. int also logs the script-inputs reason first. This matters for Phase D: even with script-inputs declared, au-ps will not reach a page rebuild while those tx failures persist.
+- Watch: every rebuild on both jars is "Complete Build (terminology server calls failed in the last build (94))"; 94 tx.fhir.org calls fail in every build. int also logs the script-inputs reason first. (Phase D shows the page path is still taken despite these failures.)
 - W1b (edit input/pagecontent/downloads.xml) not seen in downloads.html on either jar: the IG also has input/pagecontent/downloads.md, which supplies that page. Spec problem, not a regression.
 - R1 vs I1: en.tgz package/.index.db (known F3), package.db, Signature data in Bundle-aups-referral-endoconsult-autogen (signing time), terminology.hl7.org 5.5.0 vs 7.1.0 in NamingSystem links in the narratives of Bundle-aups-gpvisit-retrieval and -referral-endoconsult-autogen (known, master too). R1 vs I2 adds qa-txservers count; the 5.5.0/7.1.0 diff goes away (warm cache).
 - F1 vs W1f, F2 vs W2, I1 vs W6: the same kinds only (Signature time, package.db, qa-txservers count, and in F2 vs W2 the terminology.hl7.org link version). QA counts and message sets equal. No stale output.
