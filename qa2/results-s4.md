@@ -147,6 +147,7 @@
 |---|---|---|---|
 | HL7Chile/MHD-CL | first 50; W1a 5 PR inc 0.06 s; W1a2 5 PR inc 0.07 s; W1g 26 Diff, Jekyll all pages; W1c 5 PR inc 0.29 s; W1e 28 CB; W1f 26 CB; W2 33 CB; W1a3 6 PR inc 0.07 s | 0 files at W1a2, W1g, W1f, W1a3; QA identical at W1a2, SCT-edition warning missing after the Complete Builds (pre-existing) | same |
 | hl7-eu/readi | first 48; W1a 6 PR inc 0.1 s; W1a2 5 PR inc 0.1 s; W1e 31 CB; W1f 28 CB; W2 29 CB; W1a3 5 PR inc 0.1 s (no W1b/W1c/W1d/W1g) | W1a2 0 files; W1f, W1a3 36 raw = F4 THO link, 0 THO-normalised; QA identical (265) | same |
+| HL7/imaging-service-request-ig | first 66; W1a 9 PR inc 0.4 s; W1a2 9 PR inc 0.4 s; W1c 53 CB; W1e 55 CB; W1f 56 CB; W2 55 CB; W1a3 9 PR inc 0.4 s (no W1b/W1d/W1g) | 70 raw at each checkpoint = F4 (NamingSystem-dui link/display), 0 THO-normalised; QA identical (669) | same |
 
 ### Phase E: HL7Chile/MHD-CL
 - Every page edit: "Rapido Mode: Page Rebuild (1 page changed)" + "Jekyll: incremental build (1 files in _includes added, changed or deleted)", Jekyll 0.06-0.29 s (Phase D full Jekyll 0.5-0.7 s; step 5-6 s vs 6 s).
@@ -157,3 +158,7 @@
 ### Phase E: hl7-eu/readi
 - Page edits: Page Rebuild + "Jekyll: incremental build (2 files in _includes added, changed or deleted)" (readi renders each page under output/ and output/en/), Jekyll about 0.1 s. Complete Builds: "Jekyll: renders every page (changed: StructureDefinition-researchStudy-arm-targetNumber.xlsx)". All markers found/absent.
 - EF vs EW: 0 at W1a2; at W1f and W1a3 36 files = Bundle-readi-sample-1-r4 NamingSystem-uri THO version (F4), 0 THO-normalised. QA identical.
+
+### Phase E: HL7/imaging-service-request-ig
+- Page edits: Page Rebuild + incremental Jekyll (2 files in _includes), Jekyll 0.4 s, step 9 s (Phase D 13 s). W1c (new intro file), W1e/W1f, W2: Complete Builds, "Jekyll: renders every page (changed: Task-example-imaging-cancellation-request-task.json.html)". All markers found/absent.
+- EF vs EW at W1a2, W1f, W1a3: 70 files raw = the two examples' NamingSystem-dui THO link/display (F4), 0 THO-normalised; QA identical.
