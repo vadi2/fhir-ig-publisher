@@ -26,3 +26,28 @@ Reference jar: HL7 master 2ccca17946. Integration jar: `qa/page-only-ready` 5111
 - fr.core: template `https://github.com/Interop-Sante/ig-style` is not downloadable through the proxy (as in round 1); ig.ini points at a local clone (104d205) for every build, both jars.
 - Comparison masks as in round 1 (dates, UUIDs, run folder, archives per entry, package.db rows, line and "used by" order of `*-list.json` / `*-ref-*-list.csv`, qa*, fragment-usage-analysis.*, spec.internals, version.info, .index.db/.index.json, F4 NamingSystem links: the whole `NamingSystem-*.html` link incl. title and label, its terminology.hl7.org version, and the `sid/<x>#<label>#` display form). Calibrated: two master builds each of xshare and vris compare equal.
 - R1 kept as output.tgz + sha256 manifest + qa.json/qa.html + log; run folders deleted.
+
+## Phase D
+
+int.jar = `qa/page-only-ready` 5111080dd5 (Phase D started before the ref moved to e6a0c6a2; every template copy below declares `script-inputs` on the template the IG names, so nothing is inherited and the e6a0c6a2 change does not apply). Master = 2ccca17946. Heap 7600m. Declared template copies per qa2/script-inputs.md, the same copy for both jars: pcf templates via the ig.ini `[IG]` override (`Load Template X from local folder ... (override in ig.ini)` in the int log; master ignores the key and loads the package-cache version, which is the same template minus config.json `script-inputs`), local templates (xshare, vris, sact, fr.core) with config.json edited in place.
+
+Cells: int mode and seconds / master mode and seconds. PR = Page Rebuild, DB = Differential Build, CB = Complete Build (for int, the build that ran after the page rebuild was refused). Start = first build. W1a2 = second W1a edit after W2. Every edit was visible in the output on both jars. DF = int full build (no watch) of the watch's sources at that step.
+
+| IG | start | W1a | W1b | W1c | W1d | W1e | W1f | W2 | W1a2 | W1f vs DF-W1f | W1a2 vs DF-W1a2 | verdict |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| xshare-ips-plus | 28 / 31 | PR 4 / DB 12 | DB 11 / DB 12 (index.xml "is transformed") | - | CB 17 / CB 17 | CB 18 / CB 18 | CB 19 / CB 18 | CB 26 / CB 17 | PR 4 / DB 11 | equal, qa same (DF 27 s) | equal, qa same (DF 28 s) | same |
+| MADFSH | 38 / 32 | PR 3 / DB 17 | - | - | CB 22 / CB 22 | CB 21 / CB 23 | CB 22 / CB 23 | CB 21 / CB 21 | PR 3 / DB 15 | equal, qa same (32 s) | equal, qa same (31 s) | same |
+| us-fhir-ps | 83 / 58 | PR 7 / DB 26 | - | PR 7 / DB 24 | CB 61 / CB 37 | CB 40 / CB 36 | CB 37 / CB 35 | CB 37 / CB 35 | PR 7 / DB 23 | equal, qa same (53 s) | equal, qa same (53 s) | same |
+| phoenix-sact | 58 / 57 | PR 8 / DB 22 | - | - | DB 22 / DB 22 (menu.xml "is read by the template's scripts") | CB 36 / CB 37 | CB 37 / CB 34 | CB 37 / CB 36 | PR 9 / DB 20 | equal, qa same (48 s) | equal, qa same (50 s) | same |
+| healthy-route-ig | 87 / 75 | PR 12 / DB 38 | - | - | CB 56 / CB 56 | CB 55 / CB 55 | CB 60 / CB 59 | CB 57 / CB 60 | PR 12 / DB 37 | equal, qa same (67 s) | equal, qa same (74 s) | same |
+| ig-ee-vris | 132 / 123 | PR 22 / CB 77 | CB 76 / CB 77 (downloads.xml "is transformed") | - | CB 89 / CB 88 | CB 85 / CB 88 | CB 82 / CB 91 | CB 86 / CB 103 | PR 22 / CB 80 | equal, qa same (101 s) | equal, qa same (103 s) | same |
+| davinci-pct (seeded) | 199 / 171 | PR 36 / DB 89 | - | PR 36 / DB 89 | CB 172 / CB 157 | CB 155 / CB 147 | CB 155 / CB 143 | CB 154 / CB 143 | PR 34 / DB 85 | equal, qa same (169 s) | equal, qa same (163 s) | same |
+| hl7.fhir.fr.core | | | | | | | | | | | | pending (rerun after a container restart) |
+
+### Phase D notes
+- **W1b never page-rebuilds (deviation from the plan's "must log Page Rebuild for W1a/W1b/W1c").** The only W1b targets in this shard are XML pages (xshare `index.xml`, vris `downloads.xml`); int refuses with "`<file>` is transformed" (`PageRebuild.java:385`: any page output with a process mode other than PROCESS_NONE, i.e. XSLT-transformed XML pages), then runs the normal Rapido build. Output is correct; this looks like a deliberate limit, so it is a scope question rather than a regression. No IG in this shard has an html page in input/pagecontent to test the html side of W1b.
+- Step 6 (edit to a declared script input): phoenix-sact W1d edits `input/includes/menu.xml` (declared). int refuses the page rebuild ("is read by the template's scripts") and runs the normal Rapido build, a Differential Build here (24 of 62 files), same as master; the menu edit is visible on every page and W1d-sourced snapshots (W1f, W1a2) equal full builds. Not a Complete Build: Rapido's own decision after the refusal is differential, as on master.
+- ig-ee-vris: every master rebuild is "Complete Build (terminology server calls failed in the last build (3))" (persistent tx failures). int's page rebuild goes ahead regardless (PR 22 s vs CB 77 s), and its output equals the full build. Whether skipping the tx-failure rule is intended for page-only edits is worth a look, but no output difference resulted.
+- us-fhir-ps W1d int 61 s vs master 37 s: single sample, the other complete builds are within a few seconds of master; not repeated.
+- davinci-pct: watch runs seeded with output/ as in Phase C (unseeded watch publishing fails on both jars, pre-existing).
+- Page rebuild seconds are dominated by the template's onGenerate/Jekyll step on the bigger IGs (pct 36 s, vris 22 s).
