@@ -362,6 +362,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
       state.prepareTemp(generator.regeneratePages(pages));
       generator.finishGenerate(state);
       finishIg(state.getUncsList(), buildTracker, tts, true);
+      state.checkTxFailures();
     } catch (Exception | Error e) {
       // (such as a page written twice: but running out of memory isn't something a complete build would help with)
       if (BuildFailures.isFatal(e)) {
