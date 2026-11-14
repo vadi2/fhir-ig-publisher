@@ -1,6 +1,6 @@
 # QA round 2 results, shard s8
 
-Status: done. Phases A-E complete for all 7 IGs (TW Core and the 2 s2 SUSHI failures skipped per round 1). No REGRESSION. One CANDIDATE: P4 extra SNOMED info message on au-fhir-base (int only). W1g incremental path not exercised (no shard IG with input/data reaches a page rebuild).
+Status: done. Phases A-E complete for all 7 IGs. No REGRESSION. One CANDIDATE: P4 extra SNOMED info message on au-fhir-base (int only). W1g incremental path not exercised (no shard IG with input/data reaches a page rebuild).
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (jar sha256 4cfad5d75546efb3...)
 - int.jar: qa/page-only-ready 5111080dd56c99f6aa6b1ad62a56978f9d0959bb (jar sha256 166cb202a37b87b5...)
