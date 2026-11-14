@@ -2,7 +2,7 @@
 
 Summary: no regression on any of the 8 IGs. Phase C (int 5111080): full builds, second builds and -rapido -watch outputs equal master and fresh builds except pre-existing diffs (F2, F3, F4, F6, comparison-page stack traces, N1, N2; all shown on master too). Phase D (intD e6a0c6a2, declared template copies): page edits take Page Rebuild on all 8 IGs (sample-ig 7.6 s vs master 19 s, US-Core 55 s vs 265 to 360 s, digital-health-ig 225 s vs 350 s), outputs equal fresh builds; menu.xml under a declared path falls back as intended; one coverage gap: an xml page (niis downloads.xml) is not page-rebuilt ("is transformed"). Round 1's F5 (digital-health-ig watch OOM) is gone.
 
-Status: done (Phase A, C, D; Phase E is for shards s4, s6, s8)..
+Status: done (Phase A, C, D; Phase E is for shards s4, s6, s8).
 
 - master.jar: HL7 2ccca179460d9bb9f4185a59a6fd66d4d9330951
 - int.jar: qa/page-only-ready 5111080dd56c99f6aa6b1ad62a56978f9d0959bb (seen 17:09 UTC)
