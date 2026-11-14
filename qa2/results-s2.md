@@ -1,6 +1,6 @@
 # QA round 2 results, shard s2
 
-Status: Phase D running on int e6a0c6a2 (aitransparency done: pass); uz-integ Phase C remainder (master watch, master noise baseline) after, delayed by 5 container restarts (01:18, 04:45, 05:17, 07:23, 07:50).
+Status: Phase D running on int e6a0c6a2 (aitransparency, be-medication done); then ig-guidance, kip, au-ps, and uz-integ (Phase C remainder + Phase D), delayed by 5 container restarts (01:18, 04:45, 05:17, 07:23, 07:50).
 
 Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar only rebuilds pages when the template has no script or declares `script-inputs` in its config.json (Template.whyNoPageRebuild). fhir2.base.template (#current and #0.1.0), which every template here extends, has scripts/ant.xml (onLoad/onGenerate/onCheck) and no script-inputs; hl7.base and hl7.be.fhir add their own ant scripts. So every watch rebuild logs "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then does the usual Differential/Complete build, as master does. These runs show the branch changes nothing when the feature is off; they don't exercise the page rebuild itself.
 
@@ -56,6 +56,10 @@ int = qa/page-only-ready e6a0c6a2 (intD.jar), master = 2ccca17. Each IG uses a l
 | IG | template copy | step: int mode, int s / master s, edit shown | F1 vs W1f | F2 vs W1a2 | verdict |
 |---|---|---|---|---|---|
 | aitransparency | hl7.fhir.template#current (HL7BASE) | first 68/50; W1a Page Rebuild 7/26 ok; W1c Complete (file added) 35/38 ok; W1e Complete 32/36 ok; W1f Complete 33/38 ok; W2 Complete (fsh) 31/36 ok; W1a2 Page Rebuild 7/23 ok | known only (Bundle-b3c1f2d4 MedicareHIC narrative, package.db, qa-txservers); QA equal | qa-txservers count only; QA equal | pass |
+| be-medication | hl7.be.fhir.template#current (FHIR2) | first 85/73; W1a Page Rebuild 9/34 ok; W1b Complete ("howto.xml is transformed") 34/34 ok; W1c Page Rebuild 10/32 ok; W1d Complete ("menu.xml is read by the template's scripts") 30/33 ok; W1e Complete (file added) 55/51 ok; W1f Complete 53/46 ok; W2 Complete (fsh) 49/49 ok; W1a2 Page Rebuild 9/28 ok | qa-txservers count only; QA equal | qa-txservers count only; QA equal | pass, but W1b not a Page Rebuild (see notes) |
 
 ### Phase D notes
 - aitransparency: log shows "Load Template hl7.fhir.template#current from local folder ... (override in ig.ini)". W1c creates a new intro file (the IG has none), so it is an add and a Complete Build is correct; no page-edit W1c exists here. W1b/W1d n/a (markdown pages, menu from sushi-config). Page Rebuild is 3 to 4 times faster than master's Differential Build for W1a.
+- be-medication: W1b edits input/pagecontent/howto.xml, an XML page. int logs "Complete Build (.../howto.xml is transformed)": PageRebuild.java:383 rejects any page whose output has a process mode other than PROCESS_NONE, and XML pages in pagecontent are always transformed (XSLT). So an html/xml page edit never takes the page path, against the plan's expectation for W1b. Output and QA are still correct (it falls back to the normal Rapido build, here Differential), so not an output regression; the gap is that XML pages get no speedup.
+- be-medication W1d is the once-per-shard declared-path check: editing input/includes/menu.xml (in script-inputs) gives "Complete Build (.../menu.xml is read by the template's scripts)", then a Differential Build; the new menu text shows in output and F1 (taken after W1f, which includes the W1d edit) matches the watch output. Correct.
+
