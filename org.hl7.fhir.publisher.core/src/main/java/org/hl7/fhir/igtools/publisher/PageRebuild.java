@@ -107,6 +107,8 @@ public class PageRebuild {
   private String onCheckMessages;
 
   private Map<Path, Stamp> tempFiles;
+  /** the files passed to the last prepareTemp() */
+  private Collection<String> lastChanged = Collections.emptyList();
   private Set<Path> tempFolders;
   private Map<Path, Stamp> outputAfterJekyll;
   /** the files in the output folder when Jekyll and the template's check had run in the build */
@@ -258,6 +260,7 @@ public class PageRebuild {
   public void beforeJekyll() throws IOException {
     tempFolders = new HashSet<>();
     tempFiles = listTemp(tempFolders);
+    lastChanged = Collections.emptyList();
   }
 
   /**
@@ -542,6 +545,7 @@ public class PageRebuild {
    * exception if something else in it changed
    */
   public void prepareTemp(Collection<String> changed) throws IOException {
+    lastChanged = List.copyOf(changed);
     Path temp = Paths.get(pf.tempDir);
     for (String s : changed) {
       Path rel = temp.relativize(Paths.get(s));
@@ -573,6 +577,22 @@ public class PageRebuild {
     extraFolders.sort(Comparator.comparingInt(Path::getNameCount).reversed());
     for (Path p : extraFolders) {
       Files.delete(temp.resolve(p));
+    }
+  }
+
+  /**
+   * Records the files passed to the last prepareTemp() as they are now: Jekyll's incremental build (see
+   * IncrementalJekyll) gives a file written again with the same content its earlier time back
+   */
+  public void restamp() throws IOException {
+    Path temp = Paths.get(pf.tempDir);
+    for (String s : lastChanged) {
+      Path rel = temp.relativize(Paths.get(s));
+      Stamp st = stamp(temp.resolve(rel));
+      if (st == null) {
+        throw new IOException("Page output " + s + " was removed before Jekyll ran");
+      }
+      tempFiles.put(rel, st);
     }
   }
 
@@ -656,6 +676,10 @@ public class PageRebuild {
     // when its configuration changed since the last run (e.g. a build without -watch, which writes to another folder),
     // so it is neither what Jekyll saw nor something to remove
     skip.add(temp.resolve(JEKYLL_CACHE).toAbsolutePath().normalize());
+    // Jekyll's output and what its incremental build keeps (see IncrementalJekyll): not Jekyll's input, and changed
+    // by each run of Jekyll
+    skip.add(temp.resolve(IncrementalJekyll.SITE).toAbsolutePath().normalize());
+    skip.add(temp.resolve(IncrementalJekyll.STATE).toAbsolutePath().normalize());
     return list(temp, folders, skip);
   }
 

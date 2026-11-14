@@ -100,6 +100,7 @@ import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.sql.SQLException;
 import java.text.SimpleDateFormat;
@@ -753,7 +754,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       if (!settings.isGenerationOff()) {
         templateBeforeJekyll();
       }
+    }
+    // before the temp folder is recorded for a page rebuild: this gives unchanged files their earlier time back
+    prepareJekyll();
+    if (replay == null) {
       keepForPageRebuild(() -> pageRebuild.beforeJekyll());
+    } else {
+      replay.restamp();
     }
 
     jekyllReturnedError = false;
@@ -4650,9 +4657,60 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     }
   }
 
+  /**
+   * In watch mode, Jekyll writes to a folder of its own, and builds incrementally when it can (see IncrementalJekyll):
+   * works out which, before Jekyll runs
+   */
+  private void prepareJekyll() throws IOException {
+    if (settings.isSimplifierMode() || settings.isGenerationOff() || !watchJekyll()) {
+      return;
+    }
+    Path source = Paths.get(pf.tempDir);
+    String unknown = IncrementalJekyll.unknownConfig(source);
+    if (unknown != null) {
+      log("Jekyll: renders every page, in the staging folder (a setting that the incremental build isn't known to follow: " + unknown + ")");
+      return;
+    }
+    IncrementalJekyll incremental = pf.incrementalJekyll;
+    String why;
+    try {
+      why = incremental.prepare(source);
+    } catch (IOException e) {
+      // Jekyll renders every page
+      try {
+        incremental.failed(source);
+      } catch (IOException e2) {
+        e.addSuppressed(e2);
+        throw e;
+      }
+      why = "unable to compare the temp folder with Jekyll's last run: " + e.getMessage();
+    }
+    log(why == null ? "Jekyll: incremental build ("+incremental.getChanged()+" files in _includes added, changed or deleted)" : "Jekyll: renders every page ("+why+")");
+  }
+
+  private IncrementalJekyll incrementalJekyll() throws IOException {
+    return watchJekyll() && IncrementalJekyll.unknownConfig(Paths.get(pf.tempDir)) == null ? pf.incrementalJekyll : null;
+  }
+
+  private boolean watchJekyll() {
+    // (a command other than jekyll, such as bundle exec jekyll, can load plugins)
+    return pf.watchOutputDir != null && pf.incrementalJekyll != null && "jekyll".equals(settings.getJekyllCommand());
+  }
+
   private boolean runJekyll() throws IOException, InterruptedException {
     TimeTracker.Session tts = pf.tt.start("jekyll");
+    IncrementalJekyll incremental = incrementalJekyll();
+    Path source = Paths.get(pf.tempDir);
+    String destination = pf.outputDir;
+    String options = "build";
+    if (incremental != null) {
+      incremental.beforeRun(source);
+      destination = Utilities.path(pf.tempDir, IncrementalJekyll.SITE);
+      options = "build --incremental";
+    }
 
+    // false if Jekyll returned an error after it said it had succeeded (the build goes on)
+    boolean jekyllSucceeded = true;
     DefaultExecutor exec = new DefaultExecutor();
     exec.setExitValue(0);
     MyFilterHandler pumpHandler = new MyFilterHandler();
@@ -4663,14 +4721,14 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     exec.setWatchdog(watchdog);
 
     try {
-      log("Run jekyll: "+ settings.jekyllCommand +" build --destination \""+ pf.outputDir +"\" (in folder "+ pf.tempDir +")");
+      log("Run jekyll: "+ settings.jekyllCommand +" "+ options +" --destination \""+ destination +"\" (in folder "+ pf.tempDir +")");
       if (SystemUtils.IS_OS_WINDOWS) {
         log("Due to a known issue, Jekyll errors are lost between Java and Ruby in windows systems.");
         log("If the build process hangs at this point, you have to go to a");
         log("command prompt, and then run these two commands:");
         log("");
         log("cd "+ pf.tempDir);
-        log(settings.jekyllCommand +" build --destination \""+ pf.outputDir +"\"");
+        log(settings.jekyllCommand +" "+ options +" --destination \""+ destination +"\"");
         log("");
         log("and then investigate why Jekyll has failed");
       }
@@ -4678,11 +4736,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       log("* A failure to produce a fragment that is already logged in the output above");
       log("* A reference to a manually edited file that hasn't been provided");
       if (SystemUtils.IS_OS_WINDOWS) {
-        final String enclosedOutputDir = "\"" + pf.outputDir + "\"";
+        final String enclosedOutputDir = "\"" + destination + "\"";
         final CommandLine commandLine = new CommandLine("cmd")
                 .addArgument( "/C")
                 .addArgument(settings.jekyllCommand)
-                .addArgument("build")
+                .addArguments(options)
                 .addArgument("--destination")
                 .addArgument(enclosedOutputDir);
         exec.execute(commandLine);
@@ -4696,12 +4754,12 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         if (FhirSettings.getGemPath() != null) {
           vars.put("GEM_PATH", FhirSettings.getGemPath());
         }
-        CommandLine commandLine = new CommandLine("bash").addArgument("-c").addArgument(settings.jekyllCommand +" build --destination "+ pf.outputDir, false);
+        CommandLine commandLine = new CommandLine("bash").addArgument("-c").addArgument(settings.jekyllCommand +" "+ options +" --destination "+ destination, false);
         exec.execute(commandLine, vars);
       } else {
-        final String enclosedOutputDir = "\"" + pf.outputDir + "\"";
+        final String enclosedOutputDir = "\"" + destination + "\"";
         final CommandLine commandLine = new CommandLine(settings.jekyllCommand)
-                .addArgument("build")
+                .addArguments(options)
                 .addArgument("--destination")
                 .addArgument(enclosedOutputDir);
         exec.execute(commandLine);
@@ -4710,6 +4768,7 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
     } catch (IOException ioex) {
       tts.end();
       if (pumpHandler.observedToSucceed) {
+        jekyllSucceeded = false;
         if (watchdog.killedProcess()) {
           log("Jekyll timeout exceeded: " + Long.toString(pf.jekyllTimeout /1000) + " seconds");
         }
@@ -4720,6 +4779,13 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         }
       } else {
         log("Jekyll has failed. Complete output from running Jekyll: " + pumpHandler.getBufferString());
+        if (incremental != null) {
+          try {
+            incremental.failed(source);
+          } catch (IOException e) {
+            ioex.addSuppressed(e);
+          }
+        }
         if (watchdog.killedProcess()) {
           log("Jekyll timeout exceeded: " + Long.toString(pf.jekyllTimeout /1000) + " seconds");
         } else {
@@ -4728,7 +4794,16 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
         throw ioex;
       }
     }
+    if (incremental != null) {
+      copySite(incremental, source, jekyllSucceeded);
+    }
     return true;
+  }
+
+  private void copySite(IncrementalJekyll incremental, Path source, boolean succeeded) throws IOException {
+    long start = System.nanoTime();
+    int n = incremental.finished(source, succeeded, Paths.get(pf.outputDir));
+    log("Copied "+n+" files from "+ IncrementalJekyll.SITE +" to "+ pf.outputDir +" ("+DurationUtil.presentDuration(System.nanoTime() - start)+")");
   }
 
   private void dumpVars() {

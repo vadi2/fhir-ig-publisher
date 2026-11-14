@@ -87,6 +87,8 @@ public class PublisherFields {
     String outputDir;
     // in watch mode, the output folder: the build writes to outputDir, a staging folder that is synced into it
     String watchOutputDir;
+    /** in watch mode, what Jekyll's incremental build keeps between builds (see IncrementalJekyll) */
+    IncrementalJekyll incrementalJekyll;
     boolean watchOutputSynced;
     String specPath;
     String qaDir;

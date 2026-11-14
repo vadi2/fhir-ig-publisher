@@ -1,5 +1,6 @@
 package org.hl7.fhir.igtools.publisher;
 
+import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNull;
@@ -306,6 +307,47 @@ class PageRebuildTest {
     state.prepareTemp(Collections.emptyList());
     assertEquals("new config", read("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Cache/b7/config"));
     assertEquals("<p>x</p>", read("temp/.jekyll-cache/Jekyll/Cache/Jekyll--Converters--Markdown/1a/page"));
+  }
+
+  @Test
+  void prepareTempLeavesWhatJekyllsIncrementalBuildKeepsAlone() throws IOException {
+    // Jekyll's output and what its incremental build keeps (see IncrementalJekyll): not Jekyll's input
+    write("temp/" + IncrementalJekyll.SITE + "/index.html", "<html/>");
+    write("temp/" + IncrementalJekyll.STATE + "/" + IncrementalJekyll.METADATA, "old");
+    state.beforeJekyll();
+    write("temp/" + IncrementalJekyll.SITE + "/index.html", "<html>again</html>");
+    Files.setLastModifiedTime(dir.resolve("temp/" + IncrementalJekyll.SITE + "/index.html"), FileTime.fromMillis(System.currentTimeMillis() + 5000));
+    write("temp/" + IncrementalJekyll.SITE + "/new.html", "<html/>");
+    write("temp/" + IncrementalJekyll.STATE + "/" + IncrementalJekyll.METADATA, "new record");
+    Files.setLastModifiedTime(dir.resolve("temp/" + IncrementalJekyll.STATE + "/" + IncrementalJekyll.METADATA), FileTime.fromMillis(System.currentTimeMillis() + 5000));
+    state.prepareTemp(Collections.emptyList());
+    assertEquals("<html>again</html>", read("temp/" + IncrementalJekyll.SITE + "/index.html"));
+    assertEquals("<html/>", read("temp/" + IncrementalJekyll.SITE + "/new.html"));
+    assertEquals("new record", read("temp/" + IncrementalJekyll.STATE + "/" + IncrementalJekyll.METADATA));
+  }
+
+  @Test
+  void aPageWrittenAgainWithTheSameContentKeepsTheTimeJekyllsIncrementalBuildGaveIt() throws IOException {
+    Path temp = dir.resolve("temp");
+    Path x = temp.resolve("_includes/x.xml");
+    write("temp/_includes/y.xml", "<y/>");
+    IncrementalJekyll jekyll = new IncrementalJekyll();
+    jekyll.prepare(temp);
+    state.beforeJekyll();
+    write("temp/" + IncrementalJekyll.METADATA, "record");
+    write("temp/" + IncrementalJekyll.SITE + "/index.html", "<html/>");
+    jekyll.succeeded(temp);
+    // a page rebuild writes x again, as it was: Jekyll's incremental build gives it its earlier time back
+    write("temp/_includes/x.xml", "<x/>");
+    Files.setLastModifiedTime(x, FileTime.fromMillis(System.currentTimeMillis() + 5000));
+    state.prepareTemp(Collections.singletonList(x.toString()));
+    assertNull(jekyll.prepare(temp));
+    state.restamp();
+    // the next page rebuild finds the temp folder as Jekyll left it
+    write("temp/_includes/y.xml", "<y>changed</y>");
+    Files.setLastModifiedTime(temp.resolve("_includes/y.xml"), FileTime.fromMillis(System.currentTimeMillis() + 10000));
+    // without restamp(), x.xml would count as changed since the build, and the page rebuild would fail
+    assertDoesNotThrow(() -> state.prepareTemp(Collections.singletonList(temp.resolve("_includes/y.xml").toString())));
   }
 
   @Test

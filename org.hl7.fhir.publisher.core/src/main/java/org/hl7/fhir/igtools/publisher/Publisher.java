@@ -189,6 +189,9 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
     this.settings.setRepoSource(GitUtilities.getURLWithNoUserInfo(repoSource, "-repo CLI parameter"));
   }
 
+  /** in watch mode, what Jekyll's incremental build keeps between builds */
+  private IncrementalJekyll incrementalJekyll;
+
   public void execute() throws Exception {
     XhtmlNode.setCheckParaGeneral(true);
     Configuration.setAllowCustomResourceTypes(true);
@@ -222,6 +225,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
           paths.add(p.getPath());
         }
         session = new WatchSession(watchRoot, paths);
+        incrementalJekyll = new IncrementalJekyll();
         session.setLog(this::log);
         PackageListFetcher.rememberFetches();
       }
@@ -390,6 +394,7 @@ public class Publisher extends PublisherBase implements IReferenceResolver, IVal
 
   private void build(String rootDir) throws Exception {
     pf = new PublisherFields();
+    pf.incrementalJekyll = incrementalJekyll;
     loader.setPf(pf);
     processor.setPf(pf);
     generator.setPf(pf);
