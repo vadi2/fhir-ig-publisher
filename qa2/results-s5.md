@@ -61,3 +61,16 @@ Status: Phase C in progress (4 of 8 IGs done: tx-eco, cds-hooks, pocd, eu-lab; n
 - All watch checks ok. Every int W step logs the script-inputs fallback (Complete Build), then the same Rapido decision master would take (Differential for W1a/W1c/W1d/W3, Complete Build for the rest).
 - R1 vs I1: 3034 files differ only in the identifier system display in narratives ("NPI" vs "United States National Provider Identifier"), reversed from plan-net (here master has the full name). With --known: only F3 (.index.db) left. qa counts and message sets equal.
 - W1f vs F1: 876 example files differ only in the SSN identifier type display ("SSN" vs "United States Social Security Number"), same FINDING-1 family; 0 with --known plus that mask. W2 vs F2 and W6 vs F6: 0 with --known (the 142 raw diffs are us-core comparison pages, stack trace line numbers). W6 vs I1: same 142.
+
+## Phase D
+
+int-d.jar built from qa/page-only-ready e6a0c6a2 (ref moved at 22:17; Phase D had not started). Declared template copies in /home/user/qa/tpl (hl7.fhir.template, hl7.davinci.template, fhir2.base.template) with the script-inputs lists from qa2/script-inputs.md, named in ig.ini with `X#ver = /path`; laboratory and smart-forms declare in their local template's config.json. Same IG copy for both jars. Heaps as in Phase C. Steps are the Phase C W1 steps the IG has, then W2, then W1a again (W1a2). F1 = int full build of the W1f sources, F2 of the W1a2 sources. Compares use the round masks; "known" adds the F1-F6 masks (THO version, identifier display, stack trace lines).
+
+Mode key: PR = Page Rebuild (1 page changed), CB:menu = Complete Build because a declared input (menu.xml) changed, CB:add/rm = files added or removed, CB:non-page = the changed file is not a page, Diff = Rapido differential build. Seconds are wall time from the edit to "Finished".
+
+| IG | int D steps (s, mode) | int checks | master DM steps (s, mode) | W1f vs F1 | W1a2 vs F2 |
+|---|---|---|---|---|---|
+| fhir-tx-ecosystem-ig | W0 64, W1a 4 PR, W1d 25 CB:menu, W1e 26 CB:add/rm, W1f 39 CB:add/rm, W2 23 CB:non-page, W1a2 4 PR | all ok | W0 47, W1a 28 Diff, W1d 23 Diff, W1e 28 CB, W1f 30 CB, W2 26 Diff, W1a2 23 Diff | 0 raw / 0 known, qa same | 0 raw / 0 known, qa same |
+
+Notes
+- fhir-tx-ecosystem-ig: log shows `Load Template hl7.fhir.template#current from local folder /home/user/qa/tpl/hl7.fhir.template (override in ig.ini)`. W1a and W1a2 are Page Rebuilds (4 s vs 28 and 23 s on master). W1d (menu.xml, declared) falls back to a complete build naming menu.xml, and the menu edit is on every page (step 6 done here). The spec has no W1b/W1c for this IG (no second page type or fragment); same as Phase C.
