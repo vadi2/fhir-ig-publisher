@@ -1,6 +1,6 @@
 # QA round 2 results, shard s5
 
-Status (09:50 UTC): Phase D done for all 8 IGs with int-d.jar (e6a0c6a2): page edits (W1a, W1c, W1a2 and undeclared include edits) are Page Rebuilds on every IG, 3 to 8 times faster than master; xml pages (W1b) fall back by design ("is transformed"); declared menu.xml edits fall back as expected. No regression found; one open item (nw-gmsa package.db GenomicTestOrder refs split, classification builds queued). Phase C done for 7 of 8 IGs; still queued: plan-net master R1b and watch with a full build first, nw-gmsa watch rerun (lost to container restarts), master watches for bfdr and nw-gmsa.
+Status (09:50 UTC): Phase D done for all 8 IGs with int-d.jar (e6a0c6a2): page edits (W1a, W1c, W1a2 and undeclared include edits) are Page Rebuilds on every IG, 2 to 8 times faster than master (pocd and bfdr about 2x, tx-eco, smart-forms and nw-gmsa 6 to 8x); xml pages (W1b) fall back by design ("is transformed"); declared menu.xml edits fall back as expected. No regression found; one open item (nw-gmsa package.db GenomicTestOrder refs split, classification builds queued). Phase C done for 7 of 8 IGs; still queued: plan-net master R1b and watch with a full build first, nw-gmsa watch rerun (lost to container restarts), master watches for bfdr and nw-gmsa.
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951
 - int.jar: qa/page-only-ready 5111080dd56c99f6aa6b1ad62a56978f9d0959bb (seen 17:12 UTC)
