@@ -1,6 +1,6 @@
 # QA round 2 results, shard s4
 
-**Status: Phase C done (7/7 IGs, no regression). Phase D in progress (6/7), Phase E after it.**
+**Status: Phase C done (7/7 IGs, no regression). Phase D done (7/7, no regression); Phase E running on int2 ccc22b2, Phase E after it.**
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (sha256 56b2e4adb4af80ef5b495b3013b726df254243b5437eb500b2c7c6a5ae5b238f)
 - VM: 4 CPU, 15 GB, 8 GB swap. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx7600m -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org -package-cache-folder /home/user/qa/pcf`, fresh `cp -a` of the clone, no -threads.
@@ -97,6 +97,7 @@
 | RIVO-Noord/zorgviewer-ig | 106, W1a 17 PR, W1c 17 PR, W1d 18 PR, W1e 59 CB, W1f 56 CB, W2 56 CB, W1a2 17 PR | 94, W1a 58 CB, W1c 55 CB, W1d 53 CB, W1e 51 CB, W1f 53 CB, W2 52 CB, W1a2 52 CB | 94 / 99 | 0 files; QA 12 msgs path/column only (F2) | 0 files; QA same 12 (F2) | same; page edits 17 s vs ~70 s |
 | HL7/davinci-ra | 95, W1a 45 CB, W1c 48 CB, W1d 46 CB, W1e 48 CB, W1f 49 CB, W2 52 CB, W1a2 46 CB (every build failed) | 66, W1a 45 CB, W1c 46 CB, W1d 46 CB, W1e 51 CB, W1f 48 CB, W2 53 CB, W1a2 45 CB (every build failed) | 80 / 80 | n/a (watch output empty) | n/a | not comparable: watch fails on both jars (pre-existing); page rebuild unreachable |
 | hl7au/au-fhir-core | 115, W1a 20 PR, W1c 20 PR, W1d 20 PR, W1e 78 CB, W1f 75 CB, W2 75 CB, W1a2 20 PR, W7 75 CB | 108, W1a 76 CB, W1c 74 CB, W1d 77 CB, W1e 77 CB, W1f 76 CB, W2 72 CB, W1a2 73 CB, W7 73 CB | 106 / 115 | 4 files (comparison-page stack traces, noise); QA 1 msg path (F2) | same 4 + F2 | same; page edits 20 s |
+| sfaassn2025-source/base | 281, W1a 95 PR, W1b 184 Diff, W1c 95 PR, W1d 95 PR, W1e 263 CB, W1f 265 CB, W2 263 CB, W1a2 96 PR | 273, W1a 182 Diff, W1b 180 Diff, W1c 177 Diff, W1d 174 Diff, W1e 257 CB, W1f 260 CB, W2 261 CB, W1a2 179 Diff | 261 / 270 | 0 files; QA same | 0 files; QA same | same; page edits 95 s vs 174-182 s |
 
 ### Phase D: HL7Chile/MHD-CL
 - Declaration picked up: W1a/W1c/W1a2 log "Rapido Mode: Page Rebuild (1 page changed)", Jekyll 0.5-0.7 s. W1d (template footer): "Complete Build (.../fragment-footer.html is not a page)"; W1e/W1f: "Complete Build (files were added or removed)"; W2: "Complete Build (.../docRef.fsh is not a page)". All edits visible/removed as expected.
@@ -123,3 +124,13 @@
 - Declared copy of hl7.au.sparked.template (fhir2.base list, includes input/includes/menu.xml). intD did Page Rebuilds for W1a, W1c (notes), W1d (nonnormative-example-boilerplate.md include) and W1a2 (20 s) despite the failed terminology calls of every build (as zorgviewer; the behaviour 3957c419 changes).
 - Plan step 6 (edit a declared script input): W7 edits input/includes/menu.xml: "Complete Build (.../input/includes/menu.xml is read by the template's scripts)", 75 s, the new menu item is in the output.
 - DF1 vs W1f and DF2 vs W1a2: QA identical except the bloodpressure duplicate-anchor warning path (temp/pages/.watch-output/en/ vs output/en/, F2); output 4 files = comparison-v2.0.0/xx-3-Identifier-Identifier.html and xx-5-Address-Address.html (+ full-ig.zip copies), Java stack trace on those pages (master too) whose frames differ between watch and full build (as Phase C). No stale page.
+
+### Phase D: sfaassn2025-source/base
+- Page Rebuild for W1a, W1c, W1d (menu.xml, not in the fhir.base list) and W1a2: 95 s (master Differential 174-182 s); most of it is Jekyll re-rendering all 486 pages. W1b (downloads.xml, an xml page): "Complete Build (.../downloads.xml is transformed)" then Rapido Differential (184 s), i.e. xml pages are left to Rapido. W1e/W1f/W2 Complete Builds.
+- DF1 vs W1f and DF2 vs W1a2: 0 output files differ, QA identical (5 messages).
+
+### Phase D summary
+- Page-only rebuild reached on 6 of 7 IGs with declared templates (all but davinci-ra, whose watch fails on both jars). Page edits: MHD-CL 6 s, readi 7 s, imaging 13 s, zorgviewer 17 s, au-core 20 s, base 95 s, against master 20-33 s (MHD-CL/readi/imaging), 52-77 s (zorgviewer/au-core, Complete Builds from tx failures) and 174-182 s (base).
+- Fallbacks seen and correct: non-page file ("is not a page"), files added/removed, template file, xml page ("is transformed"), declared script input ("is read by the template's scripts"), failed previous build ("the last build didn't finish").
+- No stale or missing page, no QA message lost or added: every watch checkpoint equals a fresh intD build of the same sources, up to F2 (watch QA paths), F4 (THO NamingSystem links), the SCT-edition warning on reused folders and comparison-page stack traces.
+- intD (e6a0c6a2) page-rebuilds despite failed terminology calls in the last build (zorgviewer, au-core); 3957c419 changes that. No output difference resulted here.
