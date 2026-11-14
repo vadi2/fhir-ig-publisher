@@ -1,6 +1,6 @@
 # Dev: page-only watch rebuilds without the Jekyll driver (rework of HL7 #1461)
 
-Branch `perf4/watch-page-only` from HL7 master 2ccca179. PR: vadi2/fhir-ig-publisher#56. Ready ref `qa/page-only-ready` = e6a0c6a2.
+Branch `perf4/watch-page-only` from HL7 master 2ccca179. PR: vadi2/fhir-ig-publisher#56. Ready ref `qa/page-only-ready` = 3957c419.
 
 ## State
 - Ported from e70bb8af (diff 32046bc..e70bb8af) only what the page-only rebuild needs: WatchSession.changesSincePreviousBuild,
@@ -49,3 +49,4 @@ All edits reached output; QA counts identical between jars at every step.
 - code-simplifier: 5111080 (unused overload, duplicated loop and check, constant placement).
 - Template inheritance (6a89124e, 2a11c14e, 4a82199a, e6a0c6a2): merged configs concatenate script-inputs, so a child with its own scripts inherited its base's declaration. Now a template with active content (script, targets, otherScripts, overwritten ant script, non-allowlisted files) that doesn't declare drops the declarations before it. Nothing changes unless some template declares; the master active-content scan is untouched (a Windows separator miss is covered in the new check only). Review rounds 3-5 on it; round 5 confirmed nothing. Suite at 4a82199a: 608 run, known failures only. The `|| overwritesAntScript` call can't be mutation-killed on Linux (the scan catches the same case); isAntScript is unit tested.
 - qa2/script-inputs.md: per-template lists and the QA recipe (orchestrator request).
+- Phase D (orchestrator): (1) tx failures. Master's Rapido does a complete build after a build with failed tx calls; the page rebuild ignored that, so a transient failure's messages stayed until a non-page build. Now honoured (d6c691d1, 3957c419): PageRebuild.checkTxFailures() with Rapido's own count (RapidoTracker.txFailures(pf)), at checkPageRebuild (nothing kept), at the end of a complete build (finished()) and after a page rebuild. IGs with persistent tx failures (vris, eeqre, au-fhir-base) get master's behaviour, a complete build each time. Review rounds 6-7: round 6 found the count too early (failures in onCheck, combined package, html checks, qa missed) and a page rebuild's own failures uncounted, fixed; round 7 confirmed nothing. Not unit tested: the call after a page rebuild in rebuildPages (no success-path unit test). Suite at 3957c419: 610 run, known failures only. Bench unaffected: no bench build had a failed tx call. (2) xml pages (process mode not PROCESS_NONE) refuse with "is transformed": deliberate, now said in the PR.
