@@ -578,6 +578,11 @@ public class PublisherGenerator extends PublisherBase implements BaseRenderer.Re
       // the pages would be rendered again with the terminology unloaded
       pageRebuild.notReusable("the terminology is unloaded early (tx-unload-early)");
     }
+    int txFailures = RapidoTracker.txFailures(pf);
+    if (txFailures > 0) {
+      // as Rapido does (see RapidoTracker.compareState()): the next build asks the server again
+      pageRebuild.notReusable("terminology server calls failed in the last build (" + txFailures + ")");
+    }
     if (pf.template != null) {
       String reason = pf.template.whyNoPageRebuild();
       if (reason != null) {
