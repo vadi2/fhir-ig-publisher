@@ -1,6 +1,6 @@
 # QA round 2 results, shard s4
 
-**Status: Phase C done (7/7 IGs, no regression). Phase D done (7/7, no regression); Phase E running on int2 ccc22b2, Phase E after it.**
+**Summary: shard s4 done (7 IGs). No regression in any phase. Phase C (int 5111080): full builds and watch outputs equal master/fresh builds up to known pre-existing diffs (F2, F3, F4, SCT-edition warning on reused folders, comparison-page stack traces); no real template declares script-inputs, so the page path fell back every time. Phase D (intD e6a0c6a2, declared templates): page-only rebuild on 6 IGs (6-95 s vs master 20-182 s), correct fallbacks, every checkpoint equals a fresh build; intD page-rebuilds despite failed tx calls (fixed by 3957c41), no output effect. Phase E (int2 ccc22b2): incremental Jekyll on every page edit, full render on data edits, every checkpoint equals a fresh build. Pre-existing: davinci-ra -rapido -watch fails every build on master and both branches (template onCheck copies output/en/index.html).**
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (sha256 56b2e4adb4af80ef5b495b3013b726df254243b5437eb500b2c7c6a5ae5b238f)
 - VM: 4 CPU, 15 GB, 8 GB swap. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx7600m -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org -package-cache-folder /home/user/qa/pcf`, fresh `cp -a` of the clone, no -threads.
@@ -148,6 +148,7 @@
 | HL7Chile/MHD-CL | first 50; W1a 5 PR inc 0.06 s; W1a2 5 PR inc 0.07 s; W1g 26 Diff, Jekyll all pages; W1c 5 PR inc 0.29 s; W1e 28 CB; W1f 26 CB; W2 33 CB; W1a3 6 PR inc 0.07 s | 0 files at W1a2, W1g, W1f, W1a3; QA identical at W1a2, SCT-edition warning missing after the Complete Builds (pre-existing) | same |
 | hl7-eu/readi | first 48; W1a 6 PR inc 0.1 s; W1a2 5 PR inc 0.1 s; W1e 31 CB; W1f 28 CB; W2 29 CB; W1a3 5 PR inc 0.1 s (no W1b/W1c/W1d/W1g) | W1a2 0 files; W1f, W1a3 36 raw = F4 THO link, 0 THO-normalised; QA identical (265) | same |
 | HL7/imaging-service-request-ig | first 66; W1a 9 PR inc 0.4 s; W1a2 9 PR inc 0.4 s; W1c 53 CB; W1e 55 CB; W1f 56 CB; W2 55 CB; W1a3 9 PR inc 0.4 s (no W1b/W1d/W1g) | 70 raw at each checkpoint = F4 (NamingSystem-dui link/display), 0 THO-normalised; QA identical (669) | same |
+| sfaassn2025-source/base | first 281; W1a 89 PR inc 0.6 s; W1a2 85 PR inc 0.6 s; W1g 222 Diff, Jekyll all pages; W1b 181 Diff; W1d 95 PR inc 11.8 s; W1c 83 PR inc 0.9 s; W1e 264 CB; W1f 261 CB; W2 268 CB; W1a3 84 PR inc 0.6 s | 0 files and QA identical (5) at W1a2, W1g, W1f, W1a3 | same |
 
 ### Phase E: HL7Chile/MHD-CL
 - Every page edit: "Rapido Mode: Page Rebuild (1 page changed)" + "Jekyll: incremental build (1 files in _includes added, changed or deleted)", Jekyll 0.06-0.29 s (Phase D full Jekyll 0.5-0.7 s; step 5-6 s vs 6 s).
@@ -162,3 +163,16 @@
 ### Phase E: HL7/imaging-service-request-ig
 - Page edits: Page Rebuild + incremental Jekyll (2 files in _includes), Jekyll 0.4 s, step 9 s (Phase D 13 s). W1c (new intro file), W1e/W1f, W2: Complete Builds, "Jekyll: renders every page (changed: Task-example-imaging-cancellation-request-task.json.html)". All markers found/absent.
 - EF vs EW at W1a2, W1f, W1a3: 70 files raw = the two examples' NamingSystem-dui THO link/display (F4), 0 THO-normalised; QA identical.
+
+### Phase E: sfaassn2025-source/base
+- Page edits W1a, W1a2, W1c, W1a3: Page Rebuild + "Jekyll: incremental build (1 files in _includes ...)", Jekyll 0.6-0.9 s; the step still takes 83-89 s (Phase D 95 s): on this IG nearly all of a page rebuild is outside Jekyll.
+- W1d input/includes/menu.xml (every page includes the menu): Page Rebuild + incremental Jekyll, 11.8 s of Jekyll (re-renders the pages that include it); the new menu text is on index.html and security.html.
+- W1g input/data/qa.json: "Complete Build (input/data/qa.json is also read as something other than a page)", Rapido Differential, "Jekyll: renders every page (...)": not incremental. Both pages show the new value, old value gone.
+- W1b downloads.xml: "Complete Build (.../downloads.xml is transformed)", Rapido Differential, as Phase D.
+- EF vs EW at W1a2, W1g, W1f, W1a3: 0 output files differ, QA identical.
+
+### Phase E summary
+- 4 IGs (MHD-CL, readi, imaging, base); 3 skipped (zorgviewer, au-core: tx failures force Complete Builds with 3957c41; davinci: watch fails on both jars).
+- Every page edit used incremental Jekyll (0.06-0.9 s of Jekyll; the includes-fragment edit on base 11.8 s). W1g data edits never ran Jekyll incrementally (all pages rendered) and updated every page showing the value. xml pages, non-page files, added/removed files: complete or Rapido builds as in Phase D.
+- No stale page, missing or extra file, or QA change: every checkpoint equals a fresh int2 full build, up to F4 (THO NamingSystem links) and the SCT-edition warning on reused folders (pre-existing).
+- Timing vs Phase D page rebuilds: MHD-CL 6 to 5-6 s, readi 7 to 5-6 s, imaging 13 to 9 s, base 95 to 83-89 s.
