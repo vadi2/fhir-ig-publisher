@@ -1,6 +1,6 @@
 # QA round 2 results, shard s4
 
-**Status: Phase C done (7/7 IGs, no regression). Phase D in progress (2/7), Phase E after it.**
+**Status: Phase C done (7/7 IGs, no regression). Phase D in progress (3/7), Phase E after it.**
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (sha256 56b2e4adb4af80ef5b495b3013b726df254243b5437eb500b2c7c6a5ae5b238f)
 - VM: 4 CPU, 15 GB, 8 GB swap. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx7600m -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org -package-cache-folder /home/user/qa/pcf`, fresh `cp -a` of the clone, no -threads.
@@ -93,6 +93,7 @@
 |---|---|---|---|---|---|---|
 | HL7Chile/MHD-CL | 60; W1a 6 PR, W1c 6 PR, W1d 28 CB, W1e 29 CB, W1f 31 CB, W2 30 CB, W1a2 6 PR | 48; 25 Diff, 22 Diff, 30 CB, 34 CB, 34 CB, 32 CB, 22 Diff | 53 / 50 | 0 files; QA -1 (SCT edition, pre-existing) | 0 files; QA -1 (same) | same; page edits 6 s vs 22-25 s |
 | hl7-eu/readi | 61; W1a 7 PR, W1d 30 CB, W1e 33 CB, W1f 33 CB, W2 34 CB, W1a2 7 PR | 50; 21 Diff, 29 CB, 36 CB, 35 CB, 35 CB, 20 Diff | 49 / 50 | 36 raw (F4 THO link), 0 THO-normalised; QA same | 0 files; QA same | same; page edits 7 s vs 20-21 s |
+| HL7/imaging-service-request-ig | 86, W1a 13 PR, W1c 57 CB, W1e 55 CB, W1f 55 CB, W2 59 CB, W1a2 13 PR | 114, W1a 33 Diff, W1c 54 CB, W1e 52 CB, W1f 52 CB, W2 52 CB, W1a2 29 Diff | 78 / 65 | 70 raw (F4 NamingSystem-dui), 0 THO-normalised; QA same | 0 files; QA same | same; page edits 13 s |
 
 ### Phase D: HL7Chile/MHD-CL
 - Declaration picked up: W1a/W1c/W1a2 log "Rapido Mode: Page Rebuild (1 page changed)", Jekyll 0.5-0.7 s. W1d (template footer): "Complete Build (.../fragment-footer.html is not a page)"; W1e/W1f: "Complete Build (files were added or removed)"; W2: "Complete Build (.../docRef.fsh is not a page)". All edits visible/removed as expected.
@@ -101,3 +102,8 @@
 ### Phase D: hl7-eu/readi
 - Page Rebuild for W1a and W1a2 (7 s, master Differential 20-21 s); W1d (template footer) "is not a page", W1e/W1f "files were added or removed", W2 "is not a page": Complete Builds. All edits visible/removed.
 - DF1 vs W1f: 36 files = Bundle-readi-sample-1-r4 NamingSystem-uri THO version (F4), 0 THO-normalised. DF2 vs W1a2: 0. QA identical (265 messages).
+
+### Phase D: HL7/imaging-service-request-ig
+- Page Rebuild for W1a and W1a2 (13 s). W1c (new intro file) "files were added or removed", W1e/W1f the same, W2 "is not a page": Complete Builds. All edits visible/removed.
+- DF1 vs W1f: 70 files = Bundle-example-order-bundle / ImagingStudy-example-requested-procedure-imaging-study NamingSystem-dui link version and display (F4), 0 THO-normalised. DF2 vs W1a2: 0. QA identical (669 messages).
+- The master run (DM) was rerun after the container restart at 01:22.
