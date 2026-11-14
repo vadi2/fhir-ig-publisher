@@ -60,6 +60,8 @@ Watch: S1 = W1a..W1f, stop (F1); restart, W2, stop (F2); restart, W3..W6, stop (
 | IG | template (declared) | int W steps (s, mode) | master W steps (s, mode) | W1f vs DF1 | W1a2 vs DF2 | verdict |
 |---|---|---|---|---|---|---|
 | ChitSR/sample-ig | hl7.au.fhir.template#current (fhir2 list) | W1a 7.8 Page Rebuild, W1c 7.6 Page Rebuild, W1d 19.3 Complete-fallback (menu.xml read by scripts) then Differential, W1e 23.6 / W1f 21.1 (files added/removed, then Complete changed: ig), W2 18.9 (myobservation.xml is not a page, then Differential), W1a2 7.5 Page Rebuild | W1a 19.0, W1c 19.1, W1d 18.2 (Differential), W1e 22.1, W1f 20.5 (Complete), W2 18.8, W1a2 19.2 (Differential) | no diffs; qa equal except F2 paths | no diffs; qa equal except F2 paths | pass |
+| HL7/demo-collect | local ig-template (fhir2 list, config.json added) | W1a 4.3 Page Rebuild, W1d 4.2 Page Rebuild (input/data/features.yml, not declared), W1e 24.8 / W1f 21.4 (files added/removed, then Complete changed: ig), W2 22.5 (.fsh is not a page, then Complete changed: ig), W1a2 4.5 Page Rebuild | W1a 15.4, W1d 24.7 (Differential), W1e 24.1, W1f 21.9, W2 21.8 (Complete), W1a2 13.9 (Differential) | no diffs, qa equal | no diffs, qa equal | pass |
 
 Phase D notes
 - sample-ig: page rebuild 7.5 to 7.8 s vs master 19 s; every edit visible in output.
+- demo-collect: the features.yml footer label change (W1d) is rebuilt as a page-only rebuild and reaches every page (W1f output equals the fresh build, which includes the W1d edit).
