@@ -1,6 +1,6 @@
 # QA round 2 results, shard s4
 
-**Status: Phase C done (7/7 IGs, no regression). Phase D running on intD.jar (e6a0c6a2), Phase E after it.**
+**Status: Phase C done (7/7 IGs, no regression). Phase D in progress (1/7), Phase E after it.**
 
 - master.jar: HL7 master 2ccca179460d9bb9f4185a59a6fd66d4d9330951 (sha256 56b2e4adb4af80ef5b495b3013b726df254243b5437eb500b2c7c6a5ae5b238f)
 - VM: 4 CPU, 15 GB, 8 GB swap. Every build: `IG_GATE_OFF=1 MALLOC_ARENA_MAX=2 java -Xmx7600m -XX:+UseStringDeduplication -jar <jar> -ig . -tx https://tx.fhir.org -package-cache-folder /home/user/qa/pcf`, fresh `cp -a` of the clone, no -threads.
@@ -82,3 +82,17 @@
 - Output: R1 vs I1, R1 vs I2, R1 vs W6: only package .index.db ResourceList (F3, pre-existing). I1 vs I2, F1 vs W1f, F2 vs W2, I1 vs W6: 0 files (raw and THO-normalised).
 - Master watch: W1a was a Complete Build ("changed: date": the run crossed midnight), W1b-W1d and W3 Differential, the rest Complete; int.jar times within 10% of master.
 - The first watch run died in a container restart at W2 (21:10); it was rerun from scratch (times above are the rerun).
+
+## Phase D (declared templates, page-only rebuild)
+
+- intD.jar: qa/page-only-ready e6a0c6a2b71d3c562675d8af3707351428c3a28a (sha256 92546818aaaa15c7fa239110e052a78c1c4dfa4b2809681fc7bf205a2fbb7c89). Master as before. Heap 7600m.
+- Declared copies per qa2/script-inputs.md: local templates (MHD-CL hl7chile-ig-template, readi ig-template, zorgviewer rivonoord-template, base custom-template) get a config.json with their base's list; package templates (davinci hl7.davinci.template, imaging hl7.fhir.template, au hl7.au.sparked.template) are copied to /home/user/qa/tpl-<name> with script-inputs and an `<name>#current = <dir>` line in ig.ini. Same IG copy for both jars.
+- Steps: first build, W1a..W1f (as Phase C, n/a where noted there), W2 (profile edit), W1a2 (second edit of the W1a page). DW = intD watch, DM = master watch on the same copy. DF1 = intD full build of the sources after W1f, DF2 after W1a2. Modes: PR Page Rebuild, Diff Rapido Differential, CB Complete Build. Times in seconds to the next "Watching for changes".
+
+| IG | DW (intD) | DM (master) | DF1 / DF2 | DF1 vs W1f | DF2 vs W1a2 | verdict |
+|---|---|---|---|---|---|---|
+| HL7Chile/MHD-CL | 60; W1a 6 PR, W1c 6 PR, W1d 28 CB, W1e 29 CB, W1f 31 CB, W2 30 CB, W1a2 6 PR | 48; 25 Diff, 22 Diff, 30 CB, 34 CB, 34 CB, 32 CB, 22 Diff | 53 / 50 | 0 files; QA -1 (SCT edition, pre-existing) | 0 files; QA -1 (same) | same; page edits 6 s vs 22-25 s |
+
+### Phase D: HL7Chile/MHD-CL
+- Declaration picked up: W1a/W1c/W1a2 log "Rapido Mode: Page Rebuild (1 page changed)", Jekyll 0.5-0.7 s. W1d (template footer): "Complete Build (.../fragment-footer.html is not a page)"; W1e/W1f: "Complete Build (files were added or removed)"; W2: "Complete Build (.../docRef.fsh is not a page)". All edits visible/removed as expected.
+- DF1 vs W1f and DF2 vs W1a2: 0 output files differ (raw and THO-normalised). QA: the watch builds lack the SCT-edition warning (reused folder; same as master and Phase C), nothing else.
