@@ -1,6 +1,6 @@
 # QA round 2 results, shard s2
 
-Status: Phase D running on int e6a0c6a2 (small IGs first, page rebuild confirmed on aitransparency W1a); uz-integ Phase C remainder (master watch, master noise baseline) after, delayed by 5 container restarts (01:18, 04:45, 05:17, 07:23, 07:50).
+Status: Phase D running on int e6a0c6a2 (aitransparency done: pass); uz-integ Phase C remainder (master watch, master noise baseline) after, delayed by 5 container restarts (01:18, 04:45, 05:17, 07:23, 07:50).
 
 Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar only rebuilds pages when the template has no script or declares `script-inputs` in its config.json (Template.whyNoPageRebuild). fhir2.base.template (#current and #0.1.0), which every template here extends, has scripts/ant.xml (onLoad/onGenerate/onCheck) and no script-inputs; hl7.base and hl7.be.fhir add their own ant scripts. So every watch rebuild logs "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then does the usual Differential/Complete build, as master does. These runs show the branch changes nothing when the feature is off; they don't exercise the page rebuild itself.
 
@@ -49,3 +49,13 @@ Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar onl
 - Watch: W1a and W3 Differential Build (7 and 13 of 1037 files), the rest Complete Build, on both jars; int logs the script-inputs reason first. Times equal within noise (W4 264 vs 240 single sample).
 - R1 vs I1/I2: en.tgz package/.index.db (known F3, also inside full-ig.zip) and, for I2, qa-txservers count. F1 vs W1f, F2 vs W2, I1 vs W6: qa-txservers count only; QA counts and message sets equal. No stale output.
 
+
+## Phase D
+int = qa/page-only-ready e6a0c6a2 (intD.jar), master = 2ccca17. Each IG uses a local copy of its template (ig.ini `[IG]` override line `<template#ver> = /home/user/qa/tpl/<ig>-<template>`) whose config.json declares `script-inputs`. The leaf copy declares, so the e6a0c6a2 drop rule does not apply (logs show no drop). Lists: FHIR2 = input/examples, extensions, models, profiles, resources, structures, vocabulary, images-source, includes/menu.xml, fsh-generated/includes/menu.xml; HL7BASE = FHIR2 + package-list.json, publication-request.json (hl7.fhir.template). hl7.be.fhir and hl7.au.sparked/au.fhir use FHIR2 (my reading of their scripts). Steps from Phase C specs; W1a2 = a second edit to the W1a page after W2. Times in seconds from edit to the end of the rebuild.
+
+| IG | template copy | step: int mode, int s / master s, edit shown | F1 vs W1f | F2 vs W1a2 | verdict |
+|---|---|---|---|---|---|
+| aitransparency | hl7.fhir.template#current (HL7BASE) | first 68/50; W1a Page Rebuild 7/26 ok; W1c Complete (file added) 35/38 ok; W1e Complete 32/36 ok; W1f Complete 33/38 ok; W2 Complete (fsh) 31/36 ok; W1a2 Page Rebuild 7/23 ok | known only (Bundle-b3c1f2d4 MedicareHIC narrative, package.db, qa-txservers); QA equal | qa-txservers count only; QA equal | pass |
+
+### Phase D notes
+- aitransparency: log shows "Load Template hl7.fhir.template#current from local folder ... (override in ig.ini)". W1c creates a new intro file (the IG has none), so it is an add and a Complete Build is correct; no page-edit W1c exists here. W1b/W1d n/a (markdown pages, menu from sushi-config). Page Rebuild is 3 to 4 times faster than master's Differential Build for W1a.
