@@ -1,6 +1,6 @@
 # QA round 2 results, shard s2
 
-Status: Phase C in progress (5 of 6 IGs done); Phase D after.
+Status: Phase C in progress (5 of 6 IGs done; uz-integ int watch done, F1/F2/master watch running after a container restart at 01:18); Phase D queued next on int e6a0c6a2.
 
 Coverage limit (all IGs in this shard): the page rebuild never runs. int.jar only rebuilds pages when the template has no script or declares `script-inputs` in its config.json (Template.whyNoPageRebuild). fhir2.base.template (#current and #0.1.0), which every template here extends, has scripts/ant.xml (onLoad/onGenerate/onCheck) and no script-inputs; hl7.base and hl7.be.fhir add their own ant scripts. So every watch rebuild logs "Rapido Mode: Complete Build (the template doesn't declare what its scripts read (script-inputs in its config.json))" and then does the usual Differential/Complete build, as master does. These runs show the branch changes nothing when the feature is off; they don't exercise the page rebuild itself.
 
